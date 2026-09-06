@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+from src.data.manifest import DEFAULT_MANIFEST_DIR, load_manifest
 from src.data.schema import SCHEMA_JSON
 
 if TYPE_CHECKING:
@@ -33,6 +34,7 @@ __all__ = [
     "PromptTemplate",
     "RenderedPrompt",
     "format_labels_block",
+    "EXEMPLAR_MANIFEST",
     "load_template",
     "render_fewshot",
     "render_zeroshot",
@@ -40,6 +42,9 @@ __all__ = [
 ]
 
 DEFAULT_PROMPT_DIR = Path(__file__).resolve().parents[2] / "configs" / "prompts"
+
+# The committed manifest that freezes the few-shot exemplars.
+EXEMPLAR_MANIFEST = "exemplars_8"
 
 
 def _sha256(text: str) -> str:
@@ -119,41 +124,34 @@ def render_zeroshot(
 
 
 def select_exemplars(
-    train: "Dataset",
-    labels: Sequence[str],
     n_exemplars: int,
-    seed: int,
-) -> list[int]:
-    """Pick ``n_exemplars`` TRAIN row indices, deterministically, one per distinct class.
+    *,
+    manifest_name: str = EXEMPLAR_MANIFEST,
+    manifest_dir: str | Path = DEFAULT_MANIFEST_DIR,
+) -> tuple[list[int], int]:
+    """Return ``(train_row_indices, seed)`` for ``n_exemplars``, from the frozen manifest.
 
-    Exemplars come from the train split only — never dev, never test (hard rule 1).
-    Classes are drawn without replacement so the exemplar block shows variety rather
-    than repeating a frequent class.
+    Exemplars are NOT re-sampled here. They are read from the committed
+    ``exemplars_8`` manifest, which is proportionally sampled from the TRAIN split
+    only — never dev, never test (hard rule 1) — under a fixed seed and protected by
+    its own sha256, exactly like the evaluation manifests. Nothing about the cacheable
+    prompt prefix may drift between runs.
+
+    A smaller N (stage 2's budget gate may force 8 -> 4) takes the FIRST ``n_exemplars``
+    of the frozen set, so the 4-exemplar prompt is a strict subset of the 8-exemplar
+    one and the two runs stay comparable.
     """
-    import numpy as np
-
     if n_exemplars < 0:
         raise ValueError(f"n_exemplars must be >= 0, got {n_exemplars}")
-    if n_exemplars == 0:
-        return []
 
-    by_class: dict[int, list[int]] = {}
-    for idx, label in enumerate(train["label"]):
-        by_class.setdefault(int(label), []).append(idx)
-
-    present = sorted(by_class)
-    if n_exemplars > len(present):
+    manifest = load_manifest(manifest_name, manifest_dir)
+    if n_exemplars > manifest.n:
         raise ValueError(
-            f"n_exemplars={n_exemplars} exceeds the {len(present)} classes in train"
+            f"n_exemplars={n_exemplars} exceeds the {manifest.n} exemplars frozen in "
+            f"{manifest_name!r}. Enlarging the exemplar set means building and "
+            "committing a new manifest, not sampling more at call time."
         )
-
-    rng = np.random.default_rng(seed)
-    chosen_classes = rng.choice(len(present), size=n_exemplars, replace=False)
-    picked = [
-        by_class[present[c]][int(rng.integers(len(by_class[present[c]])))]
-        for c in chosen_classes
-    ]
-    return sorted(picked)
+    return list(manifest.indices[:n_exemplars]), manifest.seed
 
 
 def render_fewshot(
@@ -161,18 +159,21 @@ def render_fewshot(
     train: "Dataset",
     *,
     n_exemplars: int,
-    seed: int,
     template: PromptTemplate | None = None,
     directory: str | Path = DEFAULT_PROMPT_DIR,
+    manifest_name: str = EXEMPLAR_MANIFEST,
+    manifest_dir: str | Path = DEFAULT_MANIFEST_DIR,
     max_exemplar_chars: int | None = 1200,
 ) -> RenderedPrompt:
-    """Render the few-shot system prompt with ``n_exemplars`` worked examples.
+    """Render the few-shot system prompt from the frozen exemplar manifest.
 
     Exemplars are formatted in exactly the request/response shape the model must
     produce, so the demonstration and the instruction cannot disagree.
     """
     tpl = template or load_template("fewshot", directory)
-    indices = select_exemplars(train, labels, n_exemplars, seed)
+    indices, seed = select_exemplars(
+        n_exemplars, manifest_name=manifest_name, manifest_dir=manifest_dir
+    )
 
     blocks = []
     for i, idx in enumerate(indices, start=1):

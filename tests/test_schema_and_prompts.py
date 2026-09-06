@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from src.data.labels import LabelNormalizer, load_labels
+from src.data.manifest import DEFAULT_MANIFEST_DIR, load_manifest, verify_manifest
 from src.data.prompts import (
+    EXEMPLAR_MANIFEST,
     load_template,
     render_fewshot,
     render_zeroshot,
@@ -111,49 +113,72 @@ def test_prompt_hash_changes_if_the_label_block_changes(labels):
 
 def test_n_exemplars_is_a_parameter_not_a_constant(ledgar, labels):
     """Stage 2's budget gate may force 8 down to 4; both must render."""
-    eight = render_fewshot(labels, ledgar["train"], n_exemplars=8, seed=1)
-    four = render_fewshot(labels, ledgar["train"], n_exemplars=4, seed=1)
+    eight = render_fewshot(labels, ledgar["train"], n_exemplars=8)
+    four = render_fewshot(labels, ledgar["train"], n_exemplars=4)
     assert eight.n_exemplars == 8 and four.n_exemplars == 4
     assert len(eight.exemplar_indices) == 8
     assert len(four.text) < len(eight.text)
     assert eight.sha256 != four.sha256
 
 
+def test_four_exemplars_are_a_strict_subset_of_eight(ledgar, labels):
+    """So the reduced-budget run stays comparable to the full one."""
+    eight = render_fewshot(labels, ledgar["train"], n_exemplars=8)
+    four = render_fewshot(labels, ledgar["train"], n_exemplars=4)
+    assert four.exemplar_indices == eight.exemplar_indices[:4]
+
+
 def test_fewshot_is_deterministic_and_byte_stable(ledgar, labels):
-    a = render_fewshot(labels, ledgar["train"], n_exemplars=8, seed=42)
-    b = render_fewshot(labels, ledgar["train"], n_exemplars=8, seed=42)
+    a = render_fewshot(labels, ledgar["train"], n_exemplars=8)
+    b = render_fewshot(labels, ledgar["train"], n_exemplars=8)
     assert a.text == b.text and a.sha256 == b.sha256
     assert a.exemplar_indices == b.exemplar_indices
 
 
-def test_exemplars_come_from_train_only(ledgar, labels):
-    """Hard rule 1: dev is for calibration, test is touched once. Neither seeds prompts."""
-    p = render_fewshot(labels, ledgar["train"], n_exemplars=8, seed=42)
-    train_texts = set(ledgar["train"].select(list(p.exemplar_indices))["text"])
-    assert len(train_texts) == 8
-    for text in train_texts:
+def test_exemplars_come_from_the_frozen_manifest(ledgar, labels):
+    """Hard rule 1 + no prefix drift: exemplars are read, never re-sampled."""
+    manifest = load_manifest(EXEMPLAR_MANIFEST, DEFAULT_MANIFEST_DIR)
+    verify_manifest(manifest, ledgar, DEFAULT_MANIFEST_DIR)
+    assert manifest.split == "train"  # never dev, never test
+    assert manifest.sampling == "proportional-random"
+
+    p = render_fewshot(labels, ledgar["train"], n_exemplars=8)
+    assert list(p.exemplar_indices) == manifest.indices
+    assert p.exemplar_seed == manifest.seed
+
+
+def test_exemplar_text_appears_in_the_prompt(ledgar, labels):
+    p = render_fewshot(labels, ledgar["train"], n_exemplars=8)
+    for text in ledgar["train"].select(list(p.exemplar_indices))["text"]:
         assert text[:200] in p.text
 
 
-def test_exemplars_are_one_per_distinct_class(ledgar):
-    idx = select_exemplars(ledgar["train"], [], n_exemplars=8, seed=3)
-    classes = [int(ledgar["train"][i]["label"]) for i in idx]
-    assert len(set(classes)) == 8
+def test_exemplars_are_not_stratified(ledgar):
+    """A uniform draw from the class prior makes no label-coverage claim; at n=8 it
+    will usually repeat a head class rather than cover 8 distinct ones."""
+    indices, _ = select_exemplars(8)
+    classes = [int(ledgar["train"][i]["label"]) for i in indices]
+    assert len(set(classes)) <= 8
 
 
-def test_too_many_exemplars_rejected(ledgar):
-    with pytest.raises(ValueError, match="exceeds"):
-        select_exemplars(ledgar["train"], [], n_exemplars=101, seed=1)
+def test_requesting_more_exemplars_than_frozen_is_rejected():
+    with pytest.raises(ValueError, match="exceeds the 8 exemplars frozen"):
+        select_exemplars(9)
 
 
-def test_zero_exemplars_allowed(ledgar):
-    assert select_exemplars(ledgar["train"], [], n_exemplars=0, seed=1) == []
+def test_negative_exemplars_rejected():
+    with pytest.raises(ValueError, match=">= 0"):
+        select_exemplars(-1)
+
+
+def test_zero_exemplars_allowed():
+    assert select_exemplars(0)[0] == []
 
 
 def test_prompt_metadata_is_recorded_for_provenance(ledgar, labels):
-    meta = render_fewshot(labels, ledgar["train"], n_exemplars=4, seed=9).as_metadata()
+    meta = render_fewshot(labels, ledgar["train"], n_exemplars=4).as_metadata()
     assert meta["n_exemplars"] == 4
-    assert meta["exemplar_seed"] == 9
+    assert meta["exemplar_seed"] == 20260907
     assert len(meta["prompt_sha256"]) == 64
     assert len(meta["template_sha256"]) == 64
     assert len(meta["exemplar_indices"]) == 4

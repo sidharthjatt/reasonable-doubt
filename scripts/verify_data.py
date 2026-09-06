@@ -201,19 +201,18 @@ def check_token_estimate(rep: Report, ds) -> None:
     )
     rep()
 
-    try:
-        from transformers import AutoTokenizer
+    # Hard rule 11: no silent degradation. If the tokenizer cannot be loaded we RAISE.
+    # An earlier version fell back to a chars/4 heuristic here; it produced a plausible
+    # table that was ~30% wrong — the same magnitude as the tokenizer effect this
+    # project exists to measure.
+    from transformers import AutoTokenizer
 
-        tok = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
-        source = "microsoft/deberta-v3-base (the Tier 0 encoder's own tokenizer)"
-        encode = lambda t: len(tok(t, add_special_tokens=True)["input_ids"])  # noqa: E731
-    except Exception as exc:  # offline, or tokenizer unavailable
-        rep(f"*DeBERTa tokenizer unavailable ({type(exc).__name__}); falling back.*")
-        rep()
-        source = "crude chars/4 heuristic (tokenizer unavailable)"
-        encode = lambda t: max(1, len(t) // 4)  # noqa: E731
+    tok = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
 
-    rep(f"Tokenizer: {source}")
+    def encode(text: str) -> int:
+        return len(tok(text, add_special_tokens=True)["input_ids"])
+
+    rep("Tokenizer: microsoft/deberta-v3-base (the Tier 0 encoder's own tokenizer)")
     rep()
     rep("| split | sample | p50 | p90 | p99 | max | over 512 |")
     rep("|-------|--------|-----|-----|-----|-----|----------|")

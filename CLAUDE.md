@@ -80,6 +80,15 @@ single accuracy number.
    them into a single input figure. Any function that ingests a usage block must assert
    that all three fields were read, and must fail loudly if a field is missing rather
    than defaulting it to zero.
+11. No silent degradation. A fallback may never substitute an approximation for a
+   measured value. If a measurement cannot be taken, raise — do not estimate. Any
+   approximate value that is legitimately needed must be (a) requested explicitly by
+   the caller, (b) returned in a field whose name marks it as an estimate, and
+   (c) impossible to pass into a billing or reporting path. Bare `except` that
+   swallows an error and returns a substitute value is forbidden.
+12. Ignore patterns are anchored. Directory ignores are written as `/data/`, never
+   `data/`, so they cannot match a same-named directory under `src/`. After any commit
+   that adds a new package, verify `git ls-files src/` lists the new files.
 
 ## Budget
 

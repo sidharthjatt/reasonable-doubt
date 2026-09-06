@@ -53,6 +53,7 @@ __all__ = [
     "ManifestVerificationError",
     "build_manifest",
     "load_manifest",
+    "proportional_random_indices",
     "stratified_indices",
     "verify_manifest",
 ]
@@ -64,14 +65,34 @@ MANIFEST_FORMAT_VERSION = 1
 # The two frozen evaluation sets. dev_2000 is for router threshold calibration ONLY
 # (hard rule 1); test_3000 is the reporting set.
 MANIFEST_SPECS: dict[str, dict[str, Any]] = {
-    "test_3000": {"split": "test", "n": 3000, "seed": 20260907, "purpose": "reporting"},
+    "test_3000": {
+        "split": "test",
+        "n": 3000,
+        "seed": 20260907,
+        "sampling": "stratified-proportional-largest-remainder",
+        "purpose": "reporting",
+    },
     "dev_2000": {
         "split": "validation",
         "n": 2000,
         "seed": 20260907,
+        "sampling": "stratified-proportional-largest-remainder",
         "purpose": "router threshold calibration ONLY (hard rule 1)",
     },
+    # Few-shot exemplars. Frozen exactly like the evaluation sets so the cacheable
+    # prompt prefix cannot drift between runs. Train split only — never dev, never
+    # test. A 4-exemplar run takes the FIRST 4 of these 8, so the smaller set is a
+    # subset of the larger and the two stay comparable.
+    "exemplars_8": {
+        "split": "train",
+        "n": 8,
+        "seed": 20260907,
+        "sampling": "proportional-random",
+        "purpose": "few-shot exemplars (train only); N may be cut 8 -> 4 by the stage-2 budget gate",
+    },
 }
+
+SAMPLERS = {}
 
 
 class ManifestVerificationError(AssertionError):
@@ -174,6 +195,32 @@ def stratified_indices(labels: list[int], n: int, seed: int) -> list[int]:
     return picked
 
 
+def proportional_random_indices(labels: list[int], n: int, seed: int) -> list[int]:
+    """Uniform random draw of ``n`` row indices, ascending. Proportional in expectation.
+
+    Used for few-shot exemplars. A uniform draw over rows IS a draw from the class
+    prior, so it does not misrepresent the distribution. Deliberately NOT the
+    largest-remainder stratifier: at n=8 over 100 classes every quota is below 1, so
+    largest-remainder would deterministically return the 8 head classes every time —
+    over-representing the head as a certainty rather than in expectation.
+    """
+    import numpy as np
+
+    total = len(labels)
+    if not 0 < n <= total:
+        raise ValueError(f"n must be in (0, {total}], got {n}")
+    rng = np.random.default_rng(seed)
+    return sorted(int(i) for i in rng.choice(total, size=n, replace=False))
+
+
+SAMPLERS.update(
+    {
+        "stratified-proportional-largest-remainder": stratified_indices,
+        "proportional-random": proportional_random_indices,
+    }
+)
+
+
 def _class_stats(names: list[str], labels: list[int]) -> dict[str, Any]:
     counts = Counter(int(lbl) for lbl in labels)
     per_class = {name: counts.get(i, 0) for i, name in enumerate(names)}
@@ -193,18 +240,27 @@ def build_manifest(name: str, ds: "DatasetDict", spec: dict[str, Any] | None = N
     split = get_split(ds, split_name)
     names = label_names(ds)
 
-    indices = stratified_indices(list(split["label"]), spec["n"], spec["seed"])
+    sampling = spec["sampling"]
+    if sampling not in SAMPLERS:
+        raise ValueError(f"unknown sampling policy {sampling!r}; have {sorted(SAMPLERS)}")
+    indices = SAMPLERS[sampling](list(split["label"]), spec["n"], spec["seed"])
     rows = split.select(indices)
     texts = list(rows["text"])
     stats = _class_stats(names, list(rows["label"]))
 
     num_absent = len(names) - stats["classes_represented"]
-    notes = [
-        "Indices are ascending, preserving the split's chronological row order.",
-        "Proportional stratification with largest-remainder allocation; rare classes "
-        "are neither dropped nor oversampled.",
-        f"{num_absent} of {len(names)} classes received zero examples.",
-    ]
+    notes = ["Indices are ascending, preserving the split's chronological row order."]
+    if sampling == "stratified-proportional-largest-remainder":
+        notes.append(
+            "Proportional stratification with largest-remainder allocation; rare "
+            "classes are neither dropped nor oversampled."
+        )
+    else:
+        notes.append(
+            "Uniform random draw over rows, i.e. a draw from the class prior. No "
+            "stratification, and no label-coverage claim is made."
+        )
+    notes.append(f"{num_absent} of {len(names)} classes received zero examples.")
 
     return Manifest(
         name=name,
@@ -214,7 +270,7 @@ def build_manifest(name: str, ds: "DatasetDict", spec: dict[str, Any] | None = N
         purpose=spec.get("purpose", ""),
         seed=spec["seed"],
         n=spec["n"],
-        sampling="stratified-proportional-largest-remainder",
+        sampling=sampling,
         indices=indices,
         text_sha256=hash_texts(texts),
         labels_sha256=hash_texts(names),

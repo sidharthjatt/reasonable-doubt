@@ -33,6 +33,60 @@ must not be executed.
 | E1 | _(TODO)_ | _(TODO)_ | planned |
 | E2 | _(TODO)_ | _(TODO)_ | planned |
 | E3 | _(TODO)_ | _(TODO)_ | planned |
+| C1 | Calibration-set robustness check (see 3a) | _(TODO — fill in before running)_ | planned |
+| C2 | Few-shot confidence anchoring probe (see 3b) | _(TODO — fill in before running)_ | planned |
+
+### 3a. C1 — Calibration-set robustness check
+
+`dev_2000` covers 99 of 100 classes: `Books` is too rare to earn a proportional seat.
+This was **accepted deliberately**, not patched. The set exists to calibrate a scalar
+threshold, whose precision depends on total N rather than per-class coverage, and a
+≥1-per-class floor would distort the class distribution away from realistic traffic and
+thereby bias the calibrated threshold. Proportional sampling is correct here because
+deployment traffic is proportional.
+
+The check: for the single canonical Tier 1 config, calibrate the router threshold on
+`dev_2000` **and** independently on the full 10k validation split, and report whether
+the two thresholds agree. Agreement vindicates `dev_2000`; divergence is itself a
+finding. Costs no API spend — local Tier 1 inference time only.
+
+- **Accept rule:** _(TODO — state the tolerance within which the two thresholds count
+  as agreeing, before running)_
+- **Reporting caveat:** macro-F1 computed on `dev_2000` is an average over **99**
+  classes, not 100. State this wherever such a number appears.
+
+### 3b. C2 — Few-shot confidence anchoring probe
+
+The few-shot exemplars carry a **fixed** `"confidence": 0.9`. This is a deliberate
+anchoring probe, not an oversight. A constant is the cleanest probe: varying the
+demonstrated values would fabricate a calibration curve.
+
+Because the anchor is only present in the few-shot prompt, the two runs we are already
+doing form the comparison:
+
+- **zero-shot** — no exemplars, therefore no anchoring. Router **R2 is evaluated
+  primarily here**, cleanly.
+- **few-shot** — exemplars fixed at 0.9, therefore anchored.
+
+Comparing the distribution of returned `confidence` values across the two runs measures
+the anchoring effect directly, at no extra cost.
+
+- **Predicted direction, recorded BEFORE the run:** few-shot confidences cluster near
+  0.9 more tightly than zero-shot confidences — i.e. lower variance and a mode at or
+  near 0.9.
+- **Accept rule:** _(TODO — state the statistic and threshold, before running)_
+
+### 3c. Standing methodological limitations
+
+- **Exemplar selection policy was not ablated due to budget constraints.** Few-shot
+  results are conditional on proportional (uniform-over-rows) sampling from the train
+  split at seed **20260907**, frozen in `configs/manifests/exemplars_8.json`
+  (sha256 `ac7e7be88613…`). One-per-distinct-class was considered and rejected: at
+  N=8 it covers 8% of the label space, which does not achieve label coverage and so
+  cannot justify distorting the class prior. The full label list in the system prompt
+  already conveys the taxonomy; the exemplars' job is to demonstrate output format.
+- A 4-exemplar run uses the **first 4** of the frozen 8, so it is a strict subset of
+  the 8-exemplar run and the two remain comparable.
 
 ## 4. Results log
 
