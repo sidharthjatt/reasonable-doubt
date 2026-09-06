@@ -23,6 +23,9 @@ dependencies = [
   "fastapi>=0.111",
   "uvicorn>=0.30",
   "onnxruntime>=1.18",
+  "transformers>=4.44",
+  "sentencepiece>=0.2",
+  "protobuf>=4.25",  # required by transformers to load the DeBERTa SentencePiece model
   "tqdm>=4.66",
 ]
 
