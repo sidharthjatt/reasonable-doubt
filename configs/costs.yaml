@@ -1,14 +1,23 @@
 # Single source of truth for all pricing. No prices may be hardcoded elsewhere.
 # Rates are USD per 1,000,000 tokens unless stated otherwise.
-# VERIFY against current provider pricing pages before any locked run.
 
-version: 1
+version: 2
 currency: USD
 rate_unit: per_1m_tokens
+verified_on: 2026-09-07
+source_url: "https://platform.claude.com/docs/en/about-claude/pricing"
 
 # Multipliers applied on top of a model's base rates.
+#
+# These STACK. The docs state the caching multipliers stack with other pricing
+# modifiers including the Batch API discount. So a cache-read token inside a batch
+# bills at 0.5 * 0.1 * base_input. Cross-check: the docs' batch table lists Sonnet 5
+# batch input at $1/MTok, exactly 0.5x the $2 base.
+#
+# Cache break-even (from the docs): caching pays off after ONE cache read at 5m
+# (1.25x write), or after TWO cache reads at 1h (2.0x write).
 modifiers:
-  batch_discount: 0.5        # Batch API: 50% off input and output.
+  batch_discount: 0.5        # Batch API: 50% off, flat.
   cache_read_multiplier: 0.1 # Cache-hit input tokens bill at 10% of base input.
   cache_write_multipliers:
     "5m": 1.25               # 5-minute TTL cache write
@@ -26,25 +35,31 @@ providers:
         output: 5.0
         supports_batch: true
         supports_cache: true
+        tokenizer_generation: new   # 4.7+ tokenizer; ~30% more tokens than pre-4.7
       claude-sonnet-5:
         alias: sonnet-5
+        # DO NOT "CORRECT" THIS TO $3/$15. The $2/$10 rate was introductory through
+        # 2026-08-31 and is now the STANDARD price; the docs state the planned
+        # increase to $3/$15 will NOT occur. Verified 2026-09-07.
         input: 2.0
         output: 10.0
         supports_batch: true
         supports_cache: true
+        tokenizer_generation: new
       claude-opus-5:
         alias: opus-5
         input: 5.0
         output: 25.0
         supports_batch: true
         supports_cache: true
+        tokenizer_generation: new
 
   # ---- Free-tier development providers. Money cost is 0; the binding constraint
   # ---- is rate limits, so track requests/tokens rather than dollars.
   gemini:
     enabled: true
-    notes: "PLACEHOLDER — free tier used for development iteration only. Fill in
-            model ids and current free-tier limits before use."
+    notes: "PLACEHOLDER — free tier, development iteration only. Fill in model ids
+            and current free-tier limits before use."
     free_tier: true
     models:
       PLACEHOLDER-gemini-model:
@@ -53,15 +68,12 @@ providers:
         output: 0.0
         supports_batch: false
         supports_cache: false
-        limits:
-          requests_per_minute: null
-          requests_per_day: null
-          tokens_per_minute: null
+        limits: {requests_per_minute: null, requests_per_day: null, tokens_per_minute: null}
 
   groq:
     enabled: true
-    notes: "PLACEHOLDER — free tier used for development iteration only. Fill in
-            model ids and current free-tier limits before use."
+    notes: "PLACEHOLDER — free tier, development iteration only. Fill in model ids
+            and current free-tier limits before use."
     free_tier: true
     models:
       PLACEHOLDER-groq-model:
@@ -70,23 +82,31 @@ providers:
         output: 0.0
         supports_batch: false
         supports_cache: false
-        limits:
-          requests_per_minute: null
-          requests_per_day: null
-          tokens_per_minute: null
+        limits: {requests_per_minute: null, requests_per_day: null, tokens_per_minute: null}
 
 # Amortized cost of local inference (Tier 0 / Tier 1) so local and API tiers can be
-# compared on one axis. All nulls must be MEASURED, not estimated, before use.
+# compared on one axis.
+#
+# lifetime_requests is DERIVED, never assumed:
+#   lifetime_requests = measured_throughput_rps * 3600 * 24 * 365
+#                       * device_lifetime_years * duty_cycle
+#   amortized_cost_per_request = device_cost_usd / lifetime_requests
 local_hardware:
   device_name: "Apple Silicon Mac Mini (10-core CPU / 10-core GPU)"
-  device_cost_usd: null            # purchase price
-  assumed_lifetime_years: null
-  assumed_lifetime_requests: null  # denominator for amortization
-  # Optional energy term; leave null to exclude from the amortized figure.
+  # NOTE: 60000 is the purchase price in INR. device_cost_usd is left null pending
+  # a confirmed conversion rate — the amortization formula consumes device_cost_usd.
+  device_cost_amount: 60000
+  device_cost_currency: INR
+  device_cost_usd: null
+  device_lifetime_years: 3
+  duty_cycle: 0.25                 # fraction of wall-clock the box actually serves
+  assumed_lifetime_requests: null  # DERIVED from throughput, never assumed
+  measured_throughput_rps: null    # must be MEASURED
+  # Optional energy term. Null = excluded from the amortized figure. An
+  # energy-inclusive number is stronger than pure capital cost if we can measure it.
   power_draw_watts: null
   electricity_cost_usd_per_kwh: null
-  amortization_method: "device_cost_usd / assumed_lifetime_requests (+ optional energy)"
-  measured_throughput:
+  per_tier_throughput:
     tier0_encoder_onnx_int8:
       requests_per_second: null
       p50_latency_ms: null
@@ -103,15 +123,34 @@ local_hardware:
       p95_latency_ms: null
       batch_size: null
 
-# Budget accounting. Enforced by scripts that spend; see hard rule 8.
+# Budget accounting. Enforced by every spending script; see hard rules 8 and 9.
 budget:
-  total_claude_usd: 15.00
+  total_budget_usd: 15.00
+  # Any spending script must REFUSE to run if
+  #   cumulative_recorded_spend + this_run_estimate > hard_stop_usd
+  hard_stop_usd: 15.00
   stages:
-    - id: stage-1
-      description: "PLACEHOLDER — first locked Claude run."
-      allocation_usd: null
-      gate: "PLACEHOLDER — condition that must hold before stage-2 spend."
-    - id: stage-2
-      description: "PLACEHOLDER"
-      allocation_usd: null
-      gate: null
+    stage_1:
+      name: "Zero-shot baselines"
+      runs: [sonnet5_zeroshot_3000, haiku45_zeroshot_3000]
+      estimated_usd: 3.00
+      max_usd: 7.00
+      gate: >
+        After stage 1 completes, read usage.cache_read_input_tokens and
+        usage.cache_creation_input_tokens from the returned results and compute the
+        ACTUAL realised cost and cache hit rate. Do not start stage 2 until that
+        number is written into results/actual_costs_stage1.json.
+    stage_2:
+      name: "Few-shot baseline"
+      runs: [sonnet5_fewshot]
+      estimated_usd: 3.00
+      max_usd: 5.00
+      gate: >
+        Sample size and exemplar count are chosen from stage 1's measured cache hit
+        rate. If the hit rate was poor, cut to 4 exemplars and 1500 examples.
+    stage_3:
+      name: "Ceiling and transfer"
+      runs: [opus5_ceiling_800, banking77_transfer_3000, latency_bench_300]
+      estimated_usd: 3.00
+      max_usd: 4.00
+      gate: "Only runs if total spent so far < $11."

@@ -46,13 +46,21 @@ single accuracy number.
   tiktoken undercounts Claude tokens — never use it for budgeting.
 - Read `usage.cache_read_input_tokens` off every response so we know actual cache
   behaviour rather than assuming it.
+- Claude 4.7 and later use a NEWER TOKENIZER producing roughly 30% more tokens for
+  the same text; Sonnet 4.6 and earlier use the previous one. Sonnet 5 and Haiku 4.5
+  therefore report DIFFERENT token counts for an identical clause. The whole cost
+  comparison depends on respecting this — see hard rule 9.
+- Pricing modifiers STACK: a cache-read token inside a batch bills at
+  0.5 * 0.1 * base_input. Cache writes cost 1.25x (5m) / 2.0x (1h) of base input;
+  caching pays off after one cache read at 5m, or two at 1h.
 
 ## Hard rules — never violate these
 
 1. Router thresholds are calibrated on the DEV split only. Never on test.
 2. Every model result reports mean ± std over >= 3 seeds. Never a single best run.
-3. Every API response is cached to disk keyed by prompt hash BEFORE use. Never re-call
-   the API for a prompt we have already sent.
+3. Every API response is cached to disk BEFORE use, keyed by (model, prompt_hash) —
+   never by prompt_hash alone, see rule 9. Never re-call the API for a
+   (model, prompt) pair we have already sent.
 4. All offline evaluation runs use the Batch API with prompt caching enabled.
 5. All costs are derived from `configs/costs.yaml`. No hardcoded prices anywhere in
    the codebase.
@@ -60,7 +68,13 @@ single accuracy number.
    BEFORE the run is executed.
 7. Negative and rejected results stay in the report. Never delete a failed experiment.
 8. Every API-spending script must print an estimated cost and require an explicit
-   `--confirm` flag before it sends anything.
+   `--confirm` flag before it sends anything. It must also REFUSE to run if
+   cumulative recorded spend + this run's estimate exceeds `budget.hard_stop_usd`
+   in `configs/costs.yaml`.
+9. Token counts are per-model. Never compute a token count once and reuse it across
+   models. Every model's token count comes from that model's own count_tokens call,
+   or from the `usage` block of that model's own response. Cache token counts keyed
+   by (model, prompt_hash), never by prompt_hash alone.
 
 ## Budget
 
