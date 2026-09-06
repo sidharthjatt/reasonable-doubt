@@ -1,0 +1,53 @@
+# API response cache (hard rule 3) — contents never committed
+cache/*
+!cache/.gitkeep
+
+# Experiment outputs
+results/*
+!results/.gitkeep
+
+# Model weights / artifacts
+*.onnx
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.ckpt
+checkpoints/
+adapters/
+models/
+
+# Data
+data/
+*.jsonl
+*.parquet
+*.arrow
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# HF / MLX caches
+.cache/
+.huggingface/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,117 @@
+# Single source of truth for all pricing. No prices may be hardcoded elsewhere.
+# Rates are USD per 1,000,000 tokens unless stated otherwise.
+# VERIFY against current provider pricing pages before any locked run.
+
+version: 1
+currency: USD
+rate_unit: per_1m_tokens
+
+# Multipliers applied on top of a model's base rates.
+modifiers:
+  batch_discount: 0.5        # Batch API: 50% off input and output.
+  cache_read_multiplier: 0.1 # Cache-hit input tokens bill at 10% of base input.
+  cache_write_multipliers:
+    "5m": 1.25               # 5-minute TTL cache write
+    "1h": 2.0                # 1-hour TTL cache write (our default; see CLAUDE.md)
+
+providers:
+
+  anthropic:
+    enabled: true
+    notes: "Final locked runs only. Budget-gated. Batch + 1h prompt caching."
+    models:
+      claude-haiku-4-5-20251001:
+        alias: haiku-4.5
+        input: 1.0
+        output: 5.0
+        supports_batch: true
+        supports_cache: true
+      claude-sonnet-5:
+        alias: sonnet-5
+        input: 2.0
+        output: 10.0
+        supports_batch: true
+        supports_cache: true
+      claude-opus-5:
+        alias: opus-5
+        input: 5.0
+        output: 25.0
+        supports_batch: true
+        supports_cache: true
+
+  # ---- Free-tier development providers. Money cost is 0; the binding constraint
+  # ---- is rate limits, so track requests/tokens rather than dollars.
+  gemini:
+    enabled: true
+    notes: "PLACEHOLDER — free tier used for development iteration only. Fill in
+            model ids and current free-tier limits before use."
+    free_tier: true
+    models:
+      PLACEHOLDER-gemini-model:
+        alias: null
+        input: 0.0
+        output: 0.0
+        supports_batch: false
+        supports_cache: false
+        limits:
+          requests_per_minute: null
+          requests_per_day: null
+          tokens_per_minute: null
+
+  groq:
+    enabled: true
+    notes: "PLACEHOLDER — free tier used for development iteration only. Fill in
+            model ids and current free-tier limits before use."
+    free_tier: true
+    models:
+      PLACEHOLDER-groq-model:
+        alias: null
+        input: 0.0
+        output: 0.0
+        supports_batch: false
+        supports_cache: false
+        limits:
+          requests_per_minute: null
+          requests_per_day: null
+          tokens_per_minute: null
+
+# Amortized cost of local inference (Tier 0 / Tier 1) so local and API tiers can be
+# compared on one axis. All nulls must be MEASURED, not estimated, before use.
+local_hardware:
+  device_name: "Apple Silicon Mac Mini (10-core CPU / 10-core GPU)"
+  device_cost_usd: null            # purchase price
+  assumed_lifetime_years: null
+  assumed_lifetime_requests: null  # denominator for amortization
+  # Optional energy term; leave null to exclude from the amortized figure.
+  power_draw_watts: null
+  electricity_cost_usd_per_kwh: null
+  amortization_method: "device_cost_usd / assumed_lifetime_requests (+ optional energy)"
+  measured_throughput:
+    tier0_encoder_onnx_int8:
+      requests_per_second: null
+      p50_latency_ms: null
+      p95_latency_ms: null
+      batch_size: null
+    tier1_qwen2_5_1_5b_instruct:
+      requests_per_second: null
+      p50_latency_ms: null
+      p95_latency_ms: null
+      batch_size: null
+    tier1_llama_3_2_3b_instruct:
+      requests_per_second: null
+      p50_latency_ms: null
+      p95_latency_ms: null
+      batch_size: null
+
+# Budget accounting. Enforced by scripts that spend; see hard rule 8.
+budget:
+  total_claude_usd: 15.00
+  stages:
+    - id: stage-1
+      description: "PLACEHOLDER — first locked Claude run."
+      allocation_usd: null
+      gate: "PLACEHOLDER — condition that must hold before stage-2 spend."
+    - id: stage-2
+      description: "PLACEHOLDER"
+      allocation_usd: null
+      gate: null

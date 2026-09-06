@@ -1,0 +1,14 @@
+# Installed INSIDE the Kaggle CUDA runtime only. Never install these locally
+# (macOS/MPS): bitsandbytes is CUDA-only. See CLAUDE.md > Hardware.
+torch
+transformers>=4.44
+datasets>=2.19
+peft>=0.12
+bitsandbytes>=0.43
+accelerate>=0.33
+trl>=0.9
+sentencepiece
+scikit-learn>=1.5
+onnx
+onnxruntime
+optimum[onnxruntime]
