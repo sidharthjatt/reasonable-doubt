@@ -1,0 +1,66 @@
+{
+  "_comment": "Recorded-shape Anthropic batch results for offline dry runs. Deliberately returned OUT OF ORDER relative to submission (rows 12, 87, 45 submitted ascending), and one request failed individually so partial success is exercised.",
+  "model": "claude-sonnet-5",
+  "manifest": "test_3000",
+  "submitted_row_indices": [12, 45, 87, 91],
+  "results": [
+    {
+      "custom_id": "test_3000-000087",
+      "result": {
+        "type": "succeeded",
+        "message": {
+          "id": "msg_03",
+          "model": "claude-sonnet-5",
+          "content": [{"type": "text", "text": "{\"label\": \"Notices\", \"confidence\": 0.71}"}],
+          "usage": {
+            "input_tokens": 110,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 2000,
+            "output_tokens": 30
+          }
+        }
+      }
+    },
+    {
+      "custom_id": "test_3000-000012",
+      "result": {
+        "type": "succeeded",
+        "message": {
+          "id": "msg_01",
+          "model": "claude-sonnet-5",
+          "content": [{"type": "text", "text": "{\"label\": \"Governing Laws\", \"confidence\": 0.94}"}],
+          "usage": {
+            "input_tokens": 120,
+            "cache_creation_input_tokens": 2000,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 25
+          }
+        }
+      }
+    },
+    {
+      "custom_id": "test_3000-000091",
+      "result": {
+        "type": "errored",
+        "error": {"type": "overloaded_error", "message": "Overloaded"}
+      }
+    },
+    {
+      "custom_id": "test_3000-000045",
+      "result": {
+        "type": "succeeded",
+        "message": {
+          "id": "msg_02",
+          "model": "claude-sonnet-5",
+          "content": [{"type": "text", "text": "{\"label\": \"Severability\", \"confidence\": 0.55}"}],
+          "usage": {
+            "input_tokens": 95,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 2000,
+            "output_tokens": 22
+          }
+        }
+      }
+    }
+  ]
+}

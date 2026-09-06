@@ -5,6 +5,8 @@ cache/*
 # Experiment outputs
 results/*
 !results/.gitkeep
+# The spend ledger IS a result and must be committed — it is the record of real money.
+!results/spend_ledger.jsonl
 
 # Model weights / artifacts
 *.onnx
