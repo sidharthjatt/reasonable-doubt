@@ -13,12 +13,14 @@ results/*
 *.bin
 *.pt
 *.ckpt
-checkpoints/
-adapters/
-models/
+/checkpoints/
+/adapters/
+/models/
 
-# Data (manifests under configs/ ARE committed — they are the frozen eval sets)
-data/
+# Data. Anchored to the repo root with a leading slash: a bare `data/` also matches
+# src/data/ and would silently exclude the entire data layer from git.
+# Manifests under configs/ ARE committed — they are the frozen evaluation sets.
+/data/
 *.jsonl
 *.parquet
 *.arrow
