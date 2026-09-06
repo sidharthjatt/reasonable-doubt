@@ -17,7 +17,7 @@ checkpoints/
 adapters/
 models/
 
-# Data
+# Data (manifests under configs/ ARE committed — they are the frozen eval sets)
 data/
 *.jsonl
 *.parquet

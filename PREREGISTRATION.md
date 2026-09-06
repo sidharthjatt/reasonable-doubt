@@ -48,6 +48,10 @@ experiment id. Never edit a past entry — add a correcting entry instead.
 - **Seeds:** _(TODO)_
 - **Result:** _(TODO — mean ± std, primary metric first)_
 - **Cost:** _(TODO — actual, from configs/costs.yaml)_
+- **FX (only if any figure is INR-derived):** _(state the usd_per_inr_rate, its
+  verification date, and its source — every INR-derived number in the report must
+  carry the rate and date it was converted at)_
+- **Manifest:** _(name + text_sha256, from configs/manifests/)_
 - **Accept rule met?** _(yes / no)_
 - **Notes:** _(TODO)_
 

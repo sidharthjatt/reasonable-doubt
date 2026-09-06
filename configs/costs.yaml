@@ -93,11 +93,15 @@ providers:
 #   amortized_cost_per_request = device_cost_usd / lifetime_requests
 local_hardware:
   device_name: "Apple Silicon Mac Mini (10-core CPU / 10-core GPU)"
-  # NOTE: 60000 is the purchase price in INR. device_cost_usd is left null pending
-  # a confirmed conversion rate — the amortization formula consumes device_cost_usd.
-  device_cost_amount: 60000
+  device_cost_amount: 59900        # to be confirmed against the actual receipt
   device_cost_currency: INR
-  device_cost_usd: null
+  fx:
+    usd_per_inr_rate: 94.50
+    fx_verified_on: 2026-09-07
+    fx_source: "xe.com / Yahoo Finance INR=X mid-market"
+  # device_cost_usd is DERIVED: device_cost_amount / usd_per_inr_rate
+  # Never store a hardcoded USD figure — the rate moves and the report must be auditable.
+  # Any INR-derived number in the report must be stated alongside the FX rate and its date.
   device_lifetime_years: 3
   duty_cycle: 0.25                 # fraction of wall-clock the box actually serves
   assumed_lifetime_requests: null  # DERIVED from throughput, never assumed

@@ -75,6 +75,11 @@ single accuracy number.
    models. Every model's token count comes from that model's own count_tokens call,
    or from the `usage` block of that model's own response. Cache token counts keyed
    by (model, prompt_hash), never by prompt_hash alone.
+10. Cost is computed from the three usage fields separately: `input_tokens` (uncached),
+   `cache_creation_input_tokens` (write), `cache_read_input_tokens` (read). Never sum
+   them into a single input figure. Any function that ingests a usage block must assert
+   that all three fields were read, and must fail loudly if a field is missing rather
+   than defaulting it to zero.
 
 ## Budget
 
