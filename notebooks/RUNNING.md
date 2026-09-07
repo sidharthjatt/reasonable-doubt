@@ -28,13 +28,27 @@ CELL 2 begins by asserting the running versions match the pins and **raises** if
 do not. Previously PREFLIGHT passed while running versions that had never been
 introspected; that is what this check prevents.
 
-### Run the probe before Tier 1
+### Run the probe before the notebook — both notebooks have one
 
-`kaggle_probe_qlora.py` takes about two minutes and exercises the exact path that
-cannot be tested off-CUDA: 4-bit load → LoRA wrap → one real training step →
-generation. Run CELL 1, restart, then run the probe.
+Each notebook has a matching probe. Run CELL 1, restart the kernel, then run the probe
+in its own cell — in the same kernel CELL 2 will use. **If the probe fails, do not start
+that notebook.**
 
-**If the probe fails, do not start Tier 1.** If it passes, the dependency set works.
+| probe | for | ~time | what it exercises |
+|-------|-----|-------|-------------------|
+| `kaggle_probe_qlora.py` | Tier 1 | ~2 min | the path that cannot be tested off-CUDA: 4-bit load → LoRA wrap → one real training step → generation |
+| `kaggle_probe_tier0.py` | Tier 0 | ~90 s | the path that otherwise first runs 3–5 h in: untrained DeBERTa-v3-base → ONNX export → ORTQuantizer arm64 INT8 → one onnxruntime forward pass on 4 rows |
+
+Tier 0's probe matters at least as much as Tier 1's. Tier 0 is the notebook that
+**downgrades a preloaded package** (transformers 5.0.0 → 4.57.6), which is the exact
+operation that caused the mixed peft install — Tier 1 sidesteps it by forcing only
+`peft`, Tier 0 cannot. And an export failure discovered after training costs the whole
+session, checkpoint included.
+
+Both probes end in one line: `PASSED …` or `FAILED — DO NOT START TIER n`.
+
+The 90 s figure assumes the DeBERTa weights are already in the HF cache; a cold ~370 MB
+download is on top of that.
 
 ### Why the two notebooks pin different versions
 
