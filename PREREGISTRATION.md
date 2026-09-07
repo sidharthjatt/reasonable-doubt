@@ -710,6 +710,86 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3q. `use_reentrant` — a question settled by measurement, and the answer is "no"
+
+Decided **before** the Kaggle session rather than mid-session, because the failure it
+guards against costs GPU hours to discover.
+
+`gradient_checkpointing=True` together with `prepare_model_for_kbit_training` is a
+known sticking point: with **reentrant** checkpointing, if nothing upstream of the LoRA
+layers requires grad, the backward pass raises *"element 0 of tensors does not require
+grad and does not have a grad_fn"*. The widely-repeated fix is to pass
+`gradient_checkpointing_kwargs={"use_reentrant": False}`.
+
+**For peft 0.20.0 + trl 1.12.0 + transformers 5.0.0 the kwarg is not needed, and is not
+added.** Two independent mechanisms make it unnecessary, and both were measured, not
+assumed.
+
+**How this was determined.** Source reading first, then an executed test with a control
+— per §3e, introspecting cleanly is not evidence that a path works.
+
+*Read:*
+
+* `transformers 5.0.0` `PreTrainedModel.gradient_checkpointing_enable`: when
+  `gradient_checkpointing_kwargs is None` it substitutes `{"use_reentrant": False}`.
+  **Non-reentrant is already the default.** The same method then calls
+  `self.enable_input_require_grads()` whenever `main_input_name == "input_ids"`, which
+  is the guard against the no-grad error *independently of reentrancy*.
+* `trl 1.12.0` `SFTTrainer.__init__` line 1351: it applies
+  `setdefault("use_reentrant", False)` **only when `transformers.__version__ < 5.0.0`**,
+  with a comment saying it expects 5.0.0 to make non-reentrant the default. TRL has
+  already reasoned about this exact version boundary, in both directions.
+* `trl 1.12.0` line 1147: for a PEFT model with gradient checkpointing it calls
+  `model.enable_input_require_grads()` itself, citing transformers issue #42489.
+* `peft 0.20.0` `prepare_model_for_kbit_training`: on the kbit branch it also calls
+  `enable_input_require_grads()`, then `gradient_checkpointing_enable({})`.
+
+*Executed*, on CPU with a tiny causal LM through the real `SFTTrainer` path, forcing
+peft's kbit branch. 4-bit itself is CUDA-only, but the no-grad failure is **not**
+4-bit-specific — it is "frozen base + checkpointing, nothing upstream requiring grad",
+which reproduces here. The value actually bound into each module's checkpoint
+`functools.partial` was read after `train()`, not inferred:
+
+| arm | `gradient_checkpointing_kwargs` passed | bound after `train()` | result |
+|-----|----------------------------------------|------------------------|--------|
+| A — as `kaggle_tier1.py` is written | *(none)* | `{'use_reentrant': False}` | trains, loss 6.4949 |
+| B — the folklore fix | `{'use_reentrant': False}` | `{'use_reentrant': False}` | trains, loss 6.4954 |
+| C — **control**, forced reentrant | `{'use_reentrant': True}` | `{'use_reentrant': True}` | **trains**, loss 6.4954 |
+
+A and B bind an identical value: **the kwarg is inert here**, and adding it would look
+like configuring something while changing nothing.
+
+**The control is the informative arm, and it did not fail.** C genuinely selects
+reentrant checkpointing and still trains, which locates the protection in
+`enable_input_require_grads()` rather than in the reentrancy setting. Had C failed, the
+kwarg would have been load-bearing and would have been added to both files. This is the
+§3e discipline applied deliberately: a control known to behave the opposite way, to make
+the result conclusive rather than merely suggestive.
+
+**One measurement error worth recording, because it nearly produced the wrong answer.**
+The first run read the bound value after `SFTTrainer.__init__` and saw `{}` in all three
+arms — the kwarg apparently ignored. `Trainer` activates gradient checkpointing inside
+`_inner_training_loop`, **not** in `__init__`, so the reading was taken before the call
+under test had happened. Reading after `train()` separates the arms cleanly. Same shape
+as §3o: measuring a proxy, at the wrong moment, and getting a plausible number.
+
+**What is NOT verified.** Nothing here ran on CUDA or on real bitsandbytes 4-bit
+weights, and the model was a tiny GPT-2, not Qwen2.5-1.5B or Llama-3.2-3B. The
+reentrancy binding and `enable_input_require_grads` are device- and
+architecture-independent code paths, which is why the CPU result is informative — but
+that is an argument, not a measurement, and §3e forbids promoting it to a structural
+claim. Kaggle also supplies its own `transformers`, and if it is **below 5.0.0** the
+mechanism changes hands: TRL's `setdefault` at line 1351 then applies it instead. Both
+branches are covered, by different code, which is why the check is behavioural.
+
+**Consequence, in `kaggle_probe_qlora.py` step 5:** rather than pass an inert kwarg, the
+probe now *measures* both facts on the real GPU stack — it prints the checkpoint kwargs
+actually bound after `train()`, and asserts a positive finite `grad_norm`, because a step
+that runs while moving nothing is a failure presenting as success (§3e). The assertion
+message names the fix and instructs that it be applied to **both** files together. So
+the decision is recorded here, the assumption is instrumented there, and if CUDA
+disagrees the probe says so in two minutes instead of after a seed.
+
 ### 3p. Notebook defect 10 — a check that validated the wrong layer, again
 
 `PREFLIGHT` printed **PASSED** while running `transformers 5.0.0` and `peft 0.19.1` —

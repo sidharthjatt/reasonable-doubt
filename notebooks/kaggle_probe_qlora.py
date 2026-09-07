@@ -80,6 +80,30 @@ try:
     print(f"    training loss after 1 step: {out.training_loss:.4f}")
     assert out.training_loss == out.training_loss, "loss is NaN"
 
+    # gradient checkpointing + prepare_model_for_kbit_training is the documented
+    # sticking point: with reentrant checkpointing and nothing upstream of the LoRA
+    # layers requiring grad, the backward pass raises "element 0 of tensors does not
+    # require grad". Measured under transformers 5.0.0 / trl 1.12.0 / peft 0.20.0 (see
+    # PREREGISTRATION 3q), the kwarg is NOT needed and is NOT passed. Both facts that
+    # make it unnecessary are properties of the installed libraries, so they are
+    # verified here rather than assumed.
+    import functools as _ft
+    _bound = {repr(f.keywords) for f in
+              (getattr(m_, "_gradient_checkpointing_func", None) for m_ in tr.model.modules())
+              if isinstance(f, _ft.partial)}
+    print(f"    checkpoint kwargs actually bound: {_bound or '{none — checkpointing off}'}")
+    assert _bound, ("gradient checkpointing is enabled in SFTConfig but no module holds a "
+                    "checkpoint function — the setting did not take")
+    # A step that runs but moves nothing is a failure presenting as success. grad_norm
+    # is the direct evidence that gradients reached the adapter.
+    _gn = [r["grad_norm"] for r in tr.state.log_history if r.get("grad_norm") is not None]
+    print(f"    grad_norm: {_gn}")
+    assert _gn and all(g == g for g in _gn) and max(_gn) > 0, (
+        f"no positive finite grad_norm logged ({_gn}) — the step ran but no gradient "
+        f"reached the LoRA parameters. If this fires, pass "
+        f"gradient_checkpointing_kwargs={{'use_reentrant': False}} in SFTConfig here AND "
+        f"in kaggle_tier1.py, and record why the measurement in 3q did not hold on CUDA.")
+
     step(6, "generation with left padding")
     m = tr.model
     m.config.use_cache = True
