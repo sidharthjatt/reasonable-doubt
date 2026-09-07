@@ -89,6 +89,24 @@ was cleared. That costs time but is not incorrect; the run is still valid.
 
 ---
 
+## After Tier 0: re-score INT8 on the Mac
+
+Kaggle quantises for **arm64** but evaluates on its own **x86** CPU. INT8 kernels are
+ISA-specific and numerics can differ, so Kaggle's INT8 accuracy is measured on hardware
+that never serves the model. **E1's accept rule attaches to the number measured here.**
+
+Download `int8_ce_<seed>/` and `tier0_ce_seed<seed>.json`, then:
+
+```bash
+.venv/bin/python scripts/score_int8_local.py \
+    --int8-dir <path to downloaded int8_ce_1> \
+    --seed 1 \
+    --kaggle-result <path to downloaded tier0_ce_seed1.json>
+```
+
+It prints both figures and their difference. If they differ, the **local** number is
+authoritative and the gap is reported as a property of the deployed system.
+
 ## What to download when finished
 
 From `/kaggle/working`:

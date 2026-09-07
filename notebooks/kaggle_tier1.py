@@ -35,9 +35,15 @@ except ImportError:
 WORK = Path("/kaggle/working"); WORK.mkdir(exist_ok=True)
 MODEL = "Qwen/Qwen2.5-1.5B-Instruct"   # record the actual model in PREREGISTRATION (E4)
 SEEDS = [1, 2, 3]
-# 1536 not 1024: measured, 0.7% of train examples exceed 1024 Qwen tokens and the LABEL
-# sits at the end, so they would train on a prompt with the answer cut off. 0.0% at 1536.
-MAX_LEN, EPOCHS, LR, BS, GA = 1536, 1, 2e-4, 4, 4
+# MAX_LEN bounded over the FULL 57,000-row fit set, not a sample. A 300-row head
+# sample said max 1154; the true max is 2378 — LEDGAR is chronologically ordered so a
+# head sample is not representative. Counts over the full set:
+#   >1024: 754 rows (1.32%)   >1536: 17   >2048: 2   >2560: 0
+# The LABEL sits at the end of every training example, so any truncation removes the
+# answer. 2560 is the smallest bound with zero truncation; dynamic padding means the
+# cost is paid only on the rare long batches (mean length is 607).
+MAX_LEN, EPOCHS, LR, BS, GA = 2560, 1, 2e-4, 4, 4
+EVAL_BS = 8            # halved automatically on OOM; 2560-token prompts are large
 MAX_NEW_TOKENS = 16                    # longest label = 5 tokens + eos; 16 is 2.7x margin
 EVAL_N = 3000
 HOLDOUT_SHA12, TEST3000_SHA12 = "97eebc04d0c7", "e719c1109069"
@@ -90,12 +96,15 @@ print(f"test_3000 verified {_sha[:16]}… ({len(EVAL_IDX)} rows, "
 
 tok = AutoTokenizer.from_pretrained(MODEL)
 tok.pad_token = tok.pad_token or tok.eos_token
-# LEFT padding is REQUIRED for decoder-only batched generation. Qwen defaults to right;
-# with right padding the model conditions on trailing pads and every sequence but the
-# longest in each batch emits garbage — a ~90% format-failure rate that reads as
-# "the model is bad" rather than "the harness is broken".
-tok.padding_side = "left"
-assert tok.padding_side == "left", "batched generation requires left padding"
+# PADDING SIDE DIFFERS BY PHASE — set at each point of use, never once globally.
+#   TRAINING  -> "right". With left padding the first real token is predicted from a
+#                masked pad position, so its loss term is garbage. Measured on
+#                Qwen2.5-0.5B: batched loss 7.548 under left padding vs 6.206 unpadded,
+#                a drift of 1.34 on the padded example. Silent.
+#   GENERATION -> "left". With right padding the model conditions on trailing pads and
+#                every sequence but the longest in a batch emits fluent nonsense —
+#                reproduced: 3 of 4 prompts wrong.
+tok.padding_side = "right"
 
 LABEL_BLOCK = "\n".join(f"- {n}" for n in NAMES)
 SYS = ("You are a legal contract analyst. Classify the contract provision into exactly "
@@ -109,9 +118,19 @@ def to_text(text, label=None):
 
 train_txt = Dataset.from_dict({"text": [
     to_text(ds["train"][i]["text"], NAMES[int(ds["train"][i]["label"])]) for i in fit_idx]})
-_over = sum(1 for t in train_txt["text"][:300]
-            if len(tok(t, add_special_tokens=False)["input_ids"]) > MAX_LEN)
-print(f"fit rows: {len(train_txt):,} | sampled train rows over MAX_LEN={MAX_LEN}: {_over}/300")
+# Verify over EVERY fit row, not a sample, and FAIL if any label would be cut off.
+print(f"fit rows: {len(train_txt):,} | checking all of them against MAX_LEN={MAX_LEN}…")
+_lens = []
+for _s in range(0, len(train_txt), 2000):
+    _lens += [len(x) for x in
+              tok(train_txt["text"][_s:_s+2000], add_special_tokens=False)["input_ids"]]
+_lens = np.array(_lens)
+print(f"  train token length: mean {_lens.mean():.0f} p99 {np.percentile(_lens,99):.0f} "
+      f"MAX {_lens.max()}  |  over MAX_LEN: {(_lens > MAX_LEN).sum()}")
+assert (_lens > MAX_LEN).sum() == 0, (
+    f"{(_lens > MAX_LEN).sum()} training examples exceed MAX_LEN={MAX_LEN}. The LABEL is "
+    f"at the end of every example, so these would train on a prompt with no answer. "
+    f"Raise MAX_LEN to at least {int(_lens.max())}.")
 
 # Exact-match normalisation, mirroring src/data/labels.py — no fuzzy rescue.
 EDGE = " \t\r\n\"'`“”‘’*_.,;:!?()[]{}<>"
@@ -144,6 +163,9 @@ for seed in SEEDS:
         base = prepare_model_for_kbit_training(
             AutoModelForCausalLM.from_pretrained(MODEL, device_map="auto",
                                                  quantization_config=quant))
+        assert tok.padding_side == "right", (
+            "training requires RIGHT padding; left padding corrupts the loss on the "
+            "first real token of every padded sequence")
         cfg_kw = dict(output_dir=str(ck), seed=seed, num_train_epochs=EPOCHS,
             learning_rate=LR, per_device_train_batch_size=BS,
             gradient_accumulation_steps=GA, fp16=True, logging_steps=100,
@@ -168,21 +190,45 @@ for seed in SEEDS:
     if hasattr(model, "generation_config"): model.generation_config.use_cache = True
     model.eval()
 
+    # switch to LEFT for generation, and assert it here rather than trusting the top
+    tok.padding_side = "left"
+    assert tok.padding_side == "left", "batched generation requires left padding"
     preds, raws, trunc = [], [], 0
-    for s0 in range(0, len(EVAL_IDX), 16):
-        chunk = [ds["test"][i]["text"] for i in EVAL_IDX[s0:s0+16]]
-        enc = tok([to_text(t) for t in chunk], return_tensors="pt", padding=True,
+
+    def generate_chunk(texts):
+        """Generate for one chunk. Returns list of decoded strings."""
+        enc = tok([to_text(t) for t in texts], return_tensors="pt", padding=True,
                   truncation=True, max_length=MAX_LEN).to(model.device)
         with torch.no_grad():
             out = model.generate(**enc, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
                                  pad_token_id=tok.pad_token_id)
-        for j in range(len(chunk)):
-            gen = out[j][enc["input_ids"].shape[1]:]          # left padding => safe slice
+        res = []
+        for j in range(len(texts)):
+            gen = out[j][enc["input_ids"].shape[1]:]      # left padding => safe slice
+            res.append((gen, tok.decode(gen, skip_special_tokens=True).strip()))
+        return res
+
+    # OOM here would land AFTER 3-4 hours of training. Halve the batch and retry
+    # rather than losing the seed; the adapter is already on disk either way.
+    eval_bs = EVAL_BS
+    s0 = 0
+    while s0 < len(EVAL_IDX):
+        texts = [ds["test"][i]["text"] for i in EVAL_IDX[s0:s0 + eval_bs]]
+        try:
+            got = generate_chunk(texts)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache(); gc.collect()
+            if eval_bs == 1:
+                raise RuntimeError("OOM at eval batch size 1 — cannot proceed")
+            eval_bs = max(1, eval_bs // 2)
+            print(f"  OOM -> halving eval batch to {eval_bs} and retrying", flush=True)
+            continue
+        for gen, txt in got:
             if len(gen) >= MAX_NEW_TOKENS and tok.eos_token_id not in gen.tolist():
                 trunc += 1
-            txt = tok.decode(gen, skip_special_tokens=True).strip()
             raws.append(txt); preds.append(normalize(txt))
-        if s0 % 480 == 0: print(f"  eval {s0}/{len(EVAL_IDX)}", flush=True)
+        s0 += len(texts)
+        if s0 % 480 < eval_bs: print(f"  eval {s0}/{len(EVAL_IDX)} (bs={eval_bs})", flush=True)
 
     gold = [NAMES[int(ds["test"][i]["label"])] for i in EVAL_IDX]
     SENT = "\x00UNMATCHED"
@@ -190,12 +236,12 @@ for seed in SEEDS:
     res = {"model": MODEL, "seed": seed, "n": len(EVAL_IDX),
            "eval_manifest": "test_3000", "eval_manifest_sha256": _sha,
            "max_seq_length": MAX_LEN, "max_new_tokens": MAX_NEW_TOKENS,
-           "padding_side": tok.padding_side,
+           "padding_side_train": "right", "padding_side_eval": "left",
            "macro_f1": f1_score(gold, p, labels=sorted(set(gold)), average="macro",
                                 zero_division=0),
            "accuracy": float(np.mean([g == q for g, q in zip(gold, p)])),
            "format_failure_rate": float(np.mean([x is None for x in preds])),
-           "generation_truncated": trunc}
+           "generation_truncated": trunc, "final_eval_batch_size": eval_bs}
     json.dump({"row_indices": EVAL_IDX, "predictions": preds, "raw": raws},
               open(WORK / f"tier1_preds_seed{seed}.json", "w"))
     done.write_text(json.dumps(res, indent=2)); print(json.dumps(res, indent=2))
