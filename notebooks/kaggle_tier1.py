@@ -142,6 +142,51 @@ if _bad:
         "the 'velora_config' crash happened. PREFLIGHT previously passed while running "
         "versions that were never introspected — this check exists so that cannot recur.")
 print("  PREFLIGHT: versions match the pins")
+
+# The gate above reads `<module>.__version__`. THAT IS THE VALUE THAT LIED: it reported
+# peft 0.19.1 while 0.20.0's bnb.py executed. `__version__` is a string baked into the
+# package at build time, so in a mixed install it describes whichever __init__.py won,
+# not the modules actually imported. If the mismatch runs the other way — new metadata
+# over stale code, or the reverse — an equality check against it passes on a broken
+# environment. The three checks below test the install itself, not its self-report.
+# Ported from kaggle_probe_qlora.py step 2 so Tier 1 is not dependent on the probe
+# having been run.
+import importlib.metadata as _md, pathlib as _pl
+
+# (a) Distribution metadata vs the imported module's own string. These come from
+#     different places on disk; a half-replaced install can disagree.
+for _k, _mod in (("transformers", _tf), ("trl", _trl), ("peft", _peft)):
+    _meta = _md.version(_k)
+    if _meta != _mod.__version__:
+        raise RuntimeError(
+            f"MIXED INSTALL — {_k}: dist-info says {_meta}, imported module says "
+            f"{_mod.__version__}. One of pip's writes did not complete, or the kernel "
+            f"holds an older module than the metadata on disk. Restart the kernel; if "
+            f"it persists, start a fresh session. Module file: {_mod.__file__}")
+print(f"  PREFLIGHT: dist-info == __version__ for transformers, trl, peft")
+
+# (b) The crash site itself. peft 0.20.0's tuners/lora/bnb.py references
+#     LoraConfig.velora_config; 0.19.1's LoraConfig does not define it. Comparing the
+#     SOURCE of the module that crashed against the FIELDS of the class it crashed on
+#     detects the mix in either direction, and does not consult any version string.
+_bnb_path = _pl.Path(_peft.__file__).parent / "tuners" / "lora" / "bnb.py"
+if not _bnb_path.exists():
+    raise RuntimeError(f"peft layout unexpected: {_bnb_path} missing — cannot verify "
+                       "the mixed-install crash site. Do not proceed blind.")
+_uses = "velora_config" in _bnb_path.read_text()
+_has = "velora_config" in LoraConfig.__dataclass_fields__
+if _uses != _has:
+    raise RuntimeError(
+        f"MIXED PEFT INSTALL — bnb.py references velora_config: {_uses}, but "
+        f"LoraConfig defines it: {_has}. These come from different peft versions. This "
+        f"is the exact AttributeError that killed two Kaggle sessions. Re-run CELL 1 "
+        f"and RESTART THE KERNEL.")
+print(f"  PREFLIGHT: peft crash site consistent (bnb.py uses velora_config={_uses}, "
+      f"LoraConfig defines it={_has})")
+
+# (c) Print where peft is actually imported from. Kaggle has more than one site-packages
+#     on sys.path; if a stale copy shadows the installed one, this is what shows it.
+print(f"  PREFLIGHT: peft.__file__ = {_peft.__file__}")
 print("PREFLIGHT — validating every third-party signature before anything expensive")
 
 # 1. Resolve the sequence-length kwarg by introspection, never by assumption.
