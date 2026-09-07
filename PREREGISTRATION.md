@@ -669,6 +669,47 @@ already produced under the current prompt — including Rung 1. Optimising a
 preregistered artefact after seeing its cost is exactly what hard rule 6 forbids.
 Recorded here so the option is on the record as rejected, not overlooked.
 
+### 3m. Pre-run notebook audit — seven defects, all silent (2026-09-08)
+
+Both Kaggle notebooks were reviewed line by line before any GPU time was spent. Seven
+defects found, **none of which would have raised an error**; five would have produced
+plausible-looking but wrong results after 9–15 hours of GPU time. Same class as §3e:
+failures that present as normal operation.
+
+| # | notebook | defect | how it would have surfaced | verified |
+|---|----------|--------|---------------------------|----------|
+| 1 | tier1 | eval on `range(3000)` — positional — instead of the `test_3000` manifest | `test_3000` spans indices 1..9992; only **881 of 3000** rows overlap. The join to Claude's Stage 1 results would silently match 881 rows. **70.6% of the manifest missed** | measured |
+| 2 | tier1 | `padding_side` left at Qwen's default `right` for batched generation | every sequence but the longest in each batch emits garbage; reads as "the model is bad" | **reproduced** (below) |
+| 3 | tier1 | `max_seq_length=1024` | **0.7% of train examples exceed it and the LABEL is at the end** — those rows train on a prompt with no answer. 0.0% at 1536 | measured, 300 rows |
+| 4 | tier1 | `max_seq_length` passed to `TrainingArguments` | `TypeError` at startup (loud, but wastes a session slot) — it is an `SFTConfig` field | confirmed: not a `TrainingArguments` field |
+| 5 | tier1 | `gradient_checkpointing` sets `use_cache=False`, never restored before `.generate()` | generation very slow or failing | confirmed: Qwen default `use_cache=True` |
+| 6 | both | checkpoints deleted only after the completion marker was written | a session dying during eval or export retrains the whole seed | logic review |
+| 7 | tier0 | INT8 quantised with `avx512_vnni` | targets the **x86 Kaggle host**, not the Apple Silicon Mac Mini that deploys it | logic review |
+
+**Defect 2 reproduced locally** on Qwen2.5-0.5B-Instruct, same family and chat template,
+four prompts of differing lengths in one batch:
+
+```
+padding_side='right'                    padding_side='left'
+  France -> "What would you like to      France -> "Paris"
+             know about France"          Japan  -> "Tokyo"
+  Japan  -> "What would you like to..."  Italy  -> "Rome"
+  Italy  -> "What would you like to..."
+  USA(longest) -> "Washington DC"        USA    -> "Washington DC"
+```
+
+**Only the longest sequence in the batch is correct under right padding** — 3 of 4 wrong,
+and the wrong answers are fluent text, not errors. At 3,000 eval rows in batches of 16
+this would have produced a format-failure rate near 90% and been read as Tier 1 failing
+E4, triggering E4b on a harness bug rather than a finding.
+
+**Also fixed, not in the original list:** `max_new_tokens` raised 12 → 16 (longest label
+is 5 tokens + eos; 12 was sufficient but thin), generation truncation is now counted and
+reported, per-row `row_indices` are saved alongside predictions so the offline join
+cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
+`test_3000` and reports the E3 delta directly — without which E1's accept rule, which
+attaches to INT8, could not be computed from the notebook's output at all.
+
 ### 3k. PREDICTION, recorded BEFORE Stage 1's results land (2026-09-07)
 
 **Cache economics measured at n=10 do not extrapolate to batch concurrency.**
