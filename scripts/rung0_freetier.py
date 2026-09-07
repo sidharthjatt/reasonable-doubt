@@ -58,6 +58,36 @@ def api_key(provider: str) -> str:
     )
 
 
+def retry_after_seconds(header: str | None, *, default: float = 2.0) -> float:
+    """Parse a Retry-After header. It may be seconds OR an HTTP-date (RFC 9110).
+
+    A bare ``float(header)`` crashes mid-run on the date form. Returns ``default``
+    when the header is absent or unparseable — this is a RETRY POLICY, not a
+    measurement, so a default here cannot corrupt any reported number.
+    """
+    if not header:
+        return default
+    try:
+        return max(0.0, float(header))
+    except ValueError:
+        pass
+    from email.utils import parsedate_to_datetime
+    from datetime import datetime, timezone
+
+    try:
+        when = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return default
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+class ShapeError(RuntimeError):
+    """The provider response did not have the shape we parse. Never substituted with
+    an empty answer — that would be scored as a model failure when it is our bug."""
+
+
 class RateLimited(Exception):
     """Provider returned 429. Tracked, because it determines whether a 3000-row
     shadow run is feasible on a free tier."""
@@ -77,14 +107,22 @@ def call_groq(client, model, system, clause, params):
         },
     )
     if r.status_code == 429:
-        raise RateLimited(r.headers.get("retry-after", "1"))
+        raise RateLimited(retry_after_seconds(r.headers.get("retry-after")))
     r.raise_for_status()
     body = r.json()
     choice = body["choices"][0]
     message = choice["message"]
+    # Hard rule 11: a MISSING content field means the response shape is not what we
+    # think it is, and must not be recorded as an empty model answer — that would be
+    # counted as a model failure when it is our bug. A present-but-empty content
+    # (reasoning consumed the budget) is real data and passes through.
+    if "content" not in message:
+        raise ShapeError(
+            f"groq response message has no 'content' field; keys={sorted(message)}"
+        )
     return (
         {
-            "text": message.get("content") or "",
+            "text": message["content"] or "",
             "finish_reason": choice.get("finish_reason"),
             # Reasoning models spend the token budget before emitting content; recorded
             # so a truncated answer is never mistaken for a bad prompt.
@@ -110,14 +148,22 @@ def call_gemini(client, model, system, clause, params):
         },
     )
     if r.status_code == 429:
-        raise RateLimited(r.headers.get("retry-after", "1"))
+        raise RateLimited(retry_after_seconds(r.headers.get("retry-after")))
     r.raise_for_status()
     body = r.json()
     candidate = body["candidates"][0]
-    parts = candidate.get("content", {}).get("parts", [{}])
+    if "content" not in candidate:
+        # A blocked or filtered candidate has no content. That is not an empty answer.
+        raise ShapeError(
+            f"gemini candidate has no 'content'; finishReason="
+            f"{candidate.get('finishReason')!r}, keys={sorted(candidate)}"
+        )
+    parts = candidate["content"].get("parts") or []
+    if not parts or "text" not in parts[0]:
+        raise ShapeError(f"gemini candidate content has no text part: {parts!r:.200}")
     return (
         {
-            "text": parts[0].get("text", ""),
+            "text": parts[0]["text"],
             "finish_reason": candidate.get("finishReason"),
             "reasoning_tokens": (body.get("usageMetadata") or {}).get("thoughtsTokenCount"),
         },
@@ -198,7 +244,7 @@ def main() -> int:
                         raw, usage = caller(client, args.model, prompt.text, clause, params)
                         break
                     except RateLimited as exc:
-                        wait = max(delay, float(str(exc) or delay))
+                        wait = max(delay, float(str(exc)))
                         backoffs.append({"row": row, "attempt": attempt + 1, "waited_s": wait})
                         print(f"  rate limited on row {row}; waiting {wait:.1f}s")
                         time.sleep(wait)

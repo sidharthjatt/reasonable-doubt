@@ -30,6 +30,8 @@ class ClassificationReport:
     format_failure_rate: float
     classes_in_gold: int
     classes_predicted: int
+    classes_averaged: int
+    absent_classes: list[str] = field(default_factory=list)
     per_class_f1: dict[str, float] = field(default_factory=dict)
     unmatched_samples: list[str] = field(default_factory=list)
 
@@ -42,6 +44,8 @@ class ClassificationReport:
             "format_failure_rate": self.format_failure_rate,
             "classes_in_gold": self.classes_in_gold,
             "classes_predicted": self.classes_predicted,
+            "classes_averaged": self.classes_averaged,
+            "absent_classes": self.absent_classes,
             "per_class_f1": self.per_class_f1,
         }
 
@@ -53,7 +57,16 @@ class ClassificationReport:
             f"  unmatched outputs   : {self.n_unmatched} "
             f"({self.format_failure_rate:.2%}) — counted as WRONG\n"
             f"  classes in gold     : {self.classes_in_gold}\n"
-            f"  classes predicted   : {self.classes_predicted}"
+            f"  classes predicted   : {self.classes_predicted}\n"
+            f"  classes averaged    : {self.classes_averaged}"
+            + (
+                f"\n  WARNING: {len(self.absent_classes)} class(es) with NO gold "
+                f"examples were averaged in as 0.0, deflating macro-F1: "
+                f"{', '.join(self.absent_classes[:5])}"
+                + ("…" if len(self.absent_classes) > 5 else "")
+                if self.absent_classes
+                else ""
+            )
         )
 
 
@@ -63,6 +76,7 @@ def score(
     *,
     labels: Sequence[str] | None = None,
     unmatched_samples: Sequence[str] = (),
+    allow_absent_classes: bool = False,
 ) -> ClassificationReport:
     """Score predictions against gold labels.
 
@@ -70,14 +84,24 @@ def score(
         gold: Canonical gold label strings.
         predicted: Canonical predicted labels, or ``None`` for an output that did not
             normalize to any label. ``None`` counts as wrong.
-        labels: Label space to average over. Defaults to the classes present in gold —
-            macro-F1 over classes with no gold examples is undefined, and averaging in
-            a zero for them would silently deflate the score.
+        labels: Label space to average over. Defaults to the classes present in gold.
+            Macro-F1 over a class with no gold examples is undefined; scikit-learn's
+            ``zero_division=0`` silently scores it 0.0, which DEFLATES macro-F1 in
+            proportion to how many such classes are present — a perfect prediction over
+            2 present classes scores 1.0, or 0.5 if two absent classes are averaged in.
+        allow_absent_classes: Required to be True before averaging over classes with no
+            gold examples. Off by default so the deflation can never happen silently
+            (hard rule 11); when True, the absent classes are named in the report and
+            printed as a warning.
+
+    Raises:
+        ValueError: if ``labels`` contains classes absent from ``gold`` and
+            ``allow_absent_classes`` is False.
 
     Note:
-        Macro-F1 here averages over ``labels``. When a manifest does not cover every
-        class (``dev_2000`` covers 99 of 100), the number of classes averaged over must
-        be stated wherever the score is reported — see ``classes_in_gold``.
+        Macro-F1 averages over ``labels``. When a manifest does not cover every class
+        (``dev_2000`` covers 99 of 100), the number of classes averaged over must be
+        stated wherever the score is reported — see ``classes_averaged``.
     """
     from sklearn.metrics import f1_score
 
@@ -92,6 +116,17 @@ def score(
     preds = [UNMATCHED if p is None else p for p in predicted]
 
     average_over = list(labels) if labels is not None else sorted(set(gold))
+    gold_set = set(gold)
+    absent = [c for c in average_over if c not in gold_set]
+    if absent and not allow_absent_classes:
+        raise ValueError(
+            f"{len(absent)} of {len(average_over)} classes to average over have NO gold "
+            f"examples ({absent[:5]}{'…' if len(absent) > 5 else ''}). Each would score "
+            "0.0 and deflate macro-F1 by that fraction. Pass allow_absent_classes=True "
+            "to accept this deliberately, or pass labels=None to average over the "
+            "classes actually present."
+        )
+
     per_class = f1_score(gold, preds, labels=average_over, average=None, zero_division=0)
 
     n_unmatched = sum(1 for p in predicted if p is None)
@@ -103,6 +138,8 @@ def score(
         format_failure_rate=n_unmatched / len(gold),
         classes_in_gold=len(set(gold)),
         classes_predicted=len({p for p in predicted if p is not None}),
+        classes_averaged=len(average_over),
+        absent_classes=absent,
         per_class_f1={c: float(f) for c, f in zip(average_over, per_class)},
         unmatched_samples=list(unmatched_samples),
     )

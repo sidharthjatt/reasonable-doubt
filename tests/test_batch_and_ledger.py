@@ -536,3 +536,43 @@ def test_confirm_cannot_override_the_hard_stop(ledger, capsys):
     assert huge.gating_usd > 15.0
     with pytest.raises(BudgetExceeded):
         require_confirmation(huge, ledger, confirm=True)
+
+
+def test_unrecognised_batch_status_raises_instead_of_polling_forever(tmp_path):
+    """Hard rule 11: an unknown status must not be read as 'still running'. Silently
+    polling would burn the 24h timeout and then misreport it as a TimeoutError."""
+    class Renamed(FakeAPI):
+        def retrieve_batch(self, batch_id):
+            return {"id": batch_id, "processing_status": "finished"}  # API renamed it
+
+    client = BatchClient(Renamed(), state_dir=tmp_path, sleep=lambda _: None)
+    state = client.submit("run1", _requests(), model="m", manifest_name="test_3000")
+    with pytest.raises(RuntimeError, match="UNRECOGNISED processing_status"):
+        client.poll(state)
+
+
+def test_missing_status_field_also_raises(tmp_path):
+    class NoStatus(FakeAPI):
+        def retrieve_batch(self, batch_id):
+            return {"id": batch_id}
+
+    client = BatchClient(NoStatus(), state_dir=tmp_path, sleep=lambda _: None)
+    state = client.submit("run1", _requests(), model="m", manifest_name="test_3000")
+    with pytest.raises(RuntimeError, match="UNRECOGNISED"):
+        client.poll(state)
+
+
+def test_in_progress_statuses_still_poll(tmp_path):
+    class Working(FakeAPI):
+        def __init__(self):
+            super().__init__()
+            self.n = 0
+
+        def retrieve_batch(self, batch_id):
+            self.n += 1
+            return {"id": batch_id,
+                    "processing_status": "in_progress" if self.n < 3 else "ended"}
+
+    client = BatchClient(Working(), state_dir=tmp_path, sleep=lambda _: None)
+    state = client.submit("run1", _requests(), model="m", manifest_name="test_3000")
+    assert client.poll(state, initial_delay=0.01).status == "ended"

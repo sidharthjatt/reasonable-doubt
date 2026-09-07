@@ -412,12 +412,27 @@ class BatchClient:
                 state.completed_at_utc = datetime.now(timezone.utc).isoformat()
                 state.save(self.state_dir)
                 return state
-            if status in ("canceled", "expired", "errored"):
+            if status in ("in_progress", "validating", "canceling"):
+                pass  # genuinely still working; fall through to the backoff below
+            elif status in ("canceled", "expired", "errored"):
                 state.status = status
                 state.save(self.state_dir)
                 raise RuntimeError(
                     f"batch {state.batch_id} ended in status {status!r}; results for "
                     "any completed requests remain retrievable for 29 days"
+                )
+            else:
+                # Hard rule 11: an unrecognised status must not be read as "keep
+                # waiting". If the API renames the field or adds a state, silently
+                # polling would burn the full 24h timeout and report a TimeoutError
+                # that misdescribes what happened.
+                state.status = "unknown"
+                state.save(self.state_dir)
+                raise RuntimeError(
+                    f"batch {state.batch_id} reported an UNRECOGNISED processing_status "
+                    f"{status!r}. Refusing to guess whether it is still running. Batch "
+                    f"state is on disk at {state.path(self.state_dir)}; inspect the "
+                    "batch before re-running."
                 )
 
             if time.monotonic() >= deadline:
