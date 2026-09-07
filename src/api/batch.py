@@ -101,7 +101,7 @@ def build_batch_requests(
     model: str,
     system_prompt: str,
     max_tokens: int,
-    temperature: float = 0.0,
+    temperature: float | None = 0.0,
     cache_ttl: str = CACHE_TTL,
     prefix: str = "",
     extra_params: dict[str, Any] | None = None,
@@ -147,10 +147,13 @@ def build_batch_requests(
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "system": system_block,
             "messages": [{"role": "user", "content": clause}],
         }
+        # None means OMIT the key, not send null. Some models reject `temperature`
+        # outright, and a null would still be a rejected field.
+        if temperature is not None:
+            params["temperature"] = temperature
         params.update(extra_params or {})
         requests.append(BatchRequest(custom_id=cid, params=params))
     return requests
@@ -335,6 +338,20 @@ class BatchClient:
 
         if not requests:
             raise ValueError("refusing to submit an empty batch")
+
+        # custom_ids must be unique across the WHOLE batch. build_batch_requests
+        # checks within one call, which cannot see a multi-model batch assembled from
+        # several legs over the same rows — exactly how Stage 1 is built. Checked here,
+        # where the complete batch is visible, because a duplicate id makes the
+        # custom_id join ambiguous and results untraceable to examples.
+        ids = [r.custom_id for r in requests]
+        if len(set(ids)) != len(ids):
+            from collections import Counter
+            dupes = [c for c, k in Counter(ids).items() if k > 1]
+            raise ValueError(
+                f"{len(dupes)} duplicate custom_id(s) across the assembled batch, e.g. "
+                f"{dupes[:3]}. Legs over the same rows must use distinct prefixes."
+            )
 
         batch = self.client.create_batch([r.as_dict() for r in requests])
         batch_id = batch["id"] if isinstance(batch, dict) else batch.id

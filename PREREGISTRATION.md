@@ -492,9 +492,24 @@ the API rejects it; the API in fact validates and honours it. (ii) One reading o
 `x-ratelimit-remaining-requests` was taken to mean a hard daily cap; a second reading
 showed the counter refilling, i.e. a rolling window. Standing practice: **before
 declaring any limit, quota, or capability, take at least two readings separated in time
-and show the delta** — and include a control that is known to behave the opposite way
+**and, where a claim spans models or endpoints, one reading per model** — and show the
+delta** — and include a control that is known to behave the opposite way
 (the `definitely_not_a_real_param` → HTTP 400 probe is what made the temperature result
-conclusive rather than merely suggestive). One sample describes a moment, not a rule. The standing mitigation is that any library default touching a
+conclusive rather than merely suggestive). One sample describes a moment, not a rule.
+
+**Third retraction, a second axis (2026-09-07).** `temperature` was validated on
+Haiku 4.5 — range-checked, type-checked, with an unknown-field control — and the
+conclusion generalised to Sonnet 5. It does not hold: **Sonnet 5 returns
+`` `temperature` is deprecated for this model``**. Rung 1 passed only because Haiku
+ran first. The note above said "two readings **over time**"; this failure was one
+reading **across models**. Both axes now apply:
+
+| axis | failure | rule |
+|------|---------|------|
+| time | one counter reading read as a quota model | two readings, show the delta |
+| **model / endpoint** | **a parameter validated on one model assumed for another** | **one reading per model, and per endpoint — sync and batch are different paths** |
+
+A parameter validated on one model is **not** validated on another. The standing mitigation is that any library default touching a
 measured or billed quantity must be explicitly reviewed, not inherited — and where a
 degraded value is legitimately wanted, the caller must ask for it by name
 (`allow_absent_classes=True`, `assume_cache_hits=False`).
@@ -613,7 +628,23 @@ coverage, and the mix bias is small enough to ignore.
   N=8 it covers 8% of the label space, which does not achieve label coverage and so
   cannot justify distorting the class prior. The full label list in the system prompt
   already conveys the taxonomy; the exemplars' job is to demonstrate output format.
-- **Sampling temperature IS pinnable, via `extra_body`.** *(Corrected 2026-09-07; an
+- **Sampling temperature: PER-MODEL, and now DROPPED for both.** *(Second correction,
+  2026-09-07.)* The entry below is **true for Haiku 4.5 only**. **Sonnet 5 rejects
+  `temperature` outright** — `` `temperature` is deprecated for this model`` — verified
+  on both the sync and batch paths.
+
+  Setting it on Haiku while omitting it on Sonnet would make the two Stage 1 legs differ
+  by an uncontrolled parameter, and comparing those legs is the point of running both.
+  **`temperature` is therefore omitted for BOTH models.**
+
+  **Consequence: the seeds-based variance plan is load-bearing again.** With no
+  temperature control on either leg, run-to-run variability is neither pinned nor
+  bounded, and hard rule 2's mean ± std over ≥3 seeds is the *only* mechanism
+  characterising it. C3's seed-variance measurement is now doubly gating: it sets E2's
+  margin **and** it is the sole evidence about determinism.
+
+  The verified-for-Haiku detail is retained below for the record:
+- **(Haiku 4.5 only) temperature is pinnable via `extra_body`.** *(Corrected 2026-09-07; an
   earlier version of this entry claimed the opposite and was wrong.)* `anthropic` SDK
   1.4.0 removes `temperature` from the `Messages.create` signature, so passing it as a
   kwarg raises `TypeError` **client-side, before any HTTP request**. That is an SDK

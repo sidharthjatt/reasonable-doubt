@@ -576,3 +576,27 @@ def test_in_progress_statuses_still_poll(tmp_path):
     client = BatchClient(Working(), state_dir=tmp_path, sleep=lambda _: None)
     state = client.submit("run1", _requests(), model="m", manifest_name="test_3000")
     assert client.poll(state, initial_delay=0.01).status == "ended"
+
+
+def test_duplicate_custom_ids_across_legs_are_refused(tmp_path):
+    """Stage 1 runs two models over the SAME rows. Row-index-only ids collide, and the
+    per-leg check in build_batch_requests cannot see across legs — the API rejected a
+    6,000-request batch for this. Guarded where the whole batch is visible."""
+    leg_a = _requests()                      # same rows...
+    leg_b = _requests()                      # ...same ids
+    client = BatchClient(FakeAPI(), state_dir=tmp_path)
+    with pytest.raises(ValueError, match="duplicate custom_id"):
+        client.submit("s1", leg_a + leg_b, model="m", manifest_name="test_3000")
+
+
+def test_distinct_prefixes_make_multi_model_legs_safe(tmp_path):
+    a = build_batch_requests("test_3000", [12, 45], ["x", "y"], model="claude-haiku-4-5-20251001",
+                             system_prompt="s", max_tokens=8, prefix="s1h_")
+    b = build_batch_requests("test_3000", [12, 45], ["x", "y"], model="claude-sonnet-5",
+                             system_prompt="s", max_tokens=8, prefix="s1s_")
+    ids = [r.custom_id for r in a + b]
+    assert len(set(ids)) == 4
+    # the row index survives the prefix, so results still join back to examples
+    assert {parse_custom_id(i)[1] for i in ids} == {12, 45}
+    client = BatchClient(FakeAPI(), state_dir=tmp_path)
+    client.submit("s1", a + b, model="two", manifest_name="test_3000")
