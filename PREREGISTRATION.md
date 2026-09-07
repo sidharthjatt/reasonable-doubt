@@ -93,24 +93,36 @@ over-predicted in few-shot relative to zero-shot.
 - **Predicted direction, recorded BEFORE the run:** yes — it will be over-predicted.
 - **Accept rule:** _(TODO — state the statistic and threshold, before running)_
 
-### 3e. Recorded failure class — library defaults that are wrong for this project
+### 3e. Recorded failure class — failures that present as normal operation
 
 Recorded **before** any paid run, so it is on the record that these were found by
 audit rather than discovered in a run we had paid for.
 
-All three bugs found so far share one shape: **a library or convention default that is
-reasonable in general and wrong for us, which degrades to a plausible number instead of
-raising.** None would have thrown an error. Each would have produced a figure that
-looked ordinary in a results table.
+All four bugs found so far share one shape: **a failure that does not surface as a
+failure.** None threw an error. Three degraded a measured quantity to a plausible
+number; the fourth degraded a control-flow state to a plausible status. In every case
+the system continued to look like it was working.
+
+The first three are library or convention defaults that are reasonable in general and
+wrong for this project. The fourth is our own control flow, which shows the class is
+broader than "bad defaults" — any construct that can only report success, or that
+treats an unrecognised state as a normal one, belongs here.
 
 | # | Default | Reasonable in general because | Wrong for us because | Found |
 |---|---------|-------------------------------|----------------------|-------|
 | 1 | `chars/4` token estimate as a tokenizer fallback | a rough token count is usually fine for capacity planning | it was ~30% off — the same magnitude as the Claude 4.7+ tokenizer effect this project exists to measure | Block 2 EDA |
 | 2 | `re.compile(r"\{.*\}", DOTALL)` to extract JSON from model output | greedy brace matching works when there is exactly one object | reasoning models emit DRAFT objects inside `<think>`; first-object parsing returns a confidently wrong label rather than an error | Rung 0, qwen3.6-27b |
 | 3 | `sklearn` `f1_score(zero_division=0)` | scoring an undefined class as 0.0 avoids a crash | it silently deflates macro-F1 in proportion to absent classes — worst on the long tail, which is exactly where the cascade must be measured | Block 4 audit |
+| 4 | `until grep -q "GATE" log; do sleep; done` — a wait loop with a success condition and no failure condition | polling for a completion marker is the obvious way to wait | the job it watched crashed with a traceback and never wrote `GATE`, so a dead job displayed as **Running for 2.5 hours**. A stale job showing Running is worse than no indicator: it hides the next real stall | Block 4, qwen run |
+
+Instance 4 also generalises the mitigation: a wait must have a failure condition as
+well as a success condition — process liveness, a timeout, or an error marker — or it
+cannot distinguish "still working" from "died". This is the same defect as
+`batch.poll()` treating an unrecognised `processing_status` as "still running", found
+in the same audit.
 
 Consequence: **hard rule 11** (no silent degradation) was written after #1 and has since
-caught #2 and #3. The standing mitigation is that any library default touching a
+caught #2, #3 and #4. The standing mitigation is that any library default touching a
 measured or billed quantity must be explicitly reviewed, not inherited — and where a
 degraded value is legitimately wanted, the caller must ask for it by name
 (`allow_absent_classes=True`, `assume_cache_hits=False`).
