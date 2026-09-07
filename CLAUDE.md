@@ -86,7 +86,9 @@ single accuracy number.
    the caller, (b) returned in a field whose name marks it as an estimate, and
    (c) impossible to pass into a billing or reporting path. Bare `except` that
    swallows an error and returns a substitute value is forbidden.
-12. Ignore patterns are anchored. Directory ignores are written as `/data/`, never
+12. `results/spend_ledger.jsonl` is version-controlled. It is the record of real money
+   spent and is never gitignored, never rewritten, and never deleted. Append only.
+13. Ignore patterns are anchored. Directory ignores are written as `/data/`, never
    `data/`, so they cannot match a same-named directory under `src/`. After any commit
    that adds a new package, verify `git ls-files src/` lists the new files.
 

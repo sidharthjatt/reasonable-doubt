@@ -30,9 +30,12 @@ __all__ = [
     "DEFAULT_LEDGER_PATH",
     "BudgetExceeded",
     "CostEstimate",
+    "LedgerEstimateError",
     "LedgerEntry",
+    "RunEstimate",
     "SpendLedger",
     "estimate_run_cost",
+    "estimate_run_cost_bracket",
     "require_confirmation",
 ]
 
@@ -41,6 +44,10 @@ DEFAULT_LEDGER_PATH = Path(__file__).resolve().parents[2] / "results" / "spend_l
 
 class BudgetExceeded(RuntimeError):
     """The run would push cumulative spend past the hard stop. Refusal, not a warning."""
+
+
+class LedgerEstimateError(ValueError):
+    """An optimistic estimate was offered where a gating figure is required."""
 
 
 @dataclass
@@ -59,7 +66,19 @@ class CostEstimate:
     cache_ttl: str
     estimated_usd: float
     token_source: str
+    assume_cache_hits: bool = True
     assumptions: list[str] = field(default_factory=list)
+
+    @property
+    def is_gating(self) -> bool:
+        """Only the pessimistic (no-cache-hits) estimate may gate spend.
+
+        Batch prompt-cache hits are BEST-EFFORT — requests process concurrently and
+        out of order — so the no-hits case is a live outcome, not a pathological one.
+        A guard that evaluates the optimistic figure is guarding against the number
+        that cannot blow the budget.
+        """
+        return not self.assume_cache_hits
 
     def render(self) -> str:
         lines = [
@@ -151,14 +170,16 @@ def estimate_run_cost(
         uncached_input = variable_input
         assumptions = [
             "cacheable prefix written once, then read on every later request",
-            "batch cache hits are BEST-EFFORT; this is the optimistic bound",
+            "batch cache hits are BEST-EFFORT; this is the OPTIMISTIC bound and may "
+            "NOT be used to gate spend",
         ]
     else:
         cache_write = 0
         cache_read = 0
         uncached_input = variable_input + system_tokens * n_requests
         assumptions = [
-            "pessimistic bound: NO cache hits; prefix billed in full on every request"
+            "PESSIMISTIC bound: NO cache hits; prefix billed in full on every request",
+            "this is the figure that gates spend — it is what can actually happen",
         ]
 
     estimated = compute_cost(
@@ -184,7 +205,59 @@ def estimate_run_cost(
         cache_ttl=cache_ttl,
         estimated_usd=estimated,
         token_source=token_source,
+        assume_cache_hits=assume_cache_hits,
         assumptions=assumptions,
+    )
+
+
+@dataclass
+class RunEstimate:
+    """Both bounds for one run. ``gating_usd`` is the pessimistic figure.
+
+    Cache hits inside a batch are best-effort, so the true cost lands somewhere in
+    ``[optimistic, pessimistic]``. We report both and gate on the upper one.
+    """
+
+    optimistic: CostEstimate
+    pessimistic: CostEstimate
+
+    @property
+    def run_id(self) -> str:
+        return self.pessimistic.run_id
+
+    @property
+    def gating_usd(self) -> float:
+        return self.pessimistic.estimated_usd
+
+    @property
+    def optimistic_usd(self) -> float:
+        return self.optimistic.estimated_usd
+
+    def render(self) -> str:
+        return (
+            f"{self.pessimistic.render()}\n\n"
+            f"  optimistic (all cache hits) : ${self.optimistic_usd:,.4f}\n"
+            f"  PESSIMISTIC (no cache hits) : ${self.gating_usd:,.4f}  <-- gates spend\n"
+            "  Actual cost lands between these; batch cache hits are best-effort."
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "optimistic_usd": self.optimistic_usd,
+            "pessimistic_usd": self.gating_usd,
+            "gating_usd": self.gating_usd,
+            "optimistic": self.optimistic.as_dict(),
+            "pessimistic": self.pessimistic.as_dict(),
+        }
+
+
+def estimate_run_cost_bracket(run_id: str, **kwargs: Any) -> RunEstimate:
+    """Build both bounds. This is what spending entrypoints should use."""
+    kwargs.pop("assume_cache_hits", None)
+    return RunEstimate(
+        optimistic=estimate_run_cost(run_id, assume_cache_hits=True, **kwargs),
+        pessimistic=estimate_run_cost(run_id, assume_cache_hits=False, **kwargs),
     )
 
 
@@ -232,12 +305,29 @@ class SpendLedger:
 
     # ------------------------------------------------------------------ enforcing
 
-    def assert_within_budget(self, estimate: "CostEstimate | float") -> float:
+    def assert_within_budget(self, estimate: "RunEstimate | CostEstimate | float") -> float:
         """Raise :class:`BudgetExceeded` if this run would breach the hard stop.
+
+        Evaluated against the PESSIMISTIC (no-cache-hits) figure. Passing an
+        optimistic :class:`CostEstimate` is refused outright rather than silently
+        gating on the wrong number.
 
         Returns the projected total if the run is permitted.
         """
-        amount = estimate.estimated_usd if isinstance(estimate, CostEstimate) else float(estimate)
+        if isinstance(estimate, RunEstimate):
+            amount = estimate.gating_usd
+        elif isinstance(estimate, CostEstimate):
+            if not estimate.is_gating:
+                raise LedgerEstimateError(
+                    f"refusing to gate spend on the OPTIMISTIC estimate for run "
+                    f"{estimate.run_id!r}. Batch cache hits are best-effort, so the "
+                    "no-cache-hits figure is what can actually happen. Pass a "
+                    "RunEstimate (estimate_run_cost_bracket) or an estimate built "
+                    "with assume_cache_hits=False."
+                )
+            amount = estimate.estimated_usd
+        else:
+            amount = float(estimate)
         if amount < 0:
             raise ValueError("estimate must be non-negative")
 
@@ -349,7 +439,7 @@ class SpendLedger:
 
 
 def require_confirmation(
-    estimate: CostEstimate,
+    estimate: "RunEstimate | CostEstimate",
     ledger: SpendLedger,
     *,
     confirm: bool,
@@ -360,8 +450,9 @@ def require_confirmation(
     Prints the itemised estimate, checks it against the hard stop, and refuses to
     proceed unless ``--confirm`` was passed. Returns the projected cumulative total.
 
-    Order matters: the budget check runs BEFORE the confirmation check, so a run that
-    breaches the hard stop is refused even if the operator passed ``--confirm``.
+    Both bounds are printed; the PESSIMISTIC one gates. Order matters: the budget check
+    runs BEFORE the confirmation check, so a run that breaches the hard stop is refused
+    even if the operator passed ``--confirm``.
     """
     import sys
 
@@ -375,11 +466,14 @@ def require_confirmation(
     )
 
     projected = ledger.assert_within_budget(estimate)  # raises BudgetExceeded
+    gating = (
+        estimate.gating_usd if isinstance(estimate, RunEstimate) else estimate.estimated_usd
+    )
 
     if not confirm:
         raise SystemExit(
             "\nNOT SENDING. This is an estimate only. Re-run with --confirm to spend "
-            f"up to ${estimate.estimated_usd:,.4f}."
+            f"up to ${gating:,.4f} (pessimistic bound)."
         )
     print(f"\n  CONFIRMED — projected cumulative: ${projected:,.4f}\n", file=out)
     return projected

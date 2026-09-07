@@ -19,7 +19,13 @@ from src.api.batch import (
     parse_custom_id,
 )
 from src.api.cost import compute_cost, load_rate_card
-from src.api.ledger import BudgetExceeded, SpendLedger, estimate_run_cost
+from src.api.ledger import (
+    BudgetExceeded,
+    LedgerEstimateError,
+    SpendLedger,
+    estimate_run_cost,
+    estimate_run_cost_bracket,
+)
 from src.api.providers import get_provider
 from src.api.usage import Usage, parse_usage
 
@@ -320,7 +326,7 @@ def test_estimate_rows_do_not_count_as_spend(ledger):
     est = estimate_run_cost(
         "run1", provider="anthropic", model="claude-sonnet-5", n_requests=10,
         system_tokens=2000, per_request_input_tokens=[100] * 10,
-        expected_output_tokens=25,
+        expected_output_tokens=25, assume_cache_hits=False,
     )
     ledger.record_estimate(est)
     assert ledger.cumulative_usd() == 0.0
@@ -353,15 +359,64 @@ def test_optimistic_and_pessimistic_bounds_bracket_the_truth():
     assert pessimistic.cache_read_tokens == 0
 
 
-def test_estimate_renders_an_itemised_breakdown():
-    est = estimate_run_cost("run1", provider="anthropic", model="claude-sonnet-5",
-                            n_requests=3, system_tokens=2000,
-                            per_request_input_tokens=[100, 110, 120],
-                            expected_output_tokens=25)
+def test_estimate_renders_both_bounds_and_names_the_gating_one():
+    est = estimate_run_cost_bracket("run1", provider="anthropic", model="claude-sonnet-5",
+                                    n_requests=3, system_tokens=2000,
+                                    per_request_input_tokens=[100, 110, 120],
+                                    expected_output_tokens=25)
     text = est.render()
     assert "ESTIMATED COST" in text
-    assert "cache read" in text
+    assert "optimistic" in text.lower()
+    assert "PESSIMISTIC" in text
+    assert "gates spend" in text
     assert "best-effort" in text.lower()
+
+
+# --- the gating rule: spend is guarded by the number that can actually happen ---
+
+
+def test_gate_uses_the_pessimistic_figure(ledger):
+    est = estimate_run_cost_bracket(
+        "r", provider="anthropic", model="claude-sonnet-5", n_requests=100,
+        system_tokens=2000, per_request_input_tokens=[100] * 100,
+        expected_output_tokens=25,
+    )
+    assert est.gating_usd > est.optimistic_usd
+    assert ledger.assert_within_budget(est) == pytest.approx(est.gating_usd)
+
+
+def test_run_that_fits_optimistically_but_breaches_pessimistically_is_refused(ledger):
+    """The whole point: a guard on the optimistic figure is not a guard.
+
+    A large cacheable prefix over many requests is cheap if every request reads the
+    cache, and ruinous if none do. Batch cache hits are best-effort, so the expensive
+    outcome is live and must be what gates.
+    """
+    est = estimate_run_cost_bracket(
+        "r", provider="anthropic", model="claude-opus-5", n_requests=3000,
+        system_tokens=2000, per_request_input_tokens=[50] * 3000,
+        expected_output_tokens=20,
+    )
+    assert est.optimistic_usd < 15.0 < est.gating_usd  # fits one way, not the other
+    # The optimistic AMOUNT would have passed a naive guard...
+    ledger.assert_within_budget(est.optimistic_usd)
+    # ...and the optimistic ESTIMATE object is refused outright, so it cannot be
+    # substituted by accident.
+    with pytest.raises(LedgerEstimateError):
+        ledger.assert_within_budget(est.optimistic)
+    with pytest.raises(BudgetExceeded):
+        ledger.assert_within_budget(est)
+
+
+def test_optimistic_estimate_cannot_be_used_to_gate(ledger):
+    optimistic = estimate_run_cost(
+        "r", provider="anthropic", model="claude-sonnet-5", n_requests=10,
+        system_tokens=2000, per_request_input_tokens=[100] * 10,
+        expected_output_tokens=25, assume_cache_hits=True,
+    )
+    assert optimistic.is_gating is False
+    with pytest.raises(LedgerEstimateError, match="OPTIMISTIC"):
+        ledger.assert_within_budget(optimistic)
 
 
 def test_estimate_rejects_mismatched_token_counts():
@@ -399,17 +454,18 @@ def test_end_to_end_dry_run_matches_a_hand_checked_cost(fixture_batch, tmp_path)
     assert total.output_tokens == 77
 
     ledger = SpendLedger(tmp_path / "spend.jsonl")
-    est = estimate_run_cost("dryrun", provider="anthropic", model=fixture_batch["model"],
-                            n_requests=3, system_tokens=2000,
-                            per_request_input_tokens=[120, 95, 110],
-                            expected_output_tokens=26)
+    est = estimate_run_cost_bracket("dryrun", provider="anthropic",
+                                    model=fixture_batch["model"],
+                                    n_requests=3, system_tokens=2000,
+                                    per_request_input_tokens=[120, 95, 110],
+                                    expected_output_tokens=26)
     ledger.assert_within_budget(est)
-    ledger.record_estimate(est)
+    ledger.record_estimate(est.pessimistic)
 
     entry = ledger.record_actual(
         "dryrun", total, provider="anthropic", model=fixture_batch["model"],
         batch_id="batch_001", batch=True, cache_ttl="1h",
-        estimated_usd=est.estimated_usd, n_requests=3,
+        estimated_usd=est.gating_usd, n_requests=3,
         notes="1 of 4 requests failed individually (overloaded_error)",
     )
 
@@ -419,9 +475,9 @@ def test_end_to_end_dry_run_matches_a_hand_checked_cost(fixture_batch, tmp_path)
     comparison = ledger.estimate_vs_actual()
     assert len(comparison) == 1
     assert comparison[0]["actual_usd"] == pytest.approx(0.005110, abs=1e-9)
-    assert comparison[0]["estimated_usd"] == est.estimated_usd
+    assert comparison[0]["estimated_usd"] == est.gating_usd
     assert comparison[0]["error_usd"] == pytest.approx(
-        0.005110 - est.estimated_usd, abs=1e-9
+        0.005110 - est.gating_usd, abs=1e-9
     )
 
 
@@ -445,7 +501,7 @@ def test_dry_run_never_touches_the_network(fixture_batch, monkeypatch):
 
 
 def _estimate(usd_scale=10):
-    return estimate_run_cost(
+    return estimate_run_cost_bracket(
         "run1", provider="anthropic", model="claude-sonnet-5", n_requests=usd_scale,
         system_tokens=2000, per_request_input_tokens=[100] * usd_scale,
         expected_output_tokens=25,
@@ -464,7 +520,7 @@ def test_with_confirm_the_entrypoint_proceeds(ledger, capsys):
     from src.api.ledger import require_confirmation
 
     projected = require_confirmation(_estimate(), ledger, confirm=True)
-    assert projected == pytest.approx(_estimate().estimated_usd)
+    assert projected == pytest.approx(_estimate().gating_usd)
     assert "CONFIRMED" in capsys.readouterr().out
 
 
@@ -472,11 +528,11 @@ def test_confirm_cannot_override_the_hard_stop(ledger, capsys):
     """--confirm is consent to spend, not permission to breach the budget."""
     from src.api.ledger import require_confirmation
 
-    huge = estimate_run_cost(
+    huge = estimate_run_cost_bracket(
         "big", provider="anthropic", model="claude-opus-5", n_requests=1,
         system_tokens=0, per_request_input_tokens=[10_000_000],
         expected_output_tokens=0, batch=False,
     )
-    assert huge.estimated_usd > 15.0
+    assert huge.gating_usd > 15.0
     with pytest.raises(BudgetExceeded):
         require_confirmation(huge, ledger, confirm=True)

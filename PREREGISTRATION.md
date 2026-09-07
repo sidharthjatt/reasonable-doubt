@@ -35,6 +35,7 @@ must not be executed.
 | E3 | _(TODO)_ | _(TODO)_ | planned |
 | C1 | Calibration-set robustness check (see 3a) | _(TODO — fill in before running)_ | planned |
 | C2 | Few-shot confidence anchoring probe (see 3b) | _(TODO — fill in before running)_ | planned |
+| C4 | Exemplar class over-prediction probe (see 3d) | _(TODO — fill in before running)_ | planned |
 
 ### 3a. C1 — Calibration-set robustness check
 
@@ -74,6 +75,22 @@ the anchoring effect directly, at no extra cost.
 - **Predicted direction, recorded BEFORE the run:** few-shot confidences cluster near
   0.9 more tightly than zero-shot confidences — i.e. lower variance and a mode at or
   near 0.9.
+- **Accept rule:** _(TODO — state the statistic and threshold, before running)_
+
+### 3d. C4 — Exemplar class over-prediction probe
+
+The frozen `exemplars_8` set is a uniform draw from the train split, i.e. a genuine
+draw from the class prior. A consequence of that draw is that it covers **6 distinct
+classes over 8 exemplars, with one class appearing 3 times**. This is honest but not
+neutral: it may bias the few-shot run toward that class.
+
+As with C2, both runs happen anyway, so the check is free.
+
+The check: compare the predicted-label distribution between the zero-shot and few-shot
+runs. Specifically, test whether the class appearing 3× in the exemplar set is
+over-predicted in few-shot relative to zero-shot.
+
+- **Predicted direction, recorded BEFORE the run:** yes — it will be over-predicted.
 - **Accept rule:** _(TODO — state the statistic and threshold, before running)_
 
 ### 3c. Standing methodological limitations
