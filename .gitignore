@@ -5,8 +5,6 @@ cache/*
 # Experiment outputs
 results/*
 !results/.gitkeep
-# The spend ledger IS a result and must be committed — it is the record of real money.
-!results/spend_ledger.jsonl
 
 # Model weights / artifacts
 *.onnx
@@ -26,6 +24,15 @@ results/*
 *.jsonl
 *.parquet
 *.arrow
+
+# The spend ledger IS a result and must be committed — it is the record of real money
+# actually spent (hard rule 12). This negation MUST stay below `results/*` AND below
+# `*.jsonl`: git applies the LAST matching pattern, so a negation placed above the rule
+# it overrides does nothing. It sat above `*.jsonl` and the ledger was never tracked.
+# Verify with: git ls-files --error-unmatch results/spend_ledger.jsonl
+# (NOT `git check-ignore -v` -- that prints the matching pattern even when the
+#  match is a negation, so it looks identical whether the file is tracked or not.)
+!results/spend_ledger.jsonl
 
 # Secrets
 .env
