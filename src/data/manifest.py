@@ -79,6 +79,20 @@ MANIFEST_SPECS: dict[str, dict[str, Any]] = {
         "sampling": "stratified-proportional-largest-remainder",
         "purpose": "router threshold calibration ONLY (hard rule 1)",
     },
+    # Checkpoint/epoch selection set. A seeded stratified 5% of TRAIN, frozen like
+    # everything else. Exists so that model selection and router-threshold calibration
+    # never touch the same data: dev_2000 is reserved exclusively for thresholds
+    # (hard rule 1), and selecting a checkpoint on it too would tune the threshold
+    # against data the model was already chosen to fit. Deliberately NOT a
+    # chronological tail of train — train is 2016-2017 and Books has only 23 rows, so
+    # a tail would starve the rare classes.
+    "train_holdout_3000": {
+        "split": "train",
+        "n": 3000,
+        "seed": 20260907,
+        "sampling": "stratified-proportional-largest-remainder",
+        "purpose": "checkpoint/epoch and hyperparameter SELECTION only; never thresholds, never reporting",
+    },
     # Few-shot exemplars. Frozen exactly like the evaluation sets so the cacheable
     # prompt prefix cannot drift between runs. Train split only — never dev, never
     # test. A 4-exemplar run takes the FIRST 4 of these 8, so the smaller set is a
