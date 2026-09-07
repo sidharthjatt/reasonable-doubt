@@ -187,6 +187,8 @@ def main() -> int:
     ap.add_argument("--min-parse-rate", type=float, default=0.98)
     ap.add_argument("--out", type=Path, default=Path("results/rung0_freetier.json"))
     ap.add_argument("--sleep", type=float, default=0.0, help="seconds between calls")
+    ap.add_argument("--max-retries", type=int, default=6,
+                    help="rate-limit retry attempts before giving up on a row")
     args = ap.parse_args()
 
     load_env()
@@ -239,7 +241,7 @@ def main() -> int:
                 raw, usage = entry.response, entry.usage
             else:
                 delay = 2.0
-                for attempt in range(6):
+                for attempt in range(args.max_retries):
                     try:
                         raw, usage = caller(client, args.model, prompt.text, clause, params)
                         break
@@ -250,7 +252,11 @@ def main() -> int:
                         time.sleep(wait)
                         delay = min(delay * 2, 60.0)
                 else:
-                    raise RuntimeError(f"row {row}: still rate limited after 6 attempts")
+                    raise RuntimeError(
+                        f"row {row}: still rate limited after {args.max_retries} "
+                        f"attempts. {api_calls[0]} rows were fetched and cached this "
+                        "session; re-run the same command to resume from the cache."
+                    )
                 cache.put(key, raw, usage=usage, request_params=params)
                 api_calls[0] += 1
                 if args.sleep:

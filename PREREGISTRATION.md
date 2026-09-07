@@ -124,6 +124,16 @@ degraded value is legitimately wanted, the caller must ask for it by name
   N=8 it covers 8% of the label space, which does not achieve label coverage and so
   cannot justify distorting the class prior. The full label list in the system prompt
   already conveys the taxonomy; the exemplars' job is to demonstrate output format.
+- **Sampling temperature is not settable.** `anthropic` SDK 1.4.0 removes
+  `temperature` and `top_p` from `Messages.create` entirely — they are absent from the
+  signature, not defaulted. Runs therefore cannot be pinned to `temperature=0`, and
+  run-to-run variance must be MEASURED across seeds (hard rule 2) rather than assumed
+  away. Discovered at Rung 1, 2026-09-07.
+- **Structured output was available and deliberately not used.** SDK 1.4.0 exposes
+  `output_config.format` (JSON schema enforcement). Adopting it would drive the format
+  failure rate to ~0 by construction — but format failure rate is a *measured* quantity
+  in this project, and enforcing it away would delete the finding. Revisit only as an
+  explicit, preregistered ablation.
 - A 4-exemplar run uses the **first 4** of the frozen 8, so it is a strict subset of
   the 8-exemplar run and the two remain comparable.
 

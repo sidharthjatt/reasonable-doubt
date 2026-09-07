@@ -51,7 +51,13 @@ from src.data.schema import ParseFailure, parse_response  # noqa: E402
 # the cheaper half. Same 20 rows for both, so token counts are directly comparable.
 MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-5"]
 MAX_TOKENS = 64          # the JSON answer is ~25 tokens
-TEMPERATURE = 0.0
+
+# anthropic SDK 1.4.0 does NOT expose `temperature` or `top_p` on Messages.create —
+# they are absent from the signature, not merely defaulted. Sampling temperature is
+# therefore NOT pinnable on this API version. Recorded as a methodological limitation:
+# run-to-run variance must be MEASURED across seeds (hard rule 2) rather than assumed
+# away by a temperature=0 we cannot actually set.
+TEMPERATURE = None
 
 # Extended thinking is EXPLICITLY DISABLED rather than left to a server-side default.
 # Rung 0 showed twice what happens when a reasoning budget eats the output budget:
@@ -115,8 +121,9 @@ def main() -> int:
     print(f"                {rows}")
     print(f"prompt        : {prompt.template_name} sha256={prompt.sha256[:16]}…")
     print(f"models        : {' then '.join(MODELS)} (same rows, same prompt)")
-    print(f"batch         : NO   caching: NO   temperature: {TEMPERATURE}   "
-          f"max_tokens: {MAX_TOKENS}")
+    print(f"batch         : NO   caching: NO   max_tokens: {MAX_TOKENS}")
+    print("temperature   : NOT SETTABLE — anthropic SDK 1.4.0 removed it from "
+          "Messages.create")
     print(f"thinking      : {THINKING['type'].upper()} — stated explicitly in the payload, "
           "not inherited from a default")
     print(f"ledger        : {ledger.path}")
@@ -128,7 +135,6 @@ def main() -> int:
         return {
             "model": model,
             "max_tokens": MAX_TOKENS,
-            "temperature": TEMPERATURE,
             "thinking": THINKING,
             "system": prompt.text,
             "messages": [{"role": "user", "content": clause}],
@@ -239,7 +245,7 @@ def main() -> int:
             key = provider.cache_key(
                 model, system=prompt.text,
                 messages=params["messages"],
-                params={k: params[k] for k in ("temperature", "max_tokens", "thinking")},
+                params={k: params[k] for k in ("max_tokens", "thinking")},
             )
             entry = cache.get_or_none(key)
             if entry is not None:
@@ -327,7 +333,9 @@ def main() -> int:
         "rung": 1, "manifest": manifest.name,
         "manifest_sha256": manifest.text_sha256,
         "prompt_sha256": prompt.sha256, "rows": rows,
-        "max_tokens": MAX_TOKENS, "temperature": TEMPERATURE, "thinking": THINKING,
+        "max_tokens": MAX_TOKENS, "temperature": TEMPERATURE,
+        "temperature_note": "not settable on anthropic SDK 1.4.0",
+        "thinking": THINKING,
         "batch": False, "caching": False, "models": results,
         "cache_stats": cache.cache_stats().as_dict(),
     }, indent=2), encoding="utf-8")
