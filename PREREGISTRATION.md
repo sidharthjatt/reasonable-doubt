@@ -123,29 +123,58 @@ at reporting time.
   serve as the cascade's first tier.
 - **Metric / split:** macro-F1 on `test_3000`; epoch chosen on `train_holdout_3000`.
   Mean ± std over seeds 1, 2, 3.
-- **Accept rule:** **macro-F1 ≥ 0.70.**
-- **Reasoning for the number:** published LEDGAR encoder baselines sit around the high
-  0.7s–low 0.8s micro-F1, and macro-F1 runs materially below micro on a 137.7×
-  imbalance. 0.70 is set as a *usefulness* floor rather than a literature-matching
-  target: below it, Tier 0 escalates so often that the cascade degenerates to Tier 1+2
-  and the architecture has no first tier. It sits **~4 noise floors above** the ±0.0145
-  row-draw sd, so it is decidable.
-- **Falsification:** mean macro-F1 < 0.70 across 3 seeds ⇒ Tier 0 as specified does not
-  work; report it and either change the encoder or drop the tier. **Negative result stays
-  in the report (hard rule 7).**
+- **Accept rule:** **macro-F1 ≥ 0.80 on `test_3000`.**
+- **Provenance of the number — ANCHORED, and a correction.** An earlier draft proposed
+  0.70 and justified it with a vague appeal to "published baselines in the high 0.7s".
+  **That was picked, not anchored, and it was wrong by ~13 points.** The actual figures,
+  from LexGLUE Table 3 (Chalkidis et al., ACL 2022, `aclanthology.org/2022.acl-long.297`,
+  test set, LEDGAR column), are:
+
+  | model | µ-F1 (micro) | **m-F1 (macro)** |
+  |-------|--------------|------------------|
+  | TFIDF+SVM | 87.2 | 82.4 |
+  | BERT | 87.6 | 81.8 |
+  | RoBERTa | 87.9 | 82.3 |
+  | **DeBERTa** | **88.2** | **83.1** |
+  | Legal-BERT | 88.2 | 83.0 |
+  | CaseLaw-BERT | 88.3 | 83.0 |
+
+  Macro-F1 on LEDGAR is **~0.83**, not "materially below micro" — the gap is ~5 points,
+  not ~15. **An accept rule at 0.70 would have been passed by a substantially broken
+  model**, including one that loses the entire tail; even TFIDF+SVM scores 0.824.
+
+  0.80 is therefore set at **~2 noise floors below the published DeBERTa result**
+  (0.831 − 2×0.0145 ≈ 0.802), which allows for: `test_3000` being a 3,000-row
+  proportional subset rather than the full 10k test set; our fitting on 57k rows rather
+  than 60k after the selection holdout; and ordinary implementation variance. It tests
+  **"we reproduced a known baseline"**, which is falsifiable, rather than a usefulness
+  floor I invented.
+  - Note in our favour: LexGLUE used `*-base` DeBERTa; we use **DeBERTa-v3**-base, which
+    is generally stronger. If we land materially below 0.80 the likely cause is our
+    training setup, not the task.
+- **Falsification:** mean macro-F1 **< 0.80** across 3 seeds ⇒ Tier 0 as specified does
+  not reproduce the published DeBERTa baseline on LEDGAR; report it and investigate the
+  training setup before changing the encoder or dropping the tier. **Negative result
+  stays in the report (hard rule 7).**
 
 ### E2 — Tier 0 class-imbalance arms
 
 - **Hypothesis (H3):** Class weighting raises macro-F1 over unweighted CE.
 - **Metric / split:** macro-F1 on `test_3000`, 3 seeds per arm. Arm *selection* happens
   on `train_holdout_3000`; only the selected arm is reported on test.
-- **Accept rule:** the best arm beats E1 by **≥ 0.04 unpaired**, or by **≥ 2× the C3
-  paired floor** if compared paired on identical rows. **[C3-gated]**
-- **Reasoning for the number:** §1a gives ~0.040 as the smallest unpaired difference
-  distinguishable from row-draw noise on `test_3000`. A rule of "beats CE" with no
-  margin would be satisfied by noise roughly half the time — **that is the specific
-  failure mode of an accept rule inside the floor**, and it is why the margin is set at
-  the floor rather than below it.
+- **Accept rule: NOT YET SETTABLE. [C3-gated — blocking]** The margin is
+  **√2 × 1.96 × seed_sd**, where `seed_sd` is the across-seed macro-F1 std measured by
+  C3. It will be filled in once C3 reports, and before E2 runs.
+- **Reasoning — corrected.** An earlier draft set 0.04, the *unpaired* floor. **That was
+  the wrong variance component.** E1 and E2 are evaluated on the **same `test_3000`
+  rows**, so row-draw variance is common to both and cancels — the same paired-vs-
+  unpaired distinction applied to the free-tier comparison. The residual variance is
+  across-seed, not across-rows.
+  - Using 0.040 would preregister a **Type II error against the single largest lever on
+    the primary metric**: a real 0.03 macro-F1 gain from class weighting — plausible at
+    137.7× imbalance — would be declared not-accepted.
+  - For scale: if `seed_sd` is 0.005, the margin is ~0.014; if it is 0.015, ~0.042. The
+    rule cannot be honestly written before that number exists.
 - **Falsification:** no arm clears the margin ⇒ H3 is not supported at this scale; report
   unweighted CE as the Tier 0 configuration and record that weighting did not help.
 - **Note:** `inv_freq` at 137× may fail to converge. That is a result, not a bug, and is
@@ -177,8 +206,30 @@ at reporting time.
 - **Reasoning for the number:** a middle tier only earns its complexity and its serving
   cost if it is *detectably* better than the tier below. 0.04 is the unpaired floor from
   §1a — below it we cannot tell Tier 1 from Tier 0 on this test set.
-- **Falsification:** Tier 1 within 0.04 of Tier 0 ⇒ **the middle tier is not justified**
-  and the cascade should be 2-tier. This is a live possibility and a publishable finding.
+- **Falsification:** Tier 1 within 0.04 of Tier 0 ⇒ **the middle tier is not justified.**
+  Proceed to **E4b**, which is registered NOW so that reporting a two-tier cascade cannot
+  read as a post-hoc rescue.
+
+### E4b — Two-tier fallback architecture *(registered in advance of E4's outcome)*
+
+- **Trigger:** E4 not met. Registered **before** E4 runs, so both outcomes are on the
+  record before either is observed.
+- **Hypothesis:** if Tier 1 does not clear Tier 0, the primary architecture is the
+  **two-tier `Tier 0 → Claude` cascade**, and it still beats Claude-alone on cost at
+  comparable accuracy.
+- **Why this is the expected branch, not a remote one:** a discriminatively fine-tuned
+  encoder with 57k in-domain labelled rows beating a 1.5B decoder given a LoRA adapter
+  and the same data is a **common** outcome, not a surprising one. The encoder is
+  trained directly on the objective; the decoder is adapted to emit label strings.
+- **Metric / split:** macro-F1 and USD/1,000 clauses on `test_3000`, thresholds from
+  `dev_2000`.
+- **Accept rule:** the two-tier cascade reaches macro-F1 **within 0.04** of
+  Sonnet-5-alone at **< 50%** of its cost — i.e. E6's rule with Tier 1 removed.
+- **Falsification:** if the two-tier cascade also fails that bar, **the cascade premise
+  fails** and the honest report is that routing did not pay for itself on this task.
+  That result stays in the report (hard rule 7) and is the paper's finding.
+- **Reporting requirement:** whichever branch is taken, **both E4 and E4b appear in the
+  final report**, with E4's measured result shown even when it triggers E4b.
 
 ### E5 — Routing signal selection
 
@@ -196,22 +247,74 @@ at reporting time.
   needs a different mechanism. Spread < 0.05 ⇒ signal choice does not matter; report
   that and use margin for its temperature-invariance property alone.
 
-### E6 — Cascade cost-vs-accuracy Pareto frontier *(the headline)* — **BLOCKED**
+### E6 — Cascade cost-vs-volume break-even curve *(the headline)*
 
-- **Hypothesis (H1):** the cascade reaches near-Sonnet macro-F1 at under half the cost.
-- **Metric / split:** macro-F1 and USD/1,000 clauses on `test_3000`, swept over router
-  thresholds calibrated on `dev_2000`.
-- **Accept rule:** at some threshold, macro-F1 **within 0.04** of Sonnet-5-alone **and**
-  cost **< 50%** of Sonnet-5-alone.
-- **Reasoning for the numbers:** 0.04 is the unpaired floor — "within noise of Sonnet"
-  is the strongest claim the test set can support. 50% is a materiality threshold: a
-  10–20% saving would not justify three tiers of engineering, and the measured
-  batch+cache saving on Stage 1 alone was already 60.9%.
-- **Falsification:** no threshold satisfies both ⇒ the cascade does not pay for itself.
-  Report the frontier anyway; a negative Pareto result is the point of measuring.
-- **⚠ BLOCKED, see §1b:** `device_cost_usd`, `measured_throughput_rps` and all
-  `per_tier_throughput` values are null, and no latency harness exists. **The cost axis
-  cannot be computed today.** This rule cannot be evaluated until they are measured.
+- **Hypothesis (H1):** the cascade reaches macro-F1 within 0.04 of Sonnet-5-alone, and
+  there exists a **finite, realistic clause volume** beyond which it is cheaper.
+
+- **The deliverable is a CURVE, not a point.** An earlier draft asked for a single
+  Pareto point at one amortisation window. **That hides the assumption that decides the
+  answer:** amortise a 59,900 INR Mac Mini over 1,000 clauses and local inference looks
+  absurd; over 10,000,000 it is free. Same model, same accuracy, opposite conclusion.
+  Leaving the window unstated means whoever picks it later picks the headline result.
+
+  **Preregistered deliverable:** clause volume *V* on the x-axis (log scale), **USD per
+  1,000 clauses** on the y-axis, **one curve per tier and one for the cascade**, with
+  **no single amortisation window privileged.** The report states the crossover volume
+  explicitly.
+
+- **Curve definitions:**
+  - API tiers are **flat in V**: cost/1k is a constant from the four usage fields.
+  - Local tiers are **hyperbolic plus a floor**:
+    `cost_per_1k(V) = 1000·device_cost_usd/V + 1000·energy_cost_per_clause`
+  - **The energy term is what makes this honest.** Without it the local curve tends to
+    zero and local always wins at sufficient volume, which is false. With it the curve
+    **asymptotes to the per-clause energy cost**, and whether that asymptote sits above
+    or below the API line decides whether local *ever* wins at any volume. That is the
+    actual question.
+  - The local curve is **bounded in V** by what the hardware can process in its life:
+    `V_max = throughput_rps × 3600 × 24 × 365 × lifetime_years × duty_cycle`. Beyond
+    `V_max` the curve **steps** — a second device — rather than continuing to fall.
+
+- **Accept rule — attaches to the CROSSOVER, not to a point on the curve:**
+  1. **Accuracy:** cascade macro-F1 within **0.04** of Sonnet-5-alone on `test_3000`
+     (the unpaired floor from §1a — the strongest claim the test set supports); **and**
+  2. **Crossover:** the crossover volume *V** where the cascade becomes cheaper than
+     Sonnet-5-alone is **≤ 1,000,000 clauses** and **≤ V_max** for one device; **and**
+  3. **Asymptote:** the cascade's high-volume cost/1k is **< 50%** of
+     Sonnet-5-alone's — i.e. the saving survives after the hardware is fully amortised
+     and only energy remains.
+- **Reasoning for the numbers:** 1M clauses is roughly 12 years of LEDGAR's own test
+  split, and is proposed as the outer edge of "a real deployment could reach this". A
+  crossover beyond `V_max` means **the device dies before it breaks even**, which is a
+  clean negative. The 50% asymptote condition prevents an accept driven purely by
+  amortisation arithmetic rather than by the cascade doing anything useful.
+- **Falsification:** no finite crossover below 1M and V_max, or an asymptote above 50%
+  ⇒ the cascade does not pay for itself at realistic volume. **Report the full curve
+  regardless** — a negative break-even result is exactly what measuring was for.
+
+- **⚠ STILL BLOCKED, see §1b.** `device_cost_usd` is null (59,900 INR and an FX rate are
+  recorded but the USD figure is not derived), `measured_throughput_rps` and every
+  `per_tier_throughput` entry are null, and **`power_draw_watts` /
+  `electricity_cost_usd_per_kwh` are null**.
+
+- **What the curve changes about the measurement harness — answering the question
+  directly:**
+  1. **`power_draw_watts` is promoted from optional to MANDATORY.** In the old
+     single-point framing energy was a rounding error. In the curve framing it *is* the
+     asymptote, and the asymptote decides condition 3. A curve without it is wrong in
+     the exact region the hypothesis is about.
+  2. **Throughput is needed for a second reason.** Previously it was only an input to
+     amortisation; now it also sets `V_max`, the point where the local curve stops
+     falling and steps. A crossover past `V_max` is a negative result the harness must
+     be able to detect.
+  3. **Per-tier, not aggregate.** Tier 0 (ONNX INT8) and Tier 1 (MLX) have different
+     throughput and different power draw, and the cascade's curve is a routing-weighted
+     mixture of them. The harness must measure each tier separately.
+  4. **Latency (p50/p95) is now secondary for E6** — it does not enter the cost curve at
+     all. It remains a reported quality of Tier 0 ("milliseconds") and is what E7 tests,
+     but it is no longer on the critical path for the headline result. **Throughput and
+     power are.**
 
 ### E7 — `max_length` latency ablation
 
@@ -283,11 +386,17 @@ the anchoring effect directly, at no extra cost.
   (Haiku), 0.184 (Sonnet). A halving is chosen as the smallest effect that is clearly
   not the run-to-run wobble of an already-narrow distribution. The mode condition tests
   the anchor *directly* rather than inferring it from spread.
-- **⚠ Testability flag:** for a model whose zero-shot sd is already 0.031, a further
-  halving to 0.015 may be **unmeasurable at n=3000** and is close to the granularity of
-  the values models actually emit (Haiku used 5 distinct values in 20 answers). **This
-  rule is likely testable on Sonnet 5 (sd 0.184) and possibly not on the compressed
-  models.** State per-model results; do not report a single pooled verdict.
+- **SCOPE: this accept rule applies to Sonnet 5 ONLY.** Sonnet 5's zero-shot sd of
+  0.184 is the widest measured and leaves room for a halving to be visible. The other
+  models are reported descriptively and are **not** subject to the rule.
+- **Why the others are excluded, stated in advance:** for a model whose zero-shot sd is
+  already 0.031 (Gemini 3.5-flash-lite), a halving to 0.015 is below the granularity of
+  the values these models actually emit — Haiku used **5 distinct values in 20 answers**,
+  Gemini **6 in 32**. On such models the mode-near-0.9 test **measures emission
+  granularity, not anchoring**: a model that emits {0.88, 0.92, 0.95, 0.98, 0.99, 1.0}
+  cannot place a mode at 0.9 whether it is anchored or not. **A null result on the
+  compressed models is therefore NOT evidence against anchoring** and must not be
+  reported as such.
 - **Falsification:** sd ratio > 0.5 and mode away from 0.9 ⇒ the fixed exemplar
   confidence did not anchor, and verbalized confidence is compressed for reasons
   intrinsic to the models rather than to our prompt.
@@ -306,29 +415,29 @@ runs. Specifically, test whether the class appearing 3× in the exemplar set is
 over-predicted in few-shot relative to zero-shot.
 
 - **Predicted direction, recorded BEFORE the run:** yes — it will be over-predicted.
-- **Accept rule (DRAFT):** few-shot verbalized-confidence **sd ≤ 0.5× zero-shot sd**
-  for the same model on the same rows, AND the few-shot **mode within 0.02 of 0.9**
-  (the anchored value).
-- **Reasoning for the numbers:** confidence is already severely compressed with no
-  anchor at all — measured zero-shot sd is 0.031 (Gemini), 0.083 (gpt-oss), 0.174
-  (Haiku), 0.184 (Sonnet). A halving is chosen as the smallest effect that is clearly
-  not the run-to-run wobble of an already-narrow distribution. The mode condition tests
-  the anchor *directly* rather than inferring it from spread.
-- **⚠ Testability flag:** for a model whose zero-shot sd is already 0.031, a further
-  halving to 0.015 may be **unmeasurable at n=3000** and is close to the granularity of
-  the values models actually emit (Haiku used 5 distinct values in 20 answers). **This
-  rule is likely testable on Sonnet 5 (sd 0.184) and possibly not on the compressed
-  models.** State per-model results; do not report a single pooled verdict.
-- **Falsification:** sd ratio > 0.5 and mode away from 0.9 ⇒ the fixed exemplar
-  confidence did not anchor, and verbalized confidence is compressed for reasons
-  intrinsic to the models rather than to our prompt.
+- **Accept rule (DRAFT):** the class appearing 3× in `exemplars_8` is predicted in
+  few-shot at **≥ 2× its zero-shot prediction rate** on the same rows, AND its shift is
+  larger than that of any class appearing exactly once in the exemplar set.
+- **Reasoning for the numbers:** prediction rates for a mid-frequency class over 3,000
+  rows have a standard error near 1 percentage point, so a doubling sits far outside
+  noise while a 20–30% shift would not. The second clause guards against a general
+  few-shot drift being misread as exemplar-specific anchoring — if every exemplar class
+  rises equally, the cause is few-shot prompting, not repetition.
+- **⚠ Rate fallback, registered in advance:** if the 3× class's **zero-shot** prediction
+  rate is under **1%**, a ratio to a near-zero baseline is unstable and the rule switches
+  to an absolute form: **+2 percentage points** over its zero-shot rate. The switch is
+  decided by the measured zero-shot rate and **must be recorded before the few-shot run
+  is scored**, never after seeing the few-shot number.
+- **Falsification:** shift < 2× (or < 2pp under the fallback), or not exceeding the
+  single-exemplar classes ⇒ exemplar repetition did not bias predictions, and the
+  uniform-draw exemplar policy carries less risk than §3c records.
 
 ### 3e. Recorded failure class — failures that present as normal operation
 
 Recorded **before** any paid run, so it is on the record that these were found by
 audit rather than discovered in a run we had paid for.
 
-All four bugs found so far share one shape: **a failure that does not surface as a
+All five bugs found so far share one shape: **a failure that does not surface as a
 failure.** None threw an error. Three degraded a measured quantity to a plausible
 number; the fourth degraded a control-flow state to a plausible status. In every case
 the system continued to look like it was working.
@@ -345,6 +454,14 @@ treats an unrecognised state as a normal one, belongs here.
 | 3 | `sklearn` `f1_score(zero_division=0)` | scoring an undefined class as 0.0 avoids a crash | it silently deflates macro-F1 in proportion to absent classes — worst on the long tail, which is exactly where the cascade must be measured | Block 4 audit |
 | 4 | `until grep -q "GATE" log; do sleep; done` — a wait loop with a success condition and no failure condition | polling for a completion marker is the obvious way to wait | the job it watched crashed with a traceback and never wrote `GATE`, so a dead job displayed as **Running for 2.5 hours**. A stale job showing Running is worse than no indicator: it hides the next real stall | Block 4, qwen run |
 
+| 5 | `str.replace(old, new)` in an editing script, with no check that `old` matched | a replace that finds nothing is normally harmless | it silently did nothing, so **C4's accept rule was left holding C2's text** — a preregistered rule for the wrong experiment, which would have been signed off as correct. Found only by reading the diff | Block 4, drafting this file |
+
+Instance 5 is the same defect as instance 4 in a different costume, and was committed
+*while writing the section that describes the class*: an operation with a success path
+and no failure path. The mitigation is identical — `assert old in s` before every
+replace, so a non-matching edit raises instead of passing. **Read the diff, not the
+exit code.**
+
 Instance 4 also generalises the mitigation: a wait must have a failure condition as
 well as a success condition — process liveness, a timeout, or an error marker — or it
 cannot distinguish "still working" from "died". This is the same defect as
@@ -352,7 +469,7 @@ cannot distinguish "still working" from "died". This is the same defect as
 in the same audit.
 
 Consequence: **hard rule 11** (no silent degradation) was written after #1 and has since
-caught #2, #3 and #4.
+caught #2, #3, #4 and #5.
 
 **Practice note — two readings before declaring a limit.** Two claims have been
 retracted, and both had the same shape: *a structural fact inferred from a single
