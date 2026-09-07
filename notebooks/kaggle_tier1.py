@@ -34,6 +34,9 @@ except ImportError:
 
 WORK = Path("/kaggle/working"); WORK.mkdir(exist_ok=True)
 MODEL = "Qwen/Qwen2.5-1.5B-Instruct"   # record the actual model in PREREGISTRATION (E4)
+# A 1.5B model in 4-bit is ~1GB and fits a single T4, so device_map="auto" would place
+# it entirely on GPU 0 and leave GPU 1 idle. Pin it so the behaviour is explicit.
+DEVICE_MAP = {"": 0}
 SEEDS = [1, 2, 3]
 # MAX_LEN bounded over the FULL 57,000-row fit set, not a sample. A 300-row head
 # sample said max 1154; the true max is 2378 — LEDGAR is chronologically ordered so a
@@ -104,6 +107,10 @@ tok.pad_token = tok.pad_token or tok.eos_token
 #   GENERATION -> "left". With right padding the model conditions on trailing pads and
 #                every sequence but the longest in a batch emits fluent nonsense —
 #                reproduced: 3 of 4 prompts wrong.
+# NOTE: this is only the initial value. The eval loop switches to "left", and nothing
+# would switch it back — so seed 2's training assert would fire after seed 1's 5-6
+# hours. Each seed therefore SETS the side it needs inside the loop rather than
+# inheriting it. Do not rely on this line.
 tok.padding_side = "right"
 
 LABEL_BLOCK = "\n".join(f"- {n}" for n in NAMES)
@@ -154,15 +161,20 @@ for seed in SEEDS:
         # adapter already exists and retraining the whole seed would waste hours.
         print(f"\n=== seed {seed}: adapter exists, SKIPPING TRAINING, going to eval ===")
         from peft import PeftModel
-        base = AutoModelForCausalLM.from_pretrained(MODEL, device_map="auto",
+        base = AutoModelForCausalLM.from_pretrained(MODEL, device_map=DEVICE_MAP,
                                                     quantization_config=quant)
         model = PeftModel.from_pretrained(base, str(adapter))
     else:
         resume = ck.exists() and any(ck.glob("checkpoint-*"))
         print(f"\n=== seed {seed} ({'RESUMING' if resume else 'fresh'}) ===")
         base = prepare_model_for_kbit_training(
-            AutoModelForCausalLM.from_pretrained(MODEL, device_map="auto",
+            AutoModelForCausalLM.from_pretrained(MODEL, device_map=DEVICE_MAP,
                                                  quantization_config=quant))
+        # ESTABLISH the invariant for this seed — never inherit it. The previous
+        # seed's eval left it as "left"; without this line seed 2 onward would fail
+        # the assert below after hours of work, and a re-run would only shift the
+        # failure to seed 3.
+        tok.padding_side = "right"
         assert tok.padding_side == "right", (
             "training requires RIGHT padding; left padding corrupts the loss on the "
             "first real token of every padded sequence")
@@ -190,7 +202,8 @@ for seed in SEEDS:
     if hasattr(model, "generation_config"): model.generation_config.use_cache = True
     model.eval()
 
-    # switch to LEFT for generation, and assert it here rather than trusting the top
+    # switch to LEFT for generation. Set here, per seed; the training branch above
+    # sets "right" back for the next seed rather than depending on this being undone.
     tok.padding_side = "left"
     assert tok.padding_side == "left", "batched generation requires left padding"
     preds, raws, trunc = [], [], 0

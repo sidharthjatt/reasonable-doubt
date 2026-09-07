@@ -710,6 +710,35 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3n. Notebook defect 8 — an invariant established once, mutated per iteration
+
+Found in review after §3m's fixes, before any GPU time.
+
+`tok.padding_side = "right"` was set **once at module level**, outside the seed loop.
+Seed 1's eval switched it to `"left"` for generation and nothing restored it, so seed 2
+would fail its training assert **after seed 1's 5–6 hours**. Re-running would not help:
+the module-level line runs again, seed 1 is skipped as complete, seed 2 trains and
+leaves `"left"`, and seed 3 fails identically. **One session per seed**, defeating the
+resume design entirely.
+
+Simulated across both paths (fresh, and post-crash with seed 1's adapter present):
+
+```
+OLD:  seed1 train ok -> AssertionError: seed2 TRAIN ASSERT FAILED
+NEW:  seed1 train/eval ok, seed2 train/eval ok, seed3 train/eval ok   (both paths)
+```
+
+**The assert was not the defect — it was the only reason this surfaced at all.** Without
+it, seeds 2 and 3 would have trained under left padding and silently produced a
+corrupted loss (§3m defect 2 measured that drift at 1.34), and the two runs would have
+been incomparable to seed 1 in a way no output would have shown.
+
+**General lesson, and the reason this is recorded separately:** an invariant required by
+a loop body must be **established inside the loop**, not inherited from before it. A
+static sweep for attribute mutations on pre-loop objects found `tok.padding_side` to be
+the only such case; `eval_bs`, `preds`, `raws`, `trunc`, `model` and `base` are all
+rebound per iteration and are safe.
+
 ### 3k. PREDICTION, recorded BEFORE Stage 1's results land (2026-09-07)
 
 **Cache economics measured at n=10 do not extrapolate to batch concurrency.**
