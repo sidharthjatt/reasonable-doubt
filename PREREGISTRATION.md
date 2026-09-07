@@ -615,6 +615,68 @@ already produced under the current prompt — including Rung 1. Optimising a
 preregistered artefact after seeing its cost is exactly what hard rule 6 forbids.
 Recorded here so the option is on the record as rejected, not overlooked.
 
+### 3k. PREDICTION, recorded BEFORE Stage 1's results land (2026-09-07)
+
+**Cache economics measured at n=10 do not extrapolate to batch concurrency.**
+
+Cache entries become available to other requests only **after the first response
+begins**. A batch processes requests concurrently, so many start before the first
+cache write has landed and each of those pays a write instead of a read. Rung 2 had 10
+requests per leg; Stage 1 has 3,000. The effect scales with how many requests are
+in flight before the first write completes.
+
+**Predicted, before observing:**
+
+| quantity | Rung 2 (n=10) | Stage 1 prediction (n=3000) |
+|----------|---------------|------------------------------|
+| Sonnet cache writes | 1 | **> 1, plausibly many** |
+| Sonnet hit rate (read / all input) | 74.2% | **materially below 74.2%** |
+| Haiku cache writes / reads | 0 / 0 | **0 / 0** (prefix 793 < the 4,096 minimum, §3j) |
+| Sonnet projected cost | — | **> $1.3449** — that projection assumed one write |
+
+**How this is scored:** report observed `cache_creation_input_tokens` and
+`cache_read_input_tokens` totals per leg against the above. A Sonnet hit rate at or
+above 74.2% falsifies the prediction; a materially lower rate with more than one write
+confirms it. Either way the number is reported, and the n=10 → n=3000 extrapolation is
+recorded as unsound or sound accordingly.
+
+**Budget is unaffected** — gating assumed zero cache hits throughout (hard rule 8), so
+this changes what we report, not what we may spend.
+
+**Caveat on the documented minimum.** §3j cites Sonnet 5's published minimum as 1,024.
+That figure has been reported not to hold in practice (anthropic-sdk-python issue
+#1194: caching does not fire at 1,024 for Sonnet-tier models and appears near 2,048;
+at least one third-party reference lists Sonnet 4.6 at 2,048 against the docs' 1,024).
+**Our Sonnet 5 did cache at a 1,084-token prefix**, which bounds its true threshold at
+or below 1,084 empirically — so §3j's finding stands on measurement, not on the doc.
+But the "60-token margin" in §3j is **not** a safety margin: it is measured against a
+number already shown to be unreliable. The guard is therefore behavioural —
+`assert_caching_engaged` (src/api/usage.py) fails a run whose cache fields are all
+zero — not a comparison against any published minimum.
+
+### 3l. E2 arm selection, recorded BEFORE the run (2026-09-07)
+
+**Decision: one arm, `sqrt_inv_freq`, at 3 seeds. Not three arms at fewer seeds.**
+
+GPU budget: Tier 1 (9–15h) + Tier 0 CE (3–5h) = 12–20h of Kaggle's 30h weekly quota.
+Three arms × 3 seeds is a further 9–15h; worst case 35h, over quota.
+
+**Why not cut seeds instead.** E2's margin *is* `√2 × 1.96 × seed_sd`, and `seed_sd`
+comes from C3, which comes from the CE baseline's seeds. Reducing seeds on the arms
+would both widen the required margin and degrade the estimate that sets it — a double
+penalty on the comparison that matters — and would breach hard rule 2 on precisely the
+runs being compared.
+
+**Why `sqrt_inv_freq`.** `inv_freq` at 137.7× is the arm most likely to destabilise
+training (already noted in E2), and `effective_number` carries a free parameter β that
+we would be choosing without evidence. `sqrt_inv_freq` is the moderate option and the
+one most likely to reveal a real effect if H3 holds.
+
+**Reporting rule.** If `sqrt_inv_freq` clears the C3-derived margin, H3 is supported and
+the remaining arms are a refinement. If it does not, **E2 is reported as tested on one
+arm with `inv_freq` and `effective_number` UNRUN**, stated plainly — not as "class
+weighting does not help". Sequencing: **CE 3 seeds → C3 → `sqrt_inv_freq` 3 seeds.**
+
 ### 3i. Amendment — Sonnet output budget 48 → 40 (2026-09-07)
 
 **Trigger:** a pre-submission upper bound breached `stage_1.max_usd`.

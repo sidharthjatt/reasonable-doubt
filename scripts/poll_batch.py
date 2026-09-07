@@ -50,8 +50,23 @@ def main() -> int:
     else:
         client.poll(state)
 
+    from src.api.ledger import SpendLedger as _SL
+    ledger_pre = _SL()
     joined = join_on_custom_id(state.custom_ids, client.client.batch_results(state.batch_id))
     print(f"joined: {joined.n_succeeded} succeeded, {joined.n_failed} failed")
+
+    # IDEMPOTENCY GUARD. Running poll twice previously appended a second set of
+    # actual rows and double-counted rung2 by $0.012112. The ledger is the authority
+    # on cumulative spend and the hard-stop guard reads it, so a re-poll must never
+    # re-bill. See the CORRECTION_rung2_double_count row.
+    already = {e.run_id for e in ledger_pre.entries()
+               if e.kind == "actual" and e.batch_id == state.batch_id}
+    if already:
+        print(f"already recorded for batch {state.batch_id}: {sorted(already)}")
+        print("refusing to record again (ledger is append-only and must not double-count)")
+        record = False
+    else:
+        record = True
 
     meta = json.loads((STATE_DIR / f"{args.run}_meta.json").read_text())
     provider = get_provider("anthropic"); cache = ResponseCache(); ledger = SpendLedger()
@@ -75,11 +90,17 @@ def main() -> int:
             rows[parse_custom_id(cid)[1]] = {"text": text,
                                              "stop_reason": body.get("stop_reason"),
                                              "usage": u.as_dict()}
-        entry = ledger.record_actual(
-            f"{args.run}_{model}", total, provider="anthropic", model=model,
-            batch_id=state.batch_id, batch=True, cache_ttl=state.cache_ttl,
-            estimated_usd=leg["gating_usd"], n_requests=len(items),
-            notes=f"{args.run} batch; tag {tag}")
+        if record:
+            entry = ledger.record_actual(
+                f"{args.run}_{model}", total, provider="anthropic", model=model,
+                batch_id=state.batch_id, batch=True, cache_ttl=state.cache_ttl,
+                estimated_usd=leg["gating_usd"], n_requests=len(items),
+                notes=f"{args.run} batch; tag {tag}")
+        else:
+            from src.api.cost import compute_cost as _cc
+            class _E: pass
+            entry = _E(); entry.cost_usd = _cc(model, **total.as_cost_kwargs(),
+                                               cache_ttl=state.cache_ttl, batch=True)
         cr = total.cache_read_input_tokens; cw = total.cache_creation_input_tokens
         billed = total.input_tokens + (cr or 0) + (cw or 0)
         out[model] = {"n": len(items), "usage": total.as_dict(),

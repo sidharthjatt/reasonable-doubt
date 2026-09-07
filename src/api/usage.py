@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 __all__ = [
+    "CachingNotEngaged",
+    "assert_caching_engaged",
     "ANTHROPIC_USAGE_FIELDS",
     "Usage",
     "UsageFieldMissing",
@@ -191,3 +193,35 @@ def parse_usage(
         model=model,
         provider=provider,
     )
+
+
+class CachingNotEngaged(RuntimeError):
+    """A run expected prompt caching and no request cached anything."""
+
+
+def assert_caching_engaged(usages, *, model: str, prefix_tokens: int) -> None:
+    """Fail loudly if a run that expects caching never cached anything.
+
+    Guards against OBSERVED BEHAVIOUR, not against a documented minimum. The
+    published per-model minimum has been reported wrong in practice — see
+    anthropics/anthropic-sdk-python issue #1194, where caching does not fire at the
+    documented 1,024 for Sonnet-tier models and only appears near 2,048 — so a
+    doc value is not a safety margin. Our Sonnet 5 did cache at a 1,084-token prefix,
+    which bounds its true threshold at or below that empirically.
+
+    The API returns NO error when a prompt is too short to cache; the request is
+    simply processed uncached (see PREREGISTRATION 3j). This is the only detection.
+    """
+    usages = list(usages)
+    if not usages:
+        raise CachingNotEngaged(f"{model}: no usage blocks to check")
+    wrote = sum((u.cache_creation_input_tokens or 0) for u in usages)
+    read = sum((u.cache_read_input_tokens or 0) for u in usages)
+    if wrote == 0 and read == 0:
+        raise CachingNotEngaged(
+            f"{model}: caching NEVER engaged across {len(usages)} requests "
+            f"(prefix {prefix_tokens:,} tokens). cache_creation and cache_read are both "
+            "zero. The API returns no error for an uncacheable prompt, so this check is "
+            "the only detection. Either the prefix is below this model's true minimum, "
+            "or cache_control was not set."
+        )
