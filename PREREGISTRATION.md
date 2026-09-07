@@ -710,6 +710,47 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3p. Notebook defect 10 — a check that validated the wrong layer, again
+
+`PREFLIGHT` printed **PASSED** while running `transformers 5.0.0` and `peft 0.19.1` —
+neither of which was the version introspected. It validated **signatures**, never
+**versions**, so it certified an environment it had never seen.
+
+The crash was inside peft, not our code:
+`AttributeError: 'LoraConfig' object has no attribute 'velora_config'` in
+`peft/tuners/lora/bnb.py`. Diagnosed locally: in peft **0.20.0** that field exists on
+`LoraConfig` *and* is referenced by `bnb.py` — the two agree. The Kaggle environment
+was executing 0.20.0's `bnb.py` against 0.19.1's `LoraConfig`: **a mixed install**,
+because pip cannot replace a package the kernel has already imported.
+
+Three compounding defects, all mine:
+
+1. **`!pip -q install ... | tail -3`** discarded the resolver output that would have
+   shown the pins failing. Same silent-failure class as `chars/4`.
+2. **No version assertion.** PREFLIGHT now compares running versions against the pins
+   and raises, naming both.
+3. **No kernel restart.** Every notebook is now explicitly two cells with a mandatory
+   restart between them.
+
+**Version decision, with the reason.** Kaggle ships `transformers 5.0.0`. Rather than
+downgrade it for Tier 1 — which means uninstalling a preloaded package, the very thing
+that caused the mixed install — only `peft` is forced, because `trl 1.12.0` declares
+`transformers>=4.56.2` with **no upper bound** and `peft 0.20.0` declares none either.
+Fewer packages replaced, fewer chances of a partial install. Tier 1's PREFLIGHT was
+executed locally under transformers **5.0.0** and passes.
+
+**Tier 0 must differ:** `optimum-onnx` declares `transformers<4.58.0,>=4.36`, and Tier 0
+needs optimum for the ONNX export, so it pins `4.57.6`. The two notebooks run in
+separate sessions, so the conflict is never resolved in one environment. This
+constraint was found only by attempting the install locally.
+
+**What still cannot be verified off-CUDA, and the response.** `bitsandbytes` 4-bit
+loading and the peft LoRA-on-4-bit path cannot be exercised on macOS at all. Rather
+than assert they work, `notebooks/kaggle_probe_qlora.py` is a ~2-minute cell that runs
+4-bit load → LoRA wrap → one real training step → generation, and checks peft's
+internal consistency at the exact crash site. **It is run before Tier 1, not instead of
+knowing.**
+
 ### 3o. Notebook defect 9 — verifying the wrong property, twice
 
 `SFTConfig` was guarded with `try: from trl import SFTConfig / except ImportError`.

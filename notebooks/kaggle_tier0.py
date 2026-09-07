@@ -9,9 +9,23 @@
 # Registered as E1 (CE baseline, 3 seeds) and E2 (loss arms). Selection happens
 # on train_holdout_3000 ONLY — the guard below refuses dev and test.
 # ============================================================================
-# PINNED — introspected locally; see PREFLIGHT below. transformers 4.57.6.
-!pip -q install "transformers==4.57.6" "datasets>=2.19" sentencepiece protobuf \
-    "optimum[onnxruntime]" onnx onnxruntime scikit-learn 2>&1 | tail -3
+# ============================ CELL 1 of 2 =====================================
+# RUN THIS CELL, THEN **RESTART THE KERNEL**, THEN RUN CELL 2.
+# pip cannot replace a package the kernel has already imported; a half-replaced
+# package is what produced the peft 'velora_config' crash in the Tier 1 notebook.
+# Output is NOT suppressed — resolver errors must be visible.
+#
+# transformers is pinned BELOW 4.58 here, unlike Tier 1: `optimum-onnx` declares
+# `transformers<4.58.0,>=4.36`, and this notebook needs optimum for the ONNX export.
+# Kaggle ships transformers 5.0.0, so this IS a downgrade — check the output.
+!pip install "transformers==4.57.6" "optimum[onnxruntime]" onnx onnxruntime \
+    "datasets>=2.19" sentencepiece protobuf scikit-learn
+!pip check || echo "NOTE: pip check reported conflicts above — read them before continuing"
+print("\n" + "=" * 70)
+print("NOW RESTART THE KERNEL, THEN RUN CELL 2.")
+print("=" * 70)
+
+# ============================ CELL 2 of 2 =====================================
 
 # ---- PREFLIGHT: verify signatures BEFORE the dataset downloads or weights load ----
 import inspect
@@ -47,6 +61,16 @@ from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
 
 import transformers as _tf
 print(f"versions: transformers {_tf.__version__}")
+# optimum-onnx requires transformers<4.58; a mismatch here means the pins did not
+# take, which almost always means the kernel was not restarted after CELL 1.
+_v = tuple(int(x) for x in _tf.__version__.split(".")[:2] if x.isdigit())
+if not ((4, 36) <= _v < (4, 58)):
+    raise RuntimeError(
+        f"transformers {_tf.__version__} is outside optimum-onnx's supported range "
+        f"(>=4.36,<4.58). Run CELL 1 and RESTART THE KERNEL. PREFLIGHT previously "
+        f"passed while running versions that were never introspected — this check "
+        f"exists so that cannot recur.")
+print("  PREFLIGHT: transformers version is inside optimum-onnx's supported range")
 print("PREFLIGHT — validating signatures before anything expensive")
 _require(TrainingArguments, ["output_dir","seed","num_train_epochs","learning_rate",
     "per_device_train_batch_size","per_device_eval_batch_size","eval_strategy",

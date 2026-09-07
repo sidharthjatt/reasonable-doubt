@@ -5,6 +5,43 @@ Two notebooks, run in this order. **Start Tier 1 first** — it is the long pole
 
 ---
 
+## THE INSTALL PROTOCOL — read this first
+
+Two runs have now been lost to dependency problems, both from the same cause: **pip
+cannot replace a package the running kernel has already imported.** The result is a
+*mixed* install — `peft` reported 0.19.1 while executing 0.20.0's `bnb.py`, which
+crashed with `LoraConfig object has no attribute 'velora_config'`.
+
+**Every notebook is now TWO cells.** For each one:
+
+1. Paste **CELL 1** (the `!pip install` block) and run it. **Read the output** — it is
+   no longer suppressed, and resolver errors appear there.
+2. **RESTART THE KERNEL.** Kaggle: `Run -> Restart & clear cell outputs`, or the
+   Restart button in the session panel. This step is not optional.
+3. Paste **CELL 2** (everything after the `CELL 2 of 2` banner) and run it.
+
+CELL 2 begins by asserting the running versions match the pins and **raises** if they
+do not. Previously PREFLIGHT passed while running versions that had never been
+introspected; that is what this check prevents.
+
+### Run the probe before Tier 1
+
+`kaggle_probe_qlora.py` takes about two minutes and exercises the exact path that
+cannot be tested off-CUDA: 4-bit load → LoRA wrap → one real training step →
+generation. Run CELL 1, restart, then run the probe.
+
+**If the probe fails, do not start Tier 1.** If it passes, the dependency set works.
+
+### Why the two notebooks pin different versions
+
+| notebook | transformers | why |
+|----------|--------------|-----|
+| Tier 1 | **Kaggle's own (5.0.0) — not changed** | `trl 1.12.0` needs `>=4.56.2` with no upper bound; `peft 0.20.0` has none. Only `peft` is forced, so only one package is replaced. |
+| Tier 0 | **pinned `==4.57.6`** | `optimum-onnx` declares `transformers<4.58.0,>=4.36`, and Tier 0 needs optimum for the ONNX export. This IS a downgrade from Kaggle's 5.0.0. |
+
+They run in separate sessions, so the conflict never has to be resolved in one
+environment.
+
 ## Before you start
 
 1. Go to <https://www.kaggle.com/code> → **New Notebook**.

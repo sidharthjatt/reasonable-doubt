@@ -12,13 +12,33 @@
 # GENERATIVE, not a classification head: Tier 1 is served via mlx_lm.server, so it must
 # emit a label STRING as it will at serving time (same reason E1 attaches to INT8).
 # =============================================================================
-# PINNED. These exact versions were introspected locally and every kwarg this cell
-# passes was checked against their real signatures (see PREFLIGHT below). Unpinned
-# ranges are how `max_seq_length` -> `max_length` broke a run at seed 1.
-#   transformers 4.57.6 | trl 1.12.0 | peft 0.20.0
-# torch is deliberately NOT pinned — Kaggle's build is CUDA-matched to its drivers.
-!pip -q install "transformers==4.57.6" "trl==1.12.0" "peft==0.20.0" \
-    "datasets>=2.19" accelerate bitsandbytes sentencepiece scikit-learn 2>&1 | tail -3
+# ============================ CELL 1 of 2 =====================================
+# RUN THIS CELL, THEN **RESTART THE KERNEL**, THEN RUN CELL 2.
+#
+# Why the restart is mandatory: pip cannot replace a package that the running kernel
+# has already imported. The previous attempt reported `peft 0.19.1` while executing
+# 0.20.0's `bnb.py` — a MIXED install, which crashed with
+# `LoraConfig object has no attribute 'velora_config'` (that field exists in 0.20.0's
+# LoraConfig and is referenced by 0.20.0's bnb.py; 0.19.1 has neither).
+#
+# Output is deliberately NOT suppressed. The previous line used `-q ... | tail -3`,
+# which threw away the resolver errors that would have shown the pins failing.
+#
+# transformers is left at Kaggle's own version: trl 1.12.0 requires transformers
+# >=4.56.2 with NO upper bound, and peft 0.20.0 has none either, so 5.0.0 is allowed.
+# Downgrading it would mean uninstalling a preloaded package — exactly what produced
+# the mixed install. ONLY peft is forced.
+!pip install --upgrade --force-reinstall --no-deps "peft==0.20.0"
+!pip install "trl==1.12.0" "datasets>=2.19" accelerate bitsandbytes sentencepiece scikit-learn
+!pip check || echo "NOTE: pip check reported conflicts above — read them before continuing"
+print("\n" + "=" * 70)
+print("NOW RESTART THE KERNEL, THEN RUN CELL 2.")
+print("  Kaggle: Run -> Restart & clear cell outputs   (or the session's Restart button)")
+print("Without a restart the old peft stays loaded and cell 2 will crash in bnb.py.")
+print("=" * 70)
+
+# ============================ CELL 2 of 2 =====================================
+# Everything below goes in a SECOND cell, run AFTER the kernel restart.
 
 # =============================================================================
 # PREFLIGHT — runs FIRST, before the dataset downloads and before any weights load.
@@ -101,8 +121,27 @@ MAX_NEW_TOKENS = 16                    # longest label = 5 tokens + eos; 16 is 2
 EVAL_N = 3000
 HOLDOUT_SHA12, TEST3000_SHA12 = "97eebc04d0c7", "e719c1109069"
 import transformers as _tf, trl as _trl, peft as _peft
-print(f"versions: transformers {_tf.__version__} | trl {_trl.__version__} | "
-      f"peft {_peft.__version__}")
+_ACTUAL = {"transformers": _tf.__version__, "trl": _trl.__version__, "peft": _peft.__version__}
+# EXACT pins for what must be controlled. transformers is a FLOOR, not an equality:
+# trl 1.12.0 requires >=4.56.2 with no upper bound, and Kaggle ships 5.0.0.
+_EXACT = {"trl": "1.12.0", "peft": "0.20.0"}
+_MIN = {"transformers": (4, 56, 2)}
+print(f"versions: transformers {_ACTUAL['transformers']} | trl {_ACTUAL['trl']} | "
+      f"peft {_ACTUAL['peft']}")
+_bad = [f"{k}: expected {v}, running {_ACTUAL[k]}" for k, v in _EXACT.items()
+        if _ACTUAL[k] != v]
+for k, floor in _MIN.items():
+    got = tuple(int(x) for x in _ACTUAL[k].split(".")[:3] if x.isdigit())
+    if got < floor:
+        _bad.append(f"{k}: need >= {'.'.join(map(str, floor))}, running {_ACTUAL[k]}")
+if _bad:
+    raise RuntimeError(
+        "VERSION MISMATCH — the pins did not take. " + "; ".join(_bad) +
+        ". Did you run CELL 1 and then RESTART THE KERNEL? pip cannot replace a "
+        "package the kernel has already imported, and a half-replaced package is how "
+        "the 'velora_config' crash happened. PREFLIGHT previously passed while running "
+        "versions that were never introspected — this check exists so that cannot recur.")
+print("  PREFLIGHT: versions match the pins")
 print("PREFLIGHT — validating every third-party signature before anything expensive")
 
 # 1. Resolve the sequence-length kwarg by introspection, never by assumption.
