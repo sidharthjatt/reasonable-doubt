@@ -118,49 +118,52 @@ degraded value is legitimately wanted, the caller must ask for it by name
 ### 3f. Amendment — Stage 1 per-model output budgets (2026-09-07)
 
 **Decision: per-model output budgets, Haiku 128 / Sonnet 48. `max_usd` NOT amended.**
+Uncached gating figure $6.7981, against `stage_1.max_usd` of $7.00.
 
-Rung 1 showed Haiku truncating 1 of 20 responses at a 64-token budget. Raising Haiku to
-128 while leaving Sonnet at 64 lifts the uncached gating figure to **$7.0381**, which
-breaches `stage_1.max_usd` of $7.00 by $0.04.
-
-The unexamined assumption was that both models need the same budget. Measured output at
-Rung 1 (20 rows each):
+Measured output at Rung 1, 20 rows per model:
 
 | model | mean out | max out | truncations |
 |-------|----------|---------|-------------|
 | Haiku 4.5 | 25.2 | 64 | 1 |
 | Sonnet 5 | 22.1 | 25 | 0 |
 
-Sonnet never exceeded 25 tokens, so its 64-token budget was ~2.6x its observed maximum
-and was reserving money it could not spend. Cutting Sonnet to 48 (~1.9x observed max)
-frees more than Haiku needs:
+**The reasoning, stated carefully.** An earlier draft of this entry justified raising
+Haiku on the width of the interval around 1/20 while justifying cutting Sonnet on 0/20.
+That is an asymmetry: by the rule of three, 0/20 carries a 95% upper bound near 15%, so
+it is the same weak evidence pointed the other way. It cannot support both moves.
+
+The decision rests instead on **the character of the observed failure, not its rate.**
+Haiku's single truncation was not budget starvation at the margin. The answer itself
+needs ~25 tokens. What happened was a self-correction excursion into prose: Haiku
+emitted a fenced answer carrying an invented label, then began reasoning aloud about
+its own mistake. An excursion of that kind overruns 48 and 64 alike; only a budget of
+128 or more gives it room to land on an answer.
+
+Two things follow. First, the money is worth spending where the excursion actually
+happens — Haiku — because that is the only place a larger budget changes an outcome.
+Second, and for the same reason, the 48-vs-64 choice on Sonnet is close to irrelevant
+to this failure mode: neither value would contain such an excursion, so the difference
+between them buys nothing against it. Sonnet's budget was therefore set by what frees
+the headroom Haiku needs while staying clear of Sonnet's observed output length.
 
 | configuration | uncached gating | vs $7.00 |
 |---------------|-----------------|----------|
-| Haiku 64, Sonnet 64 (current) | $6.5581 | clears |
-| Haiku 128, Sonnet 64 | $7.0381 | **breaches by $0.04** |
+| Haiku 64, Sonnet 64 (previous) | $6.5581 | clears |
+| Haiku 128, Sonnet 64 | $7.0381 | breaches by $0.04 |
 | **Haiku 128, Sonnet 48 (adopted)** | **$6.7981** | **clears, $0.20 spare** |
-| Haiku 128, Sonnet 32 | $6.5581 | clears, but only 1.3x Sonnet's observed max |
+| Haiku 128, Sonnet 32 | $6.5581 | clears |
 
-**Why not the three options as framed:**
+**Residual risk, stated plainly.** If Sonnet ever produces an answer requiring 48–64
+output tokens, that row is truncated and lost. **Nothing in 20 rows rules this out** —
+0/20 truncations at a 64-token budget is compatible with a true overrun rate as high as
+~15%, and the observed maximum of 25 tokens is a maximum over 20 draws, not a ceiling.
+This is a risk accepted to fund Haiku's budget, not a risk measured away. Stage 1 must
+report Sonnet's truncation count at 48; if it is non-zero, this amendment was wrong and
+the entry stays in the record either way (hard rule 7).
 
-- *Raise `max_usd`* — rejected. Loosening a budget guard to fit a change is the wrong
-  direction, and it was not necessary once the Sonnet budget was examined.
-- *Leave 64 and accept truncation* — rejected. 1/20 is a wide interval (roughly
-  0.1%–25% at 95%); if the true rate is near 5%, Stage 1 loses ~150 of 3000 Haiku rows,
-  degrading the very macro-F1 baseline the run exists to produce. That is a measurement
-  cost, not just a money cost.
-- *Budget Haiku below 128* — rejected as unprincipled: no measurement supports any
-  particular intermediate value.
-
-**Honest limitation.** Haiku's single truncation was not budget starvation — the answer
-needs ~25 tokens. It emitted a fenced answer carrying an INVENTED label, then began
-self-correcting and ran out of room. 128 tokens gives that excursion more room to land,
-but does not prevent it. The truncation rate at 128 is therefore an open question that
-Stage 1's 3000 rows will answer; it is not assumed fixed.
-
-**Rejected-experiment note:** Sonnet 32 was considered and rejected for insufficient
-headroom over a maximum observed on only 20 samples.
+**Also rejected:** raising `max_usd` — loosening a budget guard to fit a change is the
+wrong direction, and proved unnecessary. Haiku at some value between 64 and 128 — no
+measurement supports any particular intermediate.
 
 ### 3c. Standing methodological limitations
 

@@ -295,7 +295,20 @@ def main() -> int:
     n = len(predictions)
     n_parse_ok = n - len(parse_failures) - len(truncated)
     parse_rate = n_parse_ok / n
+    # Two macro-F1 figures, because a truncation is a HARNESS limit (an output budget
+    # too small for this model), not a model-quality failure. Scoring them wrong
+    # deflates the free-tier baseline for a reason that has nothing to do with
+    # capability — and a free tier running at 512 tokens is not comparable to Claude
+    # running at 128 against an observed max of 25. Both figures are reported; neither
+    # replaces the other.
     report = score(gold, predictions, labels=sorted(set(gold)))
+
+    truncated_rows = {f["row"] for f in truncated}
+    kept = [(g, p_) for r_, g, p_ in zip(rows, gold, predictions) if r_ not in truncated_rows]
+    report_excl = None
+    if truncated_rows and kept:
+        g_keep, p_keep = zip(*kept)
+        report_excl = score(list(g_keep), list(p_keep), labels=sorted(set(g_keep)))
 
     print("\n" + "=" * 64)
     print(f"JSON parse success rate   : {parse_rate:.2%}  ({n_parse_ok}/{n})")
@@ -306,7 +319,22 @@ def main() -> int:
     print(f"  matched verbatim        : {len(clean_match)}")
     print(f"  matched via normalizer  : {len(normalized_match)}")
     print("-" * 64)
+    print("AS RUN — truncations scored WRONG (the headline number):")
     print(report.render())
+    if report_excl is not None:
+        print("-" * 64)
+        print(f"TRUNCATED ROWS EXCLUDED — n={report_excl.n} "
+              f"({len(truncated_rows)} removed, {len(truncated_rows) / n:.2%} truncation rate):")
+        print(report_excl.render())
+        print(f"\n  macro-F1 attributable to the output budget: "
+              f"{report_excl.macro_f1 - report.macro_f1:+.4f}")
+        print("  (report BOTH; the excluded figure is not a better number, it is the "
+              "same run with a known harness limit removed)")
+    elif truncated_rows:
+        print("-" * 64)
+        print("  every row was truncated; no excluded-figure comparison is possible")
+    else:
+        print("  no truncations — the two figures would be identical")
     if confidences:
         conf = sorted(confidences)
         print(
@@ -363,6 +391,11 @@ def main() -> int:
                 "parse_success_rate": parse_rate,
                 "label_match_rate": 1 - counter.failure_rate,
                 "metrics": report.as_dict(),
+                "metrics_excluding_truncated": (
+                    report_excl.as_dict() if report_excl is not None else None
+                ),
+                "truncation_count": len(truncated_rows),
+                "truncation_rate": len(truncated_rows) / n if n else 0.0,
                 "malformed_json": parse_failures,
                 "truncated": truncated,
                 "out_of_vocabulary": unmatched,
