@@ -10,32 +10,223 @@ Status vocabulary: `planned` → `running` → `accepted` | `rejected` | `abando
 
 ## 1. Primary metric
 
-- **Primary:** _(TODO — fill in)_
-- **Secondary:** _(TODO)_
-- **Cost metric:** _(TODO — how a dollar figure is attached to a result)_
-- **Uncertainty:** _(TODO — seeds, bootstrap procedure, what "±" means)_
-- **Splits:** _(TODO — what is calibrated on dev, what is only ever touched on test)_
+> **DRAFT — first pass by Claude, 2026-09-07. Every number below is a proposal with
+> its reasoning shown; the human owner edits and owns the final version.**
+
+- **Primary:** **macro-F1 over the 100 LEDGAR classes**, measured on `test_3000`.
+  Averaged over classes present in gold; where a class is absent, `allow_absent_classes`
+  must be set explicitly and the count of averaged classes reported alongside the score
+  (see hard rule 11 and the `sklearn zero_division` bug in §3e).
+- **Secondary:** accuracy; **format failure rate** (outputs not mapping to a canonical
+  label, counted as wrong, never dropped); **truncation rate** reported separately from
+  classification error; **escalation rate** per tier.
+- **Cost metric:** **USD per 1,000 classified clauses**, all rates from
+  `configs/costs.yaml` (hard rule 5). API tiers from the four usage fields separately
+  (hard rule 10); local tiers from amortised hardware cost. **BLOCKED — see §1a.**
+- **Uncertainty:**
+  - Every model result is **mean ± std over ≥ 3 seeds** (hard rule 2).
+  - **Absolute** macro-F1 carries the row-draw noise floor below.
+  - **Model-vs-model on identical rows** uses a **paired bootstrap**: resample the rows
+    with replacement, recompute both models' macro-F1 on each resample, report the
+    distribution of the *difference*. The row draw is common to both models and largely
+    cancels, so applying the absolute floor to a paired comparison overstates its
+    uncertainty.
+- **Splits — four disjoint roles, enforced in code by `src/train/splits.py`:**
+
+  | split | role | may be used to |
+  |-------|------|----------------|
+  | `train` minus holdout (57k) | fitting | update weights |
+  | `train_holdout_3000` | selection | pick epoch, hyperparameters, loss arm, signal, `max_length` |
+  | `dev_2000` | calibration | fit router thresholds ONLY (hard rule 1) |
+  | `test_3000` | reporting | be touched once, for the reported number |
+
+### 1a. Measured noise floors — an accept rule inside these is not an accept rule
+
+Monte Carlo over per-class binomial sampling at the observed performance level:
+
+| split | classes | macro-F1 sd | 95% interval | unpaired diff needed |
+|-------|---------|-------------|--------------|----------------------|
+| `test_3000` | 100 | **±0.0145** | ±0.028 | **≈0.040** |
+| `dev_2000` | 99 | ±0.0154 | ±0.030 | ≈0.043 |
+
+The floor is driven by the long tail: `test_3000` has classes with 1, 2 and 4 rows,
+each contributing 1% of macro-F1 from that many draws.
+
+**Consequences that constrain every accept rule below:**
+
+- An **unpaired** macro-F1 difference smaller than **~0.04** on `test_3000` is not
+  distinguishable from row-draw noise. Rules asserting less than that must be paired,
+  or they are unfalsifiable as written.
+- A **paired** difference can be much smaller, but its threshold cannot be set until
+  the paired bootstrap has been run once — see **C3**.
+- **Seed variance is not yet measured.** Hard rule 2 gives mean ± std over ≥3 seeds,
+  but we do not know the std for this model on this data. **Any accept rule with a
+  margin under ~0.02 is provisional until C3 reports it.** This is flagged, not hidden.
+
+### 1b. BLOCKED — the cost axis cannot currently be computed
+
+`configs/costs.yaml` has `local_hardware.device_cost_usd: null`, so amortised cost per
+request for Tier 0 and Tier 1 is **uncomputable**, and with it the x-axis of the Pareto
+frontier. Also null: `measured_throughput_rps`, every `per_tier_throughput` entry, and
+`fx.usd_per_inr_rate` is set but `device_cost_usd` is not derived from it.
+
+**E6 cannot be evaluated until these are filled and throughput is measured.** No
+latency-measurement harness exists yet either. Recorded here so it is not discovered
+at reporting time.
 
 ## 2. Hypotheses
 
+> **DRAFT.**
+
 | id | hypothesis | rationale | how it could be wrong |
 |----|-----------|-----------|-----------------------|
-| H1 | _(TODO)_ | _(TODO)_ | _(TODO)_ |
-| H2 | _(TODO)_ | _(TODO)_ | _(TODO)_ |
+| H1 | A 3-tier cascade reaches macro-F1 within 0.04 of Sonnet-5-alone on `test_3000` at **under half** the USD/1k-clause cost. | Tier 0 answers head-class clauses in milliseconds at near-zero marginal cost; the top 10 classes are 31.5% of the corpus. | Escalation is driven by rare classes, which are also where Tier 0 is weakest, so the router escalates most of the tail and saves little. Or Tier 0's errors are confident, so the router does not catch them. |
+| H2 | Tier 0's softmax **margin** is a better routing signal than LLM **verbalized confidence**, measured by AUROC for predicting own-correctness on `dev_2000`. | Verbalized confidence is severely compressed in every model measured: sd 0.031 (Gemini, non-reasoning), 0.083 (gpt-oss), 0.174 (Haiku), 0.184 (Sonnet), all with means 0.86–0.97 against accuracies 0.65–0.84. Haiku emitted **5 distinct values in 20 answers**. A continuous margin has no such plateaus. | The encoder is also badly calibrated, or its margin is compressed in a different way; or verbalized confidence, despite discretization, still ranks correctness well enough that AUROC is comparable. |
+| H3 | Class weighting raises macro-F1 over unweighted CE at 137.7x train imbalance. | Unweighted CE optimises accuracy, which the head dominates; macro-F1 weights all 100 classes equally. | Weighting destabilises training or trades so much head accuracy that macro-F1 does not move beyond the noise floor. At `inv_freq` the weight ratio is 137x and may simply not converge. |
 
 ## 3. Planned experiments
 
-Fill in the accept rule **before** running. An experiment with a blank accept rule
-must not be executed.
+> **DRAFT — proposed accept rules with reasoning. Edit and own before running.**
+> An experiment with a blank accept rule must not be executed (hard rule 6).
 
 | id | description | accept rule | status |
 |----|-------------|-------------|--------|
-| E1 | _(TODO)_ | _(TODO)_ | planned |
-| E2 | _(TODO)_ | _(TODO)_ | planned |
-| E3 | _(TODO)_ | _(TODO)_ | planned |
-| C1 | Calibration-set robustness check (see 3a) | _(TODO — fill in before running)_ | planned |
-| C2 | Few-shot confidence anchoring probe (see 3b) | _(TODO — fill in before running)_ | planned |
-| C4 | Exemplar class over-prediction probe (see 3d) | _(TODO — fill in before running)_ | planned |
+| C3 | Measure the seed-variance and paired-bootstrap floors | descriptive — no accept rule; **gates every rule below with a margin under 0.02** | planned |
+| E1 | Tier 0: DeBERTa-v3-base, unweighted CE, 3 seeds | macro-F1 ≥ 0.70 on `test_3000` | planned |
+| E2 | Tier 0 loss arms vs E1 (a: sqrt-inv-freq, b: effective-number, c: inv-freq) | best arm beats E1 by ≥ 0.04 unpaired, or ≥ 2× the C3 paired floor | planned |
+| E3 | INT8 vs FP32 at the deployed precision | INT8 macro-F1 within 0.01 of FP32, paired on identical rows | planned |
+| E4 | Tier 1: Qwen2.5-1.5B-Instruct QLoRA, 3 seeds | macro-F1 ≥ E1 + 0.04, else Tier 1 is not justified | planned |
+| E5 | Routing signal: margin vs max-softmax vs entropy, on `dev_2000` | best signal AUROC ≥ 0.75 AND ≥ 0.05 above the worst | planned |
+| E6 | **Cascade Pareto** — the headline result | within 0.04 macro-F1 of Sonnet-5-alone at < 50% of its USD/1k | **BLOCKED by §1b** |
+| E7 | `max_length` 256 vs 512 latency ablation | 256 loses < 0.02 macro-F1 AND is ≥ 1.5× faster | planned |
+| C1 | Calibration-set robustness (see 3a) | thresholds agree within 1 decile of the signal distribution | planned |
+| C2 | Few-shot confidence anchoring probe (see 3b) | few-shot confidence sd ≤ 0.5× zero-shot sd | planned |
+| C4 | Exemplar class over-prediction probe (see 3d) | over-predicted by ≥ 2× its zero-shot rate | planned |
+
+### C3 — Noise-floor measurement *(no accept rule; this is instrumentation)*
+
+- **Hypothesis:** none. This measures what the other rules need in order to be
+  falsifiable at all.
+- **Metric / split:** (i) macro-F1 std across ≥3 training seeds of E1 on
+  `train_holdout_3000`; (ii) the paired-bootstrap distribution width for two models on
+  identical rows.
+- **Why it comes first:** §1a shows the *row-draw* floor is ±0.0145 on `test_3000`, but
+  **seed variance is unmeasured**. If seed std turns out to be ±0.03, then E2's 0.04
+  margin is barely one std and E3's 0.01 tolerance is meaningless. Numbers below marked
+  **[C3-gated]** must be revisited once this reports.
+- **Falsification:** n/a. If seed std exceeds ~0.03, several rules below are
+  unfalsifiable as written and must be loosened or moved to paired comparisons.
+
+### E1 — Tier 0 encoder baseline
+
+- **Hypothesis:** A fine-tuned DeBERTa-v3-base classifies LEDGAR clauses well enough to
+  serve as the cascade's first tier.
+- **Metric / split:** macro-F1 on `test_3000`; epoch chosen on `train_holdout_3000`.
+  Mean ± std over seeds 1, 2, 3.
+- **Accept rule:** **macro-F1 ≥ 0.70.**
+- **Reasoning for the number:** published LEDGAR encoder baselines sit around the high
+  0.7s–low 0.8s micro-F1, and macro-F1 runs materially below micro on a 137.7×
+  imbalance. 0.70 is set as a *usefulness* floor rather than a literature-matching
+  target: below it, Tier 0 escalates so often that the cascade degenerates to Tier 1+2
+  and the architecture has no first tier. It sits **~4 noise floors above** the ±0.0145
+  row-draw sd, so it is decidable.
+- **Falsification:** mean macro-F1 < 0.70 across 3 seeds ⇒ Tier 0 as specified does not
+  work; report it and either change the encoder or drop the tier. **Negative result stays
+  in the report (hard rule 7).**
+
+### E2 — Tier 0 class-imbalance arms
+
+- **Hypothesis (H3):** Class weighting raises macro-F1 over unweighted CE.
+- **Metric / split:** macro-F1 on `test_3000`, 3 seeds per arm. Arm *selection* happens
+  on `train_holdout_3000`; only the selected arm is reported on test.
+- **Accept rule:** the best arm beats E1 by **≥ 0.04 unpaired**, or by **≥ 2× the C3
+  paired floor** if compared paired on identical rows. **[C3-gated]**
+- **Reasoning for the number:** §1a gives ~0.040 as the smallest unpaired difference
+  distinguishable from row-draw noise on `test_3000`. A rule of "beats CE" with no
+  margin would be satisfied by noise roughly half the time — **that is the specific
+  failure mode of an accept rule inside the floor**, and it is why the margin is set at
+  the floor rather than below it.
+- **Falsification:** no arm clears the margin ⇒ H3 is not supported at this scale; report
+  unweighted CE as the Tier 0 configuration and record that weighting did not help.
+- **Note:** `inv_freq` at 137× may fail to converge. That is a result, not a bug, and is
+  reported as such.
+
+### E3 — INT8 vs FP32 *(non-negotiable: INT8 is what deploys)*
+
+- **Hypothesis:** INT8 dynamic quantisation does not materially degrade Tier 0.
+- **Metric / split:** macro-F1 of both precisions on `test_3000`, **paired on identical
+  rows** — same model, same rows, so the row draw cancels entirely.
+- **Accept rule:** **|INT8 − FP32| ≤ 0.01 macro-F1**, paired. **[C3-gated]**
+- **Reasoning for the number:** this comparison is paired *and* same-model, so the
+  ±0.0145 absolute floor does not apply; the only variance is quantisation-induced
+  prediction flips. 0.01 is chosen as the point at which the deployed system's accuracy
+  would need reporting as a materially different number.
+- **Falsification:** delta > 0.01 ⇒ the deployed system is not the measured system.
+  Report the INT8 number as the headline regardless, with the delta stated. **Reporting
+  the FP32 figure as the system's accuracy is prohibited** — it describes something that
+  does not exist.
+
+### E4 — Tier 1 QLoRA
+
+- **Hypothesis:** A QLoRA-tuned small decoder is enough better than Tier 0 to justify a
+  middle tier.
+- **Metric / split:** macro-F1 on `test_3000`, 3 seeds. Primary model
+  **Qwen2.5-1.5B-Instruct**; `meta-llama/Llama-3.2-3B-Instruct` if access lands,
+  otherwise **Qwen2.5-3B-Instruct** — whichever is used is recorded here before the run.
+- **Accept rule:** **macro-F1 ≥ E1 + 0.04.**
+- **Reasoning for the number:** a middle tier only earns its complexity and its serving
+  cost if it is *detectably* better than the tier below. 0.04 is the unpaired floor from
+  §1a — below it we cannot tell Tier 1 from Tier 0 on this test set.
+- **Falsification:** Tier 1 within 0.04 of Tier 0 ⇒ **the middle tier is not justified**
+  and the cascade should be 2-tier. This is a live possibility and a publishable finding.
+
+### E5 — Routing signal selection
+
+- **Hypothesis (H2):** margin > max-softmax ≈ entropy as a router input.
+- **Metric / split:** **AUROC for predicting own-correctness**, on `dev_2000` only
+  (hard rule 1). All three signals from the same logits — one model, no extra compute.
+- **Accept rule:** best signal **AUROC ≥ 0.75** AND **≥ 0.05 above the worst** of the
+  three.
+- **Reasoning for the numbers:** AUROC 0.5 is a coin flip and ~0.70 is the usual
+  threshold for a signal being decision-useful; 0.75 demands the router actually
+  separates its own errors. The 0.05 spread requirement exists because all three come
+  from the same logits and may be near-equivalent — if they are, "margin is best" is not
+  a finding and we should say so rather than pick a winner by noise.
+- **Falsification:** all three below 0.75 ⇒ Tier 0 cannot self-assess and the router
+  needs a different mechanism. Spread < 0.05 ⇒ signal choice does not matter; report
+  that and use margin for its temperature-invariance property alone.
+
+### E6 — Cascade cost-vs-accuracy Pareto frontier *(the headline)* — **BLOCKED**
+
+- **Hypothesis (H1):** the cascade reaches near-Sonnet macro-F1 at under half the cost.
+- **Metric / split:** macro-F1 and USD/1,000 clauses on `test_3000`, swept over router
+  thresholds calibrated on `dev_2000`.
+- **Accept rule:** at some threshold, macro-F1 **within 0.04** of Sonnet-5-alone **and**
+  cost **< 50%** of Sonnet-5-alone.
+- **Reasoning for the numbers:** 0.04 is the unpaired floor — "within noise of Sonnet"
+  is the strongest claim the test set can support. 50% is a materiality threshold: a
+  10–20% saving would not justify three tiers of engineering, and the measured
+  batch+cache saving on Stage 1 alone was already 60.9%.
+- **Falsification:** no threshold satisfies both ⇒ the cascade does not pay for itself.
+  Report the frontier anyway; a negative Pareto result is the point of measuring.
+- **⚠ BLOCKED, see §1b:** `device_cost_usd`, `measured_throughput_rps` and all
+  `per_tier_throughput` values are null, and no latency harness exists. **The cost axis
+  cannot be computed today.** This rule cannot be evaluated until they are measured.
+
+### E7 — `max_length` latency ablation
+
+- **Hypothesis:** 256 tokens is enough for Tier 0, at materially lower latency.
+- **Metric / split:** macro-F1 on `test_3000` (paired, same rows) and measured p50/p95
+  latency locally.
+- **Accept rule:** 256 loses **< 0.02 macro-F1 paired** AND is **≥ 1.5× faster** at p50.
+- **Reasoning for the numbers:** only **1.2–1.6%** of clauses exceed 512 tokens
+  (measured, `results/data_report.md`), and the p50 clause is ~100 tokens, so most rows
+  are unaffected either way; 0.02 allows for the long-clause tail being systematically
+  hurt. 1.5× is the smallest speedup that would change a deployment decision.
+- **Falsification:** loss ≥ 0.02 or speedup < 1.5× ⇒ keep 512.
+- **Note:** truncation at 256 will hit long clauses, which may concentrate in particular
+  classes. **Report per-class deltas, not just the aggregate** — a uniform-looking 0.02
+  could be one class collapsing.
 
 ### 3a. C1 — Calibration-set robustness check
 
@@ -51,8 +242,17 @@ The check: for the single canonical Tier 1 config, calibrate the router threshol
 the two thresholds agree. Agreement vindicates `dev_2000`; divergence is itself a
 finding. Costs no API spend — local Tier 1 inference time only.
 
-- **Accept rule:** _(TODO — state the tolerance within which the two thresholds count
-  as agreeing, before running)_
+- **Accept rule (DRAFT):** the two thresholds agree within **1 decile of the routing
+  signal's distribution** on the full 10k validation split, AND the resulting escalation
+  rates differ by **≤ 3 percentage points**.
+- **Reasoning for the numbers:** a threshold is only meaningful through the escalation
+  rate it produces, so the rule is stated in both units — a threshold difference that
+  moves escalation by <3pp is operationally the same threshold. One decile is chosen
+  because the signal is calibrated by rank, not by absolute value, so a rank-based
+  tolerance survives any monotone rescaling (including temperature).
+- **Falsification:** thresholds differ by more than a decile, or escalation by more than
+  3pp ⇒ `dev_2000` is too small to calibrate on and the full 10k validation split should
+  be used instead. That is a finding about our own method and stays in the report.
 - **Reporting caveat:** macro-F1 computed on `dev_2000` is an average over **99**
   classes, not 100. State this wherever such a number appears.
 
@@ -75,7 +275,22 @@ the anchoring effect directly, at no extra cost.
 - **Predicted direction, recorded BEFORE the run:** few-shot confidences cluster near
   0.9 more tightly than zero-shot confidences — i.e. lower variance and a mode at or
   near 0.9.
-- **Accept rule:** _(TODO — state the statistic and threshold, before running)_
+- **Accept rule (DRAFT):** few-shot verbalized-confidence **sd ≤ 0.5× zero-shot sd**
+  for the same model on the same rows, AND the few-shot **mode within 0.02 of 0.9**
+  (the anchored value).
+- **Reasoning for the numbers:** confidence is already severely compressed with no
+  anchor at all — measured zero-shot sd is 0.031 (Gemini), 0.083 (gpt-oss), 0.174
+  (Haiku), 0.184 (Sonnet). A halving is chosen as the smallest effect that is clearly
+  not the run-to-run wobble of an already-narrow distribution. The mode condition tests
+  the anchor *directly* rather than inferring it from spread.
+- **⚠ Testability flag:** for a model whose zero-shot sd is already 0.031, a further
+  halving to 0.015 may be **unmeasurable at n=3000** and is close to the granularity of
+  the values models actually emit (Haiku used 5 distinct values in 20 answers). **This
+  rule is likely testable on Sonnet 5 (sd 0.184) and possibly not on the compressed
+  models.** State per-model results; do not report a single pooled verdict.
+- **Falsification:** sd ratio > 0.5 and mode away from 0.9 ⇒ the fixed exemplar
+  confidence did not anchor, and verbalized confidence is compressed for reasons
+  intrinsic to the models rather than to our prompt.
 
 ### 3d. C4 — Exemplar class over-prediction probe
 
@@ -91,7 +306,22 @@ runs. Specifically, test whether the class appearing 3× in the exemplar set is
 over-predicted in few-shot relative to zero-shot.
 
 - **Predicted direction, recorded BEFORE the run:** yes — it will be over-predicted.
-- **Accept rule:** _(TODO — state the statistic and threshold, before running)_
+- **Accept rule (DRAFT):** few-shot verbalized-confidence **sd ≤ 0.5× zero-shot sd**
+  for the same model on the same rows, AND the few-shot **mode within 0.02 of 0.9**
+  (the anchored value).
+- **Reasoning for the numbers:** confidence is already severely compressed with no
+  anchor at all — measured zero-shot sd is 0.031 (Gemini), 0.083 (gpt-oss), 0.174
+  (Haiku), 0.184 (Sonnet). A halving is chosen as the smallest effect that is clearly
+  not the run-to-run wobble of an already-narrow distribution. The mode condition tests
+  the anchor *directly* rather than inferring it from spread.
+- **⚠ Testability flag:** for a model whose zero-shot sd is already 0.031, a further
+  halving to 0.015 may be **unmeasurable at n=3000** and is close to the granularity of
+  the values models actually emit (Haiku used 5 distinct values in 20 answers). **This
+  rule is likely testable on Sonnet 5 (sd 0.184) and possibly not on the compressed
+  models.** State per-model results; do not report a single pooled verdict.
+- **Falsification:** sd ratio > 0.5 and mode away from 0.9 ⇒ the fixed exemplar
+  confidence did not anchor, and verbalized confidence is compressed for reasons
+  intrinsic to the models rather than to our prompt.
 
 ### 3e. Recorded failure class — failures that present as normal operation
 
@@ -187,6 +417,31 @@ the entry stays in the record either way (hard rule 7).
 **Also rejected:** raising `max_usd` — loosening a budget guard to fit a change is the
 wrong direction, and proved unnecessary. Haiku at some value between 64 and 128 — no
 measurement supports any particular intermediate.
+
+### 3g. Retired — `test_stratified_764` (2026-09-07)
+
+**Status: retired before it was built. Not rejected on its merits.**
+
+A class-stratified subset of `test_3000` (~8 rows/class, all 100 classes, 764 rows)
+was designed to enable a free-tier-vs-Claude comparison **on identical rows**, where
+the row draw is common to both models and the class-mix bias cancels in the difference.
+Its two justifications were measured and stand:
+
+1. **Class coverage.** Proportional sampling at 400 rows drops ~30 classes to zero,
+   making macro-F1 over 100 classes undefined rather than merely noisy.
+2. **Mix bias is negligible.** Reweighting the confusion matrix from 230 cached
+   predictions gave a proportional-vs-stratified macro-F1 difference of **-0.0010**.
+   Recall is mix-invariant by construction; the whole effect is precision, and it is
+   ~10^-3.
+
+Neither justification referenced provider quota. It is retired **because the
+free-tier Pareto point it enabled has itself been dropped** — both free providers
+throttled too hard to produce a baseline with usable n (Groq ~6-7 min/row after ~200
+rows; Gemini 118/150 requests rate-limited in a sustained probe).
+
+**If a free-tier baseline is ever revived, rebuild this manifest.** The reasons above
+are why, and they will still hold: the comparison needs identical rows and full class
+coverage, and the mix bias is small enough to ignore.
 
 ### 3c. Standing methodological limitations
 
