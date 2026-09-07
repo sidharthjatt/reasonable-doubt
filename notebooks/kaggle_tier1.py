@@ -40,6 +40,28 @@ print("=" * 70)
 # ============================ CELL 2 of 2 =====================================
 # Everything below goes in a SECOND cell, run AFTER the kernel restart.
 
+# ONE GPU, PINNED BEFORE TORCH IS IMPORTED. This must be the first executable line of
+# the cell: torch reads CUDA_VISIBLE_DEVICES when it initialises CUDA, and setting it
+# after `import torch` is a no-op that leaves no trace.
+#
+# Kaggle's "GPU T4 x2" gives two devices, and two things go wrong if both are visible:
+#
+#   1. transformers 5.0.0 Trainer._wrap_model, line ~1665:
+#          if self.args.n_gpu > 1 and not getattr(model, "is_loaded_in_8bit", False):
+#              model = nn.DataParallel(model)
+#      The guard tests is_loaded_in_8bit ONLY. Our model is loaded in 4-BIT, so the
+#      guard does not fire and a bitsandbytes 4-bit model gets wrapped in DataParallel,
+#      which replicates modules across devices. device_map={"": 0} does not prevent
+#      this — it places the weights, it does not set n_gpu.
+#   2. TrainingArguments: train_batch_size = per_device_train_batch_size * max(1, n_gpu).
+#      With two devices the EFFECTIVE BATCH SILENTLY BECOMES 32 (4 x 4 x 2), not the
+#      registered 16. That is a change to the experiment reported by nothing.
+#
+# Pinning to one device makes both impossible. A 1.5B model in 4-bit is ~1.1GB and was
+# never going to need the second T4.
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 # =============================================================================
 # PREFLIGHT — runs FIRST, before the dataset downloads and before any weights load.
 # A signature error must surface in ~10 seconds, not two minutes in, and never
@@ -95,7 +117,8 @@ from pathlib import Path
 import numpy as np, torch
 from datasets import load_dataset, Dataset
 from sklearn.metrics import f1_score
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
+                          BitsAndBytesConfig)
 from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import SFTTrainer
 # max_seq_length lives on SFTConfig in current TRL, NOT TrainingArguments — passing it
@@ -115,7 +138,27 @@ SEEDS = [1, 2, 3]
 # The LABEL sits at the end of every training example, so any truncation removes the
 # answer. 2560 is the smallest bound with zero truncation; dynamic padding means the
 # cost is paid only on the rare long batches (mean length is 607).
+# PRECISION, stated once and asserted below. NOTHING here may be left to a library
+# default: transformers 5.0.0 changed from_pretrained's dtype default from fp32 to
+# "auto", which reads Qwen2.5's config torch_dtype (bfloat16). T4 is sm_75 and has no
+# bf16 support, so every bf16 path on this hardware is a latent failure.
+MODEL_DTYPE = torch.float16     # passed explicitly to from_pretrained; never "auto"
+COMPUTE_DTYPE = torch.float16   # bnb_4bit_compute_dtype; must equal MODEL_DTYPE
+USE_FP16, USE_BF16 = True, False        # AMP mode. bf16 is impossible on T4.
+
+# MEMORY, on ONE 16GB T4 with gradient checkpointing on:
+#   4-bit base ~1.1GB | LoRA r=16 over 7 modules = 18.5M params, fp32 weights+grads
+#   +Adam states ~0.3GB | checkpointed layer boundaries at BS 4 x 2560 ~0.9GB.
+#   The term that actually decides it is the lm_head logits: BS x seq x 151,936 vocab.
+#   At the mean length (607) that is ~0.7GB; at a batch padded to 2378 (the longest
+#   fit row) it is ~2.9GB in fp16 plus its fp32 upcast for cross-entropy, ~8.7GB total
+#   on top of everything else. Dynamic padding means this only bites when a long row
+#   lands in a batch: only 17 of 57,000 rows exceed 1536 tokens and 2 exceed 2048, so
+#   the common case fits with room and the tail case is the risk.
+#   FALLBACK IF IT OOMs: BS 2 / GA 8. NOT BS 2 alone — the effective batch is
+#   BS x GA and must stay 16, because that is what E4 is registered at.
 MAX_LEN, EPOCHS, LR, BS, GA = 2560, 1, 2e-4, 4, 4
+assert BS * GA == 16, f"effective batch must stay 16 (registered for E4), got {BS*GA}"
 EVAL_BS = 8            # halved automatically on OOM; 2560-token prompts are large
 MAX_NEW_TOKENS = 16                    # longest label = 5 tokens + eos; 16 is 2.7x margin
 EVAL_N = 3000
@@ -215,6 +258,36 @@ assert _f["dataset_text_field"].default == "text", (
 print(f"  PREFLIGHT: packing={_f['packing'].default}, "
       f"dataset_text_field={_f['dataset_text_field'].default!r}, "
       f"{SEQ_LEN_KW} default={_f[SEQ_LEN_KW].default} (we override it)")
+# 4. PRECISION AND DEVICE, resolved and cross-checked BEFORE any weights load.
+# Three runs were each lost to a different T4-specific defect that only surfaced deep
+# into the run. Every one of them was a disagreement between values that are knowable
+# in the first ten seconds, so they are resolved and compared here.
+_cap = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None
+_bf16_ok = torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False
+_cfg_dtype = AutoConfig.from_pretrained(MODEL).dtype
+print(f"  PREFLIGHT: devices visible={torch.cuda.device_count()} "
+      f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')!r})")
+print(f"  PREFLIGHT: gpu={torch.cuda.get_device_name(0) if _cap else 'NONE'} "
+      f"sm_{_cap[0]}{_cap[1]}" if _cap else "  PREFLIGHT: NO GPU")
+print(f"  PREFLIGHT: model config dtype={_cfg_dtype} -> OVERRIDDEN with "
+      f"MODEL_DTYPE={MODEL_DTYPE} | COMPUTE_DTYPE={COMPUTE_DTYPE} | "
+      f"fp16={USE_FP16} bf16={USE_BF16} | bf16 supported here={_bf16_ok}")
+assert torch.cuda.is_available(), "no GPU — set Accelerator to GPU"
+assert torch.cuda.device_count() == 1, (
+    f"{torch.cuda.device_count()} GPUs visible. CUDA_VISIBLE_DEVICES must pin exactly "
+    f"one BEFORE torch is imported, or Trainer wraps the 4-bit model in DataParallel "
+    f"(its guard only tests is_loaded_in_8bit) and doubles the effective batch to 32.")
+assert MODEL_DTYPE == COMPUTE_DTYPE, (
+    f"MODEL_DTYPE {MODEL_DTYPE} != COMPUTE_DTYPE {COMPUTE_DTYPE}; bnb dequantises into "
+    f"the compute dtype and the mismatch shows up as silent numerical drift, not an error")
+assert not USE_BF16, "bf16 is selected but T4 is sm_75 and has no bf16 support"
+assert USE_FP16 != USE_BF16, "exactly one of fp16/bf16 must be set"
+if USE_BF16 and not _bf16_ok:
+    raise RuntimeError("bf16 requested on hardware that does not support it")
+if MODEL_DTYPE is torch.bfloat16 and not _bf16_ok:
+    raise RuntimeError(f"MODEL_DTYPE is bf16 but this GPU (sm_{_cap[0]}{_cap[1]}) "
+                       f"cannot do bf16 — this is the dtype='auto' trap")
+print("  PREFLIGHT: precision and device agree")
 print("PREFLIGHT PASSED\n")
 
 # ---- split guard (duplicated so the cell is standalone) ----------------------
@@ -319,7 +392,7 @@ for seed in SEEDS:
     torch.cuda.manual_seed_all(seed)
 
     quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True)
+        bnb_4bit_compute_dtype=COMPUTE_DTYPE, bnb_4bit_use_double_quant=True)
 
     if adapter.exists():
         # RESUME GAP FIX: eval can take >1h. If the session died during eval, the
@@ -327,14 +400,16 @@ for seed in SEEDS:
         print(f"\n=== seed {seed}: adapter exists, SKIPPING TRAINING, going to eval ===")
         from peft import PeftModel
         base = AutoModelForCausalLM.from_pretrained(MODEL, device_map=DEVICE_MAP,
-                                                    quantization_config=quant)
+                                                    quantization_config=quant,
+                                                    dtype=MODEL_DTYPE)
         model = PeftModel.from_pretrained(base, str(adapter))
     else:
         resume = ck.exists() and any(ck.glob("checkpoint-*"))
         print(f"\n=== seed {seed} ({'RESUMING' if resume else 'fresh'}) ===")
         base = prepare_model_for_kbit_training(
             AutoModelForCausalLM.from_pretrained(MODEL, device_map=DEVICE_MAP,
-                                                 quantization_config=quant))
+                                                 quantization_config=quant,
+                                                 dtype=MODEL_DTYPE))
         # NOTE: TRL's collator pads via its own trl.trainer.utils.pad(), whose
         # padding_side defaults to "right", and SFTTrainer never reads
         # tok.padding_side — so for TRAINING this is belt-and-braces, not the
@@ -352,7 +427,8 @@ for seed in SEEDS:
             learning_rate=LR, per_device_train_batch_size=BS,
             gradient_accumulation_steps=GA, fp16=True, logging_steps=100,
             save_strategy="steps", save_steps=500, save_total_limit=2,
-            report_to=[], gradient_checkpointing=True)
+            report_to=[], gradient_checkpointing=True,
+            fp16=USE_FP16, bf16=USE_BF16)   # both explicit; bf16 default is None, not False
         cfg_kw[SEQ_LEN_KW] = MAX_LEN   # name resolved by PREFLIGHT, not assumed
         trainer = SFTTrainer(model=base, train_dataset=train_txt,
             peft_config=LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none",
@@ -360,6 +436,36 @@ for seed in SEEDS:
                 target_modules=["q_proj","k_proj","v_proj","o_proj",
                                 "gate_proj","up_proj","down_proj"]),
             args=SFTConfig(**cfg_kw))
+
+        # UNDO TRL's UNCONDITIONAL bf16 CAST. trl 1.12.0 SFTTrainer.__init__, ~line 1154:
+        #     if _is_quantized_model:
+        #         for param in model.parameters():
+        #             if param.requires_grad:
+        #                 param.data = param.data.to(torch.bfloat16)
+        # It casts every trainable parameter to bf16 whenever the model is 4-bit, with
+        # NO GPU capability check and no reference to args.fp16. On Ampere+ that follows
+        # the QLoRA paper; on a T4 (sm_75, no bf16) it is fatal: fp16 AMP installs a
+        # GradScaler, and unscale_ raises
+        #     NotImplementedError: "_amp_foreach_non_finite_check_and_unscale_cuda"
+        #     not implemented for 'BFloat16'
+        # after the first backward pass.
+        #
+        # Passing dtype= to from_pretrained does NOT fix this — measured. The order is:
+        # from_pretrained sets the base dtype, prepare_model_for_kbit_training then casts
+        # every non-Params4bit parameter to fp32, and TRL's cast runs last and wins. See
+        # PREREGISTRATION 3r for the trace. fp32 is the correct target, not fp16: AMP
+        # keeps master weights in fp32 and autocasts the matmuls.
+        _recast = 0
+        for _p in trainer.model.parameters():
+            if _p.requires_grad and _p.dtype != torch.float32:
+                _p.data = _p.data.to(torch.float32); _recast += 1
+        _tdt = {str(_p.dtype) for _p in trainer.model.parameters() if _p.requires_grad}
+        print(f"  trainable param dtypes after re-cast: {_tdt} ({_recast} tensors changed)")
+        assert _tdt == {"torch.float32"}, (
+            f"trainable params are {_tdt}, not fp32. fp16 AMP's GradScaler cannot unscale "
+            f"anything but fp32; if this fires, TRL changed the cast at SFTTrainer "
+            f"__init__ line ~1154 and the fix above no longer reaches it.")
+
         trainer.train(resume_from_checkpoint=resume)
         trainer.model.save_pretrained(str(adapter)); tok.save_pretrained(str(adapter))
         shutil.rmtree(ck, ignore_errors=True)   # adapter saved — never retrain this seed

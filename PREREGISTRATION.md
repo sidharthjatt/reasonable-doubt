@@ -710,6 +710,104 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3r. T4 audit — every implicit precision, device and memory assumption (2026-09-08)
+
+Three probe runs on Kaggle each found a **different** T4-specific defect, and each was
+visible only after the previous one was fixed. That is the signature of debugging one
+traceback at a time. This entry enumerates every precision, device and memory value the
+two notebooks left to a library default, states what T4 + transformers 5.0.0 +
+peft 0.20.0 + trl 1.12.0 actually does with it, and fixes them in one commit.
+
+**The reported failure.** `NotImplementedError: "_amp_foreach_non_finite_check_and_unscale_cuda" not implemented for 'BFloat16'`, in `accelerate` `unscale_gradients` → `scaler.unscale_`.
+
+**The diagnosis on hand was that `dtype="auto"` reads Qwen2.5's config `bfloat16`. That
+is true, and it is not the cause.** Traced through the actual path (CPU, 4-bit flag
+forced so peft's and TRL's kbit branches both execute):
+
+| stage | dtype of trainable params |
+|-------|----------------------------|
+| `from_pretrained(dtype=bfloat16)` | bf16 |
+| `prepare_model_for_kbit_training` | **fp32** — the `from_pretrained` dtype is already overwritten here |
+| `SFTTrainer.__init__` | **bf16** |
+| same run, but `from_pretrained(dtype=float16)` | **still bf16** |
+
+The bf16 that reaches the scaler is written by **trl 1.12.0 `SFTTrainer.__init__`,
+~line 1154**:
+
+```python
+if _is_quantized_model:
+    for param in model.parameters():
+        if param.requires_grad:
+            param.data = param.data.to(torch.bfloat16)
+```
+
+Unconditional whenever the model is 4-bit — **no GPU capability check, no reference to
+`args.fp16`**. It follows the QLoRA paper, which is right on Ampere+ and fatal on
+sm_75. **So passing `dtype=torch.float16` does not fix this failure**; it is still
+correct, and it closes a different exposure, but the fix is to re-cast trainable
+parameters to **fp32** after `SFTTrainer` is constructed. fp32, not fp16: AMP keeps
+master weights in fp32 and autocasts the matmuls.
+
+**Full audit. "Implicit" = the value was never written in our code.**
+
+| # | assumption | left implicit? | what actually happens on T4 + this stack | fix |
+|---|------------|----------------|-------------------------------------------|-----|
+| 1 | `from_pretrained` dtype | yes | transformers 5.0.0 defaults `dtype="auto"` (`modeling_utils` line 262–263), reads Qwen2.5's config `bfloat16`. In 4.x the default was fp32 — **a v5 behaviour change inherited by silence** | pass `dtype=MODEL_DTYPE` (fp16) at both load sites |
+| 2 | `bnb_4bit_compute_dtype` | no, already fp16 | correct, but unlinked to the model dtype | bind both to named constants and assert equal |
+| 3 | **trainable-param dtype after `SFTTrainer`** | yes | **TRL casts to bf16 unconditionally — this is the reported crash** | re-cast to fp32 after construction, assert, and warn if TRL stops doing it |
+| 4 | `bf16` | yes | `SFTConfig.bf16` defaults to **`None`, not `False`**. Falsy today, but never asserted | set `bf16=False` explicitly, assert `not USE_BF16` and `USE_FP16 != USE_BF16` |
+| 5 | **device count** | yes | **`Trainer._wrap_model` line ~1665: `if n_gpu > 1 and not getattr(model, "is_loaded_in_8bit", False): model = nn.DataParallel(model)`. The guard tests 8-bit ONLY — never `is_loaded_in_4bit`, never `hf_device_map`. On "GPU T4 x2" our 4-bit model gets DataParallel-wrapped** | `CUDA_VISIBLE_DEVICES=0` before `import torch`, assert `device_count() == 1` |
+| 6 | **effective batch** | yes | **`TrainingArguments`: `train_batch_size = per_device_train_batch_size * max(1, n_gpu)`. With two devices the effective batch silently becomes 32, not the registered 16** — a change to the experiment reported by nothing | same pin; plus `assert BS * GA == 16` |
+| 7 | `device_map={"": 0}` | no | places weights on GPU 0 but **does not set `n_gpu`**, so it does not prevent 5 or 6 | keep, but it is not the guard |
+| 8 | memory at BS 4 × 2560 | yes | see below | documented fallback |
+| 9 | per-seed runtime | yes | the 3–5 h figure assumed two devices | measured by the probe now |
+
+**Memory, one 16GB T4, gradient checkpointing on.** 4-bit base ~1.1 GB; LoRA r=16 over 7
+modules = 18.5M params, fp32 weights + grads + Adam states ~0.3 GB; checkpointed layer
+boundaries at BS 4 × 2560 ~0.9 GB. The deciding term is the **lm_head logits**, BS × seq
+× 151,936 vocab: ~0.7 GB at the 607-token mean, but ~2.9 GB in fp16 plus its fp32
+cross-entropy upcast — **~8.7 GB** — for a batch padded to 2378, the longest fit row.
+Dynamic padding means this only bites when a long row lands in a batch, and only **17 of
+57,000 rows exceed 1536 tokens, 2 exceed 2048**. So the common case fits with room and
+the tail case is the risk. **Fallback: BS 2 / GA 8**, written into the code comment —
+not BS 2 alone, because the effective batch is BS × GA and must stay **16**, which is
+what E4 is registered at.
+
+**Runtime, re-estimated for ONE T4 — and it does not fit the quota.** 57,000 rows × 1
+epoch, ~607-token mean, ≈45–55M padded tokens. Forward+backward ≈ 6ND ≈ 4.6e17 FLOPs,
+plus ~33% for checkpointing recompute ≈ **6.2e17 FLOPs**. A T4 peaks at 65 TFLOPS fp16;
+QLoRA with 4-bit dequant per matmul, small batches and checkpointing realistically
+sustains 8–13 TFLOPS. That is **13–21 h per seed**, so **3 seeds ≈ 40–60 h against a 30 h
+weekly quota** — Tier 1 alone does not fit, before Tier 0's 3–5 h.
+
+**This estimate has roughly ±2× error bars and is not a basis for a decision on its
+own** (§3e). Two consequences, both taken:
+
+1. `kaggle_probe_qlora.py` now **measures** step time and prints a projected per-seed and
+   3-seed figure, labelled an estimate, with its biases named — so the quota question is
+   answered from the real GPU before three seeds are committed rather than after one.
+2. The resume design already tolerates this: seeds are skipped by completion marker and
+   interrupted seeds resume from checkpoint, so **3 seeds spanning two or three weekly
+   quota windows is a supported path**, not a failure. If the measured projection
+   confirms 13–21 h/seed, that is the plan, and RUNNING.md's "9–15h" figure for Tier 1
+   is wrong and must be corrected against the measurement.
+
+**Early gate, which is the structural fix.** All three T4 failures were disagreements
+between values knowable in the first ten seconds — model dtype, compute dtype, AMP mode,
+device count, GPU capability. Both files now resolve and cross-check all five **before
+any weights load**, printing each and raising on any disagreement. That converts a
+step-5 crash after a backward pass into a step-2 message. Same lesson as §3o and §3p:
+the check must sit at the layer where the values are, and must compare them against each
+other rather than confirm each one alone.
+
+**What is NOT verified.** None of this ran on a T4. The dtype trace, the re-cast block
+and the parse checks were executed on CPU (and the trace with a stubbed `bitsandbytes`);
+the DataParallel guard, the `n_gpu` batch multiplication and the transformers dtype
+default were read from installed source, not observed on two devices. The memory
+arithmetic is arithmetic — no allocation was measured. The runtime figure is an estimate,
+explicitly. Every one of these is now instrumented in the probe, which is where they get
+measured.
+
 ### 3q. `use_reentrant` — a question settled by measurement, and the answer is "no"
 
 Decided **before** the Kaggle session rather than mid-session, because the failure it
