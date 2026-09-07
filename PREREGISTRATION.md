@@ -564,6 +564,57 @@ the entry stays in the record either way (hard rule 7).
 wrong direction, and proved unnecessary. Haiku at some value between 64 and 128 — no
 measurement supports any particular intermediate.
 
+### 3j. FINDING — the cheaper model cannot cache, inverting its cost advantage
+
+Measured at Rung 2, then confirmed against the published per-model minimums
+(`platform.claude.com/docs/en/build-with-claude/prompt-caching`, retrieved 2026-09-07):
+
+| model | documented minimum cacheable prefix | our prefix | result |
+|-------|-----------------------------------|-----------|--------|
+| Claude Sonnet 5 | **1,024** | 1,084 | cacheable, clears by **60 tokens** |
+| Claude Haiku 4.5 | **4,096** | 793 | **cannot cache** — short by 3,303 |
+
+Rung 2 observation, same batch, same 1h TTL, 10 requests each:
+
+```
+Haiku : input 9,431 | cache_write     0 | cache_read     0   hit rate  0.0%
+Sonnet: input 2,307 | cache_write 1,080 | cache_read 9,720   hit rate 74.2%
+```
+
+Haiku 4.5's floor is **four times** our prefix, so no prompt of this shape can ever
+cache on it. Projected over Stage 1's 3,000 rows at the measured behaviour:
+
+| | cost | per 1,000 clauses |
+|---|------|-------------------|
+| Haiku 4.5, caching impossible | $1.5879 | **$0.5293** |
+| Sonnet 5, caching active | $1.3449 | **$0.4483** |
+
+**The cheaper model costs 1.18x MORE per clause than the dearer one — and is also less
+accurate** (Rung 1: 0.70 vs 0.75 on 20 rows). Headline rates of $1/$5 versus $2/$10
+invert once the caching floor is applied. For a cost-focused thesis this is a result,
+not an aside: **published per-token prices do not determine relative cost when a
+cacheable prefix sits between two models' minimums.**
+
+Two further notes:
+
+1. **Silent by design.** The documentation states that shorter prompts "cannot be
+   cached, and no error is returned — the request is simply processed without caching."
+   That is §3e's failure class *in the API itself*: the cheaper path degrades silently
+   and the only way to detect it is to read `cache_creation_input_tokens` and
+   `cache_read_input_tokens` off every response — which hard rule 10 already requires.
+2. **Sonnet's margin is 60 tokens.** Any edit to the label list or instructions that
+   shortens the prefix below 1,024 would silently disable caching and raise Sonnet's
+   cost ~2.5x with no error. The prompt sha256 is pinned; **treat the prefix length as
+   a pinned quantity too, and assert it before any run.**
+
+**CONSIDERED AND REJECTED: padding Haiku's prefix to 4,096 tokens.** It would make
+Haiku cacheable and cut its cost substantially. It is rejected because the prompt is
+**preregistered and hashed** (`zeroshot` sha256 `29a4c26e4330…`): padding would change
+the prompt, change Haiku's predictions, and invalidate comparison with every result
+already produced under the current prompt — including Rung 1. Optimising a
+preregistered artefact after seeing its cost is exactly what hard rule 6 forbids.
+Recorded here so the option is on the record as rejected, not overlooked.
+
 ### 3i. Amendment — Sonnet output budget 48 → 40 (2026-09-07)
 
 **Trigger:** a pre-submission upper bound breached `stage_1.max_usd`.
