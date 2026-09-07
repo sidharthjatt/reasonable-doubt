@@ -63,18 +63,71 @@ each contributing 1% of macro-F1 from that many draws.
   but we do not know the std for this model on this data. **Any accept rule with a
   margin under ~0.02 is provisional until C3 reports it.** This is flagged, not hidden.
 
-### 1b. BLOCKED — the cost axis cannot currently be computed
+### 1b. The cost axis — capital and volume, not energy *(rewritten 2026-09-08)*
 
-`configs/costs.yaml` has `local_hardware.device_cost_usd: null`, so amortised cost per
-request for Tier 0 and Tier 1 is **uncomputable**, and with it the x-axis of the Pareto
-frontier. Also null: `measured_throughput_rps`, every `per_tier_throughput` entry, and
-`fx.usd_per_inr_rate` is set but `device_cost_usd` is not derived from it.
+An earlier version of this section, and E6 with it, treated **energy as the asymptote
+that decides whether local inference ever wins**. **Measurement falsified that.**
 
-**E6 cannot be evaluated until these are filled and throughput is measured.** No
-latency-measurement harness exists yet either. Recorded here so it is not discovered
-at reporting time.
+Measured on the Mac Mini, ONNX-INT8, DeBERTa-v3-base architecture:
 
-## 2. Hypotheses
+| quantity | value |
+|----------|-------|
+| throughput | **28.97 ± 0.24 req/s** (4 runs, bs=1, max_length 512) |
+| SoC power under load | 16.0 W *(package only — see caveat)* |
+| energy | 0.526 J / request |
+
+```
+1000 clauses / 28.97 req/s        = 34.5 s
+16.0 W x 34.5 s                   = 552 J = 0.000153 kWh
+at $0.085/kWh                     = $0.0000130 per 1000 clauses
+Sonnet 5 (batch, cached)          = $0.4483   per 1000 clauses
+                          ratio   ~ 1 : 34,000
+```
+
+**Energy is ~1/34,000 of the API line.** The local curve's asymptote is effectively
+zero, and **capital dominates entirely**. Even a 10x correction from SoC to wall power
+leaves it ~1/3,400 — the conclusion is insensitive to the measurement caveat below.
+
+**E6 therefore turns on capital treatment and volume.** Both cases are reported; neither
+is privileged, which removes the researcher degree of freedom that picking an
+amortisation window would have introduced:
+
+| case | assumption | local cost/1k | result |
+|------|-----------|---------------|--------|
+| **Greenfield** | hardware bought for this workload; capital attributable | $633.86 / V per 1k | **V\* ≈ 1.41M clauses** for Tier 0 alone, higher for the cascade by 1/(1 − escalation_rate) |
+| **Sunk capital** | the Mac Mini already exists (it does) | ~$0.000013 per 1k | **local wins from the first clause** |
+
+**Both are correct under their own assumption, and the honest report gives both.** The
+greenfield number carries a hard consequence worth stating plainly: **LEDGAR is ~80,000
+clauses in total, so at realistic contract-review volume greenfield local hardware never
+breaks even** — V\* is ~18x the entire corpus. A reader deploying on hardware they
+already own reaches the opposite conclusion. The volume at which those two answers
+swap is the finding.
+
+`V_max` (what the device can process in its life) is **685,230,000** clauses at 3 years
+and 25% duty — far above V\*, so under the greenfield case the device does not die
+before break-even; it simply needs ~18 corpora of work to get there.
+
+**Power measurement caveat, stated precisely.** `powermetrics --samplers cpu_power`
+reports "Combined Power (CPU + GPU + ANE)" — **SoC package power only**. It excludes
+RAM, SSD, PSU losses, networking and fans, so it is **not wall power**, and a machine
+reporting 0.2 W idle here draws several watts at the wall. Wall power cannot be
+obtained from `powermetrics` at all; it needs an external meter. Fields are named
+`*_soc_watts` so no report can claim more than was measured. Given the 34,000x margin
+this does not change any conclusion, but the number must be what it says it is.
+
+**Still outstanding for E6:**
+
+| input | status |
+|-------|--------|
+| Tier 0 throughput | **measured** 28.97 ± 0.24 req/s |
+| `device_cost_usd` | **derived** $633.86 (59,900 INR ÷ 94.50, FX dated 2026-09-07) |
+| Tier 0 SoC power | first reading taken with a defective harness; **re-measure** |
+| Tier 0 wall power | not obtainable without a meter; **optional given the margin** |
+| Tier 1 throughput | **not measured** — needs the trained adapter under MLX |
+| escalation rate | from the router sweep, simulated offline at zero cost |
+
+## 2. Hypotheses## 2. Hypotheses
 
 > **DRAFT.**
 
@@ -286,12 +339,13 @@ at reporting time.
 - **Accept rule — attaches to the CROSSOVER, not to a point on the curve:**
   1. **Accuracy:** cascade macro-F1 within **0.04** of Sonnet-5-alone on `test_3000`
      (the unpaired floor from §1a — the strongest claim the test set supports); **and**
-  2. **Crossover exists and is reachable:** a finite crossover volume *V\** exists at
-     which the cascade becomes cheaper than Sonnet-5-alone, **and V\* ≤ V_max** — the
-     device can physically process that many clauses within its life; **and**
+  2. **Crossover, reported under BOTH capital treatments** (see §1b): greenfield
+     (capital attributable, V\* finite and ≤ V_max) and sunk-capital (marginal cost
+     only). Neither is privileged; both curves appear in the report; **and**
   3. **Asymptote:** the cascade's high-volume cost/1k is **< 50%** of
-     Sonnet-5-alone's — i.e. the saving survives after the hardware is fully amortised
-     and only energy remains.
+     Sonnet-5-alone's. Measurement has made this nearly automatic — energy is ~1/34,000
+     of the API line — so condition 3 is now a **sanity check, not a discriminator**,
+     and E6 rests on conditions 1 and 2.
 - **V\* IS THE REPORTED RESULT, NOT A TEST.** An earlier draft required *V\** ≤ 1,000,000
   clauses. **That number was picked, not anchored** — the same defect as E1's original
   0.70 — and no source fixes what volume a "realistic deployment" reaches; it depends

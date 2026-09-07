@@ -40,17 +40,26 @@ class BenchResult:
     p50_latency_ms: float
     p95_latency_ms: float
     p99_latency_ms: float
-    idle_watts: float | None
-    load_watts: float | None
-    marginal_watts: float | None
+    idle_soc_watts: float | None
+    load_soc_watts: float | None
+    marginal_soc_watts: float | None
     joules_per_request: float | None
+    power_scope: str = "soc_package_cpu_gpu_ane_excludes_ram_ssd_psu_fans"
 
     def as_dict(self) -> dict:
         return asdict(self)
 
 
 def measure_power(seconds: int = 20) -> float:
-    """Mean package power in watts via `powermetrics`. Raises if unavailable.
+    """Mean **SoC package** power in watts via `powermetrics`. Raises if unavailable.
+
+    IMPORTANT — what this number is and is not. `--samplers cpu_power` reports
+    "Combined Power (CPU + GPU + ANE)": the power drawn by the SoC package only. It
+    EXCLUDES RAM, SSD, PSU losses, networking and fans, so it is NOT wall power. A Mac
+    Mini that reports ~0.2 W idle here draws several watts at the wall. For a dedicated
+    device, E6 wants wall power, which cannot be obtained from powermetrics at all —
+    it needs an external meter (a smart plug). Fields are named `*_soc_watts`
+    throughout so the report cannot claim more than was measured.
 
     Hard rule 11: no fallback. A missing power figure makes E6's asymptote wrong in
     exactly the region the hypothesis is about, so a throughput-only result must not
@@ -82,17 +91,32 @@ def measure_power(seconds: int = 20) -> float:
     return statistics.mean(watts)
 
 
-def bench_onnx(onnx_dir: Path, texts: list[str], batch_size: int, max_length: int):
-    """Time ONNX-INT8 inference. Returns (per-request latencies ms, wall seconds)."""
-    import numpy as np
+def load_runtime(onnx_dir: Path):
+    """Load tokenizer and ORT session ONCE.
+
+    Loading was previously inside bench_onnx, so the power-measurement spin loop
+    re-initialised a 245 MB session on every pass and measured model loading rather
+    than inference. Timing was unaffected (loading sat outside the timer), but the
+    watt figure was not.
+    """
     import onnxruntime as ort
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(str(onnx_dir))
-    model_file = next(onnx_dir.glob("*.onnx"))
-    sess = ort.InferenceSession(str(model_file), providers=["CPUExecutionProvider"])
-    inputs = {i.name for i in sess.get_inputs()}
+    sess = ort.InferenceSession(str(next(onnx_dir.glob("*.onnx"))),
+                                providers=["CPUExecutionProvider"])
+    return tok, sess, {i.name for i in sess.get_inputs()}
 
+
+def bench_onnx(runtime, texts: list[str], batch_size: int, max_length: int):
+    """Time ONNX-INT8 inference. Returns (per-request latencies ms, wall seconds).
+
+    Tokenisation is INSIDE the timed region — it is part of serving cost. Model and
+    tokenizer loading is outside it, done once by load_runtime.
+    """
+    import numpy as np
+
+    tok, sess, inputs = runtime
     latencies: list[float] = []
     t0 = time.perf_counter()
     for i in range(0, len(texts), batch_size):
@@ -132,8 +156,10 @@ def main() -> int:
     split = get_split(ds, man.split)
     texts = list(split.select(man.indices[: args.n])["text"])
 
+    print(f"loading runtime…")
+    runtime = load_runtime(args.onnx_dir)
     print(f"warming up ({args.warmup} rows)…")
-    bench_onnx(args.onnx_dir, texts[: args.warmup], args.batch_size, args.max_length)
+    bench_onnx(runtime, texts[: args.warmup], args.batch_size, args.max_length)
 
     idle = load_w = marginal = joules = None
     if not args.skip_power:
@@ -141,7 +167,7 @@ def main() -> int:
         idle = measure_power(20)
 
     print(f"benchmarking {len(texts)} rows, batch {args.batch_size}…")
-    lat, wall = bench_onnx(args.onnx_dir, texts, args.batch_size, args.max_length)
+    lat, wall = bench_onnx(runtime, texts, args.batch_size, args.max_length)
     rps = len(texts) / wall
 
     if not args.skip_power:
@@ -151,7 +177,7 @@ def main() -> int:
 
         def spin():
             while not stop.is_set():
-                bench_onnx(args.onnx_dir, texts[:64], args.batch_size, args.max_length)
+                bench_onnx(runtime, texts[:64], args.batch_size, args.max_length)
 
         t = threading.Thread(target=spin, daemon=True)
         t.start()
@@ -167,19 +193,21 @@ def main() -> int:
         p50_latency_ms=lat[len(lat) // 2],
         p95_latency_ms=lat[int(0.95 * len(lat))],
         p99_latency_ms=lat[int(0.99 * len(lat))],
-        idle_watts=idle, load_watts=load_w, marginal_watts=marginal,
+        idle_soc_watts=idle, load_soc_watts=load_w, marginal_soc_watts=marginal,
         joules_per_request=joules,
     )
     print("\n" + "=" * 60)
     print(f"  throughput      : {rps:.2f} req/s")
     print(f"  latency p50/p95 : {res.p50_latency_ms:.1f} / {res.p95_latency_ms:.1f} ms")
     if joules is not None:
-        print(f"  power idle/load : {idle:.1f} / {load_w:.1f} W "
-              f"(marginal {marginal:.1f} W)")
+        print(f"  SoC power idle/load : {idle:.2f} / {load_w:.2f} W "
+              f"(marginal {marginal:.2f} W)")
+        print( "    NOTE: SoC package only (CPU+GPU+ANE). Excludes RAM, SSD, PSU, fans.")
+        print( "    Wall power needs an external meter; powermetrics cannot report it.")
         print(f"  energy          : {joules:.3f} J/request")
         print("\n  -> paste into configs/costs.yaml local_hardware:")
         print(f"       measured_throughput_rps: {rps:.2f}")
-        print(f"       power_draw_watts: {load_w:.1f}")
+        print(f"       power_draw_soc_watts: {load_w:.2f}   # NOT wall power")
         print(f"     and per_tier_throughput.{args.tier}.requests_per_second: {rps:.2f}")
     else:
         print("  POWER NOT MEASURED — this result is INCOMPLETE and must not be used "
