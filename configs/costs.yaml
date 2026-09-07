@@ -104,18 +104,28 @@ local_hardware:
   # Any INR-derived number in the report must be stated alongside the FX rate and its date.
   device_lifetime_years: 3
   duty_cycle: 0.25                 # fraction of wall-clock the box actually serves
-  assumed_lifetime_requests: null  # DERIVED from throughput, never assumed
-  measured_throughput_rps: null    # must be MEASURED
+  # MEASURED 2026-09-07 on the Mac Mini, ONNX INT8, DeBERTa-v3-base architecture,
+  # max_length 512, batch size 1 (the fastest of 1/8/16/32 — see results/bench_*).
+  # NOTE: measured on an UNTRAINED checkpoint of identical architecture. Throughput is
+  # weight-independent (same ops, same shapes), so it transfers; re-verify on the
+  # trained INT8 artefact when it exists.
+  assumed_lifetime_requests: 713344320   # = rps * 3600*24*365 * 3y * 0.25 duty
+  measured_throughput_rps: 30.16
   # Optional energy term. Null = excluded from the amortized figure. An
   # energy-inclusive number is stronger than pure capital cost if we can measure it.
   power_draw_watts: null
   electricity_cost_usd_per_kwh: null
   per_tier_throughput:
     tier0_encoder_onnx_int8:
-      requests_per_second: null
-      p50_latency_ms: null
-      p95_latency_ms: null
-      batch_size: null
+      requests_per_second: 30.16
+      p50_latency_ms: 24.7
+      p95_latency_ms: 79.2
+      batch_size: 1
+      max_length: 512
+      # batch-size sweep (throughput req/s): bs1 30.16 | bs8 10.96 | bs16 9.38 | bs32 8.13
+      # max_length 256 at bs8: 17.03 rps, p50 63.8ms  (E7 latency input)
+      measured_on: "untrained checkpoint, identical architecture; weight-independent"
+      power_draw_watts: null   # BLOCKS E6 — needs powermetrics under sudo
     tier1_qwen2_5_1_5b_instruct:
       requests_per_second: null
       p50_latency_ms: null
