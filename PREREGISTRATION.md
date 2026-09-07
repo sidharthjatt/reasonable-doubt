@@ -122,7 +122,18 @@ cannot distinguish "still working" from "died". This is the same defect as
 in the same audit.
 
 Consequence: **hard rule 11** (no silent degradation) was written after #1 and has since
-caught #2, #3 and #4. The standing mitigation is that any library default touching a
+caught #2, #3 and #4.
+
+**Practice note — two readings before declaring a limit.** Two claims have been
+retracted, and both had the same shape: *a structural fact inferred from a single
+observation.* (i) The `anthropic` SDK signature lacking `temperature` was taken to mean
+the API rejects it; the API in fact validates and honours it. (ii) One reading of
+`x-ratelimit-remaining-requests` was taken to mean a hard daily cap; a second reading
+showed the counter refilling, i.e. a rolling window. Standing practice: **before
+declaring any limit, quota, or capability, take at least two readings separated in time
+and show the delta** — and include a control that is known to behave the opposite way
+(the `definitely_not_a_real_param` → HTTP 400 probe is what made the temperature result
+conclusive rather than merely suggestive). One sample describes a moment, not a rule. The standing mitigation is that any library default touching a
 measured or billed quantity must be explicitly reviewed, not inherited — and where a
 degraded value is legitimately wanted, the caller must ask for it by name
 (`allow_absent_classes=True`, `assume_cache_hits=False`).
