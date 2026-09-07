@@ -710,6 +710,43 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3o. Notebook defect 9 — verifying the wrong property, twice
+
+`SFTConfig` was guarded with `try: from trl import SFTConfig / except ImportError`.
+The import succeeds; **the signature is what changed.** TRL renamed `max_seq_length`
+to `max_length`, so the run died with `TypeError` at seed 1.
+
+**This is the third instance of the same reasoning error**, alongside the two already
+in §3e: the temperature parameter validated on Haiku and assumed for Sonnet, and one
+rate-limit reading generalised to a quota model. The shape is *checking a proxy for the
+property you care about*: import presence for signature compatibility, one model for
+all models, one reading for a rule.
+
+**Structural fix — a PREFLIGHT block at the top of both notebooks**, before the dataset
+downloads and before any weights load, so a signature error surfaces in ~10 seconds:
+
+* the sequence-length kwarg is **resolved by introspection** (`max_length` vs
+  `max_seq_length`), never assumed, and the chosen name is printed;
+* every kwarg passed to `SFTConfig`, `SFTTrainer`, `LoraConfig`, `TrainingArguments`,
+  `Trainer`, `DataCollatorWithPadding`, `AutoQuantizationConfig.arm64` and
+  `ORTQuantizer.quantize` is checked against the **installed** signature;
+* semantic defaults are asserted, not trusted: `packing is False` (packing would
+  concatenate examples so the LABEL no longer ends its own prompt) and
+  `dataset_text_field == "text"`. Note `max_length` defaults to **1024** — a silently
+  dropped kwarg would have truncated exactly as §3m defect 3 did;
+* callables taking `**kwargs` are reported as **NOT VERIFIABLE**, not as passing.
+  Claiming introspection had verified `from_pretrained` would repeat the original error.
+
+Versions are pinned to what was introspected: **transformers 4.57.6, trl 1.12.0,
+peft 0.20.0**. torch is deliberately unpinned — Kaggle's build is CUDA-matched.
+
+**Correction to §3m defect 2, found here:** TRL's collator pads via its own
+`trl.trainer.utils.pad()`, whose `padding_side` defaults to `"right"`, and `SFTTrainer`
+never reads `tok.padding_side`. So the training-side padding fix is **belt-and-braces,
+not the operative mechanism**; it remains only because a future TRL version could start
+honouring it. The measured 1.34 loss drift is real, and the fix is genuinely load-bearing
+for the **eval** loop, which calls `tok()` directly.
+
 ### 3n. Notebook defect 8 — an invariant established once, mutated per iteration
 
 Found in review after §3m's fixes, before any GPU time.

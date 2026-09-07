@@ -12,8 +12,63 @@
 # GENERATIVE, not a classification head: Tier 1 is served via mlx_lm.server, so it must
 # emit a label STRING as it will at serving time (same reason E1 attaches to INT8).
 # =============================================================================
-!pip -q install "transformers>=4.44" "datasets>=2.19" peft trl accelerate \
-    bitsandbytes sentencepiece scikit-learn 2>&1 | tail -2
+# PINNED. These exact versions were introspected locally and every kwarg this cell
+# passes was checked against their real signatures (see PREFLIGHT below). Unpinned
+# ranges are how `max_seq_length` -> `max_length` broke a run at seed 1.
+#   transformers 4.57.6 | trl 1.12.0 | peft 0.20.0
+# torch is deliberately NOT pinned — Kaggle's build is CUDA-matched to its drivers.
+!pip -q install "transformers==4.57.6" "trl==1.12.0" "peft==0.20.0" \
+    "datasets>=2.19" accelerate bitsandbytes sentencepiece scikit-learn 2>&1 | tail -3
+
+# =============================================================================
+# PREFLIGHT — runs FIRST, before the dataset downloads and before any weights load.
+# A signature error must surface in ~10 seconds, not two minutes in, and never
+# after hours of training.
+#
+# The rule this enforces: NEVER assume a third-party kwarg name. `SFTConfig` imports
+# fine but renamed `max_seq_length` to `max_length`; checking that the class imports
+# verified the wrong thing. Every kwarg below is checked against the INSTALLED
+# signature, and the sequence-length name is RESOLVED at runtime rather than guessed.
+# =============================================================================
+import inspect
+
+def _params(obj):
+    """Accepted parameter names, covering dataclasses and **kwargs-style classes."""
+    target = obj.__init__ if inspect.isclass(obj) else obj
+    names = set(inspect.signature(target).parameters)
+    names |= set(getattr(obj, "__dataclass_fields__", {}))
+    return names
+
+def _resolve(cls, candidates, what):
+    """Pick whichever alias this version actually accepts. Raise if none do."""
+    have = _params(cls)
+    for c in candidates:
+        if c in have:
+            print(f"  PREFLIGHT: {cls.__name__}.{what} -> {c!r}")
+            return c
+    raise RuntimeError(
+        f"{cls.__name__} accepts none of {candidates} for {what}. Available "
+        f"parameters: {sorted(n for n in have if not n.startswith('_'))}")
+
+def _accepts_var_kwargs(obj):
+    target = obj.__init__ if inspect.isclass(obj) else obj
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in inspect.signature(target).parameters.values())
+
+def _require(cls, kwargs, label):
+    """Fail if a kwarg is not accepted. If the callable takes **kwargs, say so —
+    introspection CANNOT verify it, and claiming otherwise would be the same
+    mistake as checking that SFTConfig imports."""
+    if _accepts_var_kwargs(cls):
+        print(f"  PREFLIGHT: {label} takes **kwargs — NOT VERIFIABLE by introspection "
+              f"({len(kwargs)} kwargs unchecked)")
+        return
+    missing = [k for k in kwargs if k not in _params(cls)]
+    if missing:
+        raise RuntimeError(
+            f"{label} does not accept {missing}. Available: "
+            f"{sorted(n for n in _params(cls) if not n.startswith('_'))}")
+    print(f"  PREFLIGHT: {label} accepts all {len(kwargs)} kwargs")
 
 import os, json, gc, hashlib, random, re, shutil, unicodedata
 from pathlib import Path
@@ -25,12 +80,7 @@ from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import SFTTrainer
 # max_seq_length lives on SFTConfig in current TRL, NOT TrainingArguments — passing it
 # to TrainingArguments raises TypeError. Import defensively.
-try:
-    from trl import SFTConfig
-    HAS_SFTCONFIG = True
-except ImportError:
-    from transformers import TrainingArguments as SFTConfig
-    HAS_SFTCONFIG = False
+from trl import SFTConfig
 
 WORK = Path("/kaggle/working"); WORK.mkdir(exist_ok=True)
 MODEL = "Qwen/Qwen2.5-1.5B-Instruct"   # record the actual model in PREREGISTRATION (E4)
@@ -50,7 +100,38 @@ EVAL_BS = 8            # halved automatically on OOM; 2560-token prompts are lar
 MAX_NEW_TOKENS = 16                    # longest label = 5 tokens + eos; 16 is 2.7x margin
 EVAL_N = 3000
 HOLDOUT_SHA12, TEST3000_SHA12 = "97eebc04d0c7", "e719c1109069"
-print(f"trl SFTConfig available: {HAS_SFTCONFIG}")
+import transformers as _tf, trl as _trl, peft as _peft
+print(f"versions: transformers {_tf.__version__} | trl {_trl.__version__} | "
+      f"peft {_peft.__version__}")
+print("PREFLIGHT — validating every third-party signature before anything expensive")
+
+# 1. Resolve the sequence-length kwarg by introspection, never by assumption.
+SEQ_LEN_KW = _resolve(SFTConfig, ["max_length", "max_seq_length"], "sequence length")
+
+# 2. Every other kwarg this cell passes, checked against the installed signature.
+_require(SFTConfig, ["output_dir","seed","num_train_epochs","learning_rate",
+    "per_device_train_batch_size","gradient_accumulation_steps","fp16","logging_steps",
+    "save_strategy","save_steps","save_total_limit","report_to",
+    "gradient_checkpointing"], "SFTConfig")
+_require(SFTTrainer, ["model","train_dataset","peft_config","args"], "SFTTrainer")
+_require(LoraConfig, ["r","lora_alpha","lora_dropout","bias","task_type",
+    "target_modules"], "LoraConfig")
+_require(BitsAndBytesConfig, ["load_in_4bit","bnb_4bit_quant_type",
+    "bnb_4bit_compute_dtype","bnb_4bit_use_double_quant"], "BitsAndBytesConfig")
+_require(AutoModelForCausalLM.from_pretrained, ["device_map","quantization_config"],
+         "AutoModelForCausalLM.from_pretrained")
+
+# 3. Defaults that change SEMANTICS, asserted rather than trusted.
+_f = SFTConfig.__dataclass_fields__
+assert _f["packing"].default is False, (
+    "SFTConfig.packing defaults True in this version — packing concatenates examples "
+    "into fixed blocks, so the LABEL would no longer sit at the end of its own prompt.")
+assert _f["dataset_text_field"].default == "text", (
+    f"dataset_text_field default is {_f['dataset_text_field'].default!r}, not 'text'")
+print(f"  PREFLIGHT: packing={_f['packing'].default}, "
+      f"dataset_text_field={_f['dataset_text_field'].default!r}, "
+      f"{SEQ_LEN_KW} default={_f[SEQ_LEN_KW].default} (we override it)")
+print("PREFLIGHT PASSED\n")
 
 # ---- split guard (duplicated so the cell is standalone) ----------------------
 REPORTING = {"test_3000", "test_stratified_764", "test"}
@@ -170,6 +251,11 @@ for seed in SEEDS:
         base = prepare_model_for_kbit_training(
             AutoModelForCausalLM.from_pretrained(MODEL, device_map=DEVICE_MAP,
                                                  quantization_config=quant))
+        # NOTE: TRL's collator pads via its own trl.trainer.utils.pad(), whose
+        # padding_side defaults to "right", and SFTTrainer never reads
+        # tok.padding_side — so for TRAINING this is belt-and-braces, not the
+        # mechanism. It matters for the EVAL loop below, which calls tok() directly.
+        # Kept because a future TRL version could start honouring it.
         # ESTABLISH the invariant for this seed — never inherit it. The previous
         # seed's eval left it as "left"; without this line seed 2 onward would fail
         # the assert below after hours of work, and a re-run would only shift the
@@ -183,7 +269,7 @@ for seed in SEEDS:
             gradient_accumulation_steps=GA, fp16=True, logging_steps=100,
             save_strategy="steps", save_steps=500, save_total_limit=2,
             report_to=[], gradient_checkpointing=True)
-        if HAS_SFTCONFIG: cfg_kw["max_seq_length"] = MAX_LEN
+        cfg_kw[SEQ_LEN_KW] = MAX_LEN   # name resolved by PREFLIGHT, not assumed
         trainer = SFTTrainer(model=base, train_dataset=train_txt,
             peft_config=LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none",
                 task_type="CAUSAL_LM",

@@ -9,8 +9,31 @@
 # Registered as E1 (CE baseline, 3 seeds) and E2 (loss arms). Selection happens
 # on train_holdout_3000 ONLY — the guard below refuses dev and test.
 # ============================================================================
-!pip -q install "transformers>=4.44" "datasets>=2.19" sentencepiece protobuf \
-    "optimum[onnxruntime]" onnx onnxruntime evaluate scikit-learn 2>&1 | tail -2
+# PINNED — introspected locally; see PREFLIGHT below. transformers 4.57.6.
+!pip -q install "transformers==4.57.6" "datasets>=2.19" sentencepiece protobuf \
+    "optimum[onnxruntime]" onnx onnxruntime scikit-learn 2>&1 | tail -3
+
+# ---- PREFLIGHT: verify signatures BEFORE the dataset downloads or weights load ----
+import inspect
+
+def _params(o):
+    t = o.__init__ if inspect.isclass(o) else o
+    return set(inspect.signature(t).parameters) | set(getattr(o, "__dataclass_fields__", {}))
+
+def _accepts_var_kwargs(o):
+    t = o.__init__ if inspect.isclass(o) else o
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in inspect.signature(t).parameters.values())
+
+def _require(cls, kwargs, label):
+    if _accepts_var_kwargs(cls):
+        print(f"  PREFLIGHT: {label} takes **kwargs — NOT VERIFIABLE ({len(kwargs)} unchecked)")
+        return
+    missing = [k for k in kwargs if k not in _params(cls)]
+    if missing:
+        raise RuntimeError(f"{label} does not accept {missing}. Available: "
+                           f"{sorted(n for n in _params(cls) if not n.startswith('_'))}")
+    print(f"  PREFLIGHT: {label} accepts all {len(kwargs)} kwargs")
 
 import os, json, gc, hashlib, random, shutil
 from pathlib import Path
@@ -21,6 +44,24 @@ from datasets import load_dataset
 from sklearn.metrics import f1_score
 from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
                           DataCollatorWithPadding, Trainer, TrainingArguments)
+
+import transformers as _tf
+print(f"versions: transformers {_tf.__version__}")
+print("PREFLIGHT — validating signatures before anything expensive")
+_require(TrainingArguments, ["output_dir","seed","num_train_epochs","learning_rate",
+    "per_device_train_batch_size","per_device_eval_batch_size","eval_strategy",
+    "save_strategy","load_best_model_at_end","metric_for_best_model","greater_is_better",
+    "save_total_limit","fp16","report_to","logging_steps","dataloader_num_workers"],
+    "TrainingArguments")
+_require(Trainer, ["model","args","train_dataset","eval_dataset","data_collator",
+                   "compute_metrics"], "Trainer")
+_require(DataCollatorWithPadding, ["tokenizer"], "DataCollatorWithPadding")
+from optimum.onnxruntime.configuration import AutoQuantizationConfig as _AQC
+from optimum.onnxruntime import ORTQuantizer as _ORTQ
+assert hasattr(_AQC, "arm64"), "AutoQuantizationConfig.arm64 missing in this optimum"
+_require(_AQC.arm64, ["is_static","per_channel"], "AutoQuantizationConfig.arm64")
+_require(_ORTQ.quantize, ["save_dir","quantization_config"], "ORTQuantizer.quantize")
+print("PREFLIGHT PASSED\n")
 
 WORK = Path("/kaggle/working"); WORK.mkdir(exist_ok=True)
 MODEL = "microsoft/deberta-v3-base"
