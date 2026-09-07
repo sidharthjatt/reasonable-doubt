@@ -91,17 +91,18 @@ at reporting time.
 
 | id | description | accept rule | status |
 |----|-------------|-------------|--------|
-| C3 | Measure the seed-variance and paired-bootstrap floors | descriptive — no accept rule; **gates every rule below with a margin under 0.02** | planned |
-| E1 | Tier 0: DeBERTa-v3-base, unweighted CE, 3 seeds | macro-F1 ≥ 0.70 on `test_3000` | planned |
-| E2 | Tier 0 loss arms vs E1 (a: sqrt-inv-freq, b: effective-number, c: inv-freq) | best arm beats E1 by ≥ 0.04 unpaired, or ≥ 2× the C3 paired floor | planned |
-| E3 | INT8 vs FP32 at the deployed precision | INT8 macro-F1 within 0.01 of FP32, paired on identical rows | planned |
-| E4 | Tier 1: Qwen2.5-1.5B-Instruct QLoRA, 3 seeds | macro-F1 ≥ E1 + 0.04, else Tier 1 is not justified | planned |
-| E5 | Routing signal: margin vs max-softmax vs entropy, on `dev_2000` | best signal AUROC ≥ 0.75 AND ≥ 0.05 above the worst | planned |
-| E6 | **Cascade Pareto** — the headline result | within 0.04 macro-F1 of Sonnet-5-alone at < 50% of its USD/1k | **BLOCKED by §1b** |
-| E7 | `max_length` 256 vs 512 latency ablation | 256 loses < 0.02 macro-F1 AND is ≥ 1.5× faster | planned |
-| C1 | Calibration-set robustness (see 3a) | thresholds agree within 1 decile of the signal distribution | planned |
-| C2 | Few-shot confidence anchoring probe (see 3b) | few-shot confidence sd ≤ 0.5× zero-shot sd | planned |
-| C4 | Exemplar class over-prediction probe (see 3d) | over-predicted by ≥ 2× its zero-shot rate | planned |
+| C3 | Measure seed-variance and paired-bootstrap floors | descriptive — no accept rule; **gates E2, E3, E7** | planned |
+| E1 | Tier 0: DeBERTa-v3-base, CE baseline, 3 seeds | **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8 artefact**, FP32 reported alongside. Anchored to LexGLUE Table 3 (DeBERTa m-F1 83.1) | planned |
+| E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
+| E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | planned **[C3-gated]** |
+| E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04**; else Tier 1 not justified → E4b | planned |
+| E4b | Two-tier `Tier 0 → Claude` fallback | E6's rule with Tier 1 removed. **Registered before E4 runs** | registered |
+| E5 | Routing signal: margin vs max-softmax vs entropy | best **AUROC ≥ 0.75** AND **≥ 0.05** above worst, on `dev_2000` only | planned |
+| E6 | **Cost-vs-volume break-even curve** — the headline | (1) within **0.04** macro-F1 of Sonnet-5-alone; (2) finite crossover **V\* ≤ V_max**; (3) asymptote **< 50%** of Sonnet-5. **V\* is reported, not tested** | **BLOCKED by §1b** |
+| E7 | `max_length` 256 vs 512 ablation | loses **< 0.02** macro-F1 paired AND **≥ 1.5×** faster; per-class deltas required | planned **[C3-gated]** |
+| C1 | Calibration-set robustness (§3a) | thresholds agree within **1 decile** AND escalation within **3pp** | planned |
+| C2 | Few-shot confidence anchoring (§3b) | **Sonnet 5 ONLY**: few-shot sd **≤ 0.5×** zero-shot sd AND mode within 0.02 of 0.9 | planned |
+| C4 | Exemplar class over-prediction (§3d) | 3× class predicted at **≥ 2×** its zero-shot rate AND above every 1× class; **+2pp fallback if zero-shot rate < 1%** | planned |
 
 ### C3 — Noise-floor measurement *(no accept rule; this is instrumentation)*
 
@@ -121,9 +122,15 @@ at reporting time.
 
 - **Hypothesis:** A fine-tuned DeBERTa-v3-base classifies LEDGAR clauses well enough to
   serve as the cascade's first tier.
-- **Metric / split:** macro-F1 on `test_3000`; epoch chosen on `train_holdout_3000`.
-  Mean ± std over seeds 1, 2, 3.
-- **Accept rule:** **macro-F1 ≥ 0.80 on `test_3000`.**
+- **Metric / split:** macro-F1 on `test_3000`, **both precisions reported, INT8
+  headline**; epoch chosen on `train_holdout_3000`. Mean ± std over seeds 1, 2, 3.
+- **Accept rule:** **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8
+  artefact**, with the FP32 figure reported alongside it.
+- **Why INT8 is the number the rule attaches to:** INT8 is what deploys. An FP32 accept
+  would certify a system that is never served (see E3, and hard rule 11). If INT8 clears
+  0.80 and FP32 does not, that is impossible in practice and indicates a measurement
+  bug; if FP32 clears and INT8 does not, **E1 is NOT met** — the deployed tier failed,
+  and E3's delta explains why.
 - **Provenance of the number — ANCHORED, and a correction.** An earlier draft proposed
   0.70 and justified it with a vague appeal to "published baselines in the high 0.7s".
   **That was picked, not anchored, and it was wrong by ~13 points.** The actual figures,
@@ -279,19 +286,26 @@ at reporting time.
 - **Accept rule — attaches to the CROSSOVER, not to a point on the curve:**
   1. **Accuracy:** cascade macro-F1 within **0.04** of Sonnet-5-alone on `test_3000`
      (the unpaired floor from §1a — the strongest claim the test set supports); **and**
-  2. **Crossover:** the crossover volume *V** where the cascade becomes cheaper than
-     Sonnet-5-alone is **≤ 1,000,000 clauses** and **≤ V_max** for one device; **and**
+  2. **Crossover exists and is reachable:** a finite crossover volume *V\** exists at
+     which the cascade becomes cheaper than Sonnet-5-alone, **and V\* ≤ V_max** — the
+     device can physically process that many clauses within its life; **and**
   3. **Asymptote:** the cascade's high-volume cost/1k is **< 50%** of
      Sonnet-5-alone's — i.e. the saving survives after the hardware is fully amortised
      and only energy remains.
-- **Reasoning for the numbers:** 1M clauses is roughly 12 years of LEDGAR's own test
-  split, and is proposed as the outer edge of "a real deployment could reach this". A
-  crossover beyond `V_max` means **the device dies before it breaks even**, which is a
-  clean negative. The 50% asymptote condition prevents an accept driven purely by
-  amortisation arithmetic rather than by the cascade doing anything useful.
-- **Falsification:** no finite crossover below 1M and V_max, or an asymptote above 50%
-  ⇒ the cascade does not pay for itself at realistic volume. **Report the full curve
-  regardless** — a negative break-even result is exactly what measuring was for.
+- **V\* IS THE REPORTED RESULT, NOT A TEST.** An earlier draft required *V\** ≤ 1,000,000
+  clauses. **That number was picked, not anchored** — the same defect as E1's original
+  0.70 — and no source fixes what volume a "realistic deployment" reaches; it depends
+  entirely on the reader's situation. So the crossover volume is **reported as the
+  finding** ("local overtakes Sonnet-5 at V\* = N clauses"), and the reader judges it
+  against their own volume. Only conditions 1 and 3, which are anchored — the §1a noise
+  floor and a materiality threshold — function as accept rules.
+- **Reasoning for the anchored numbers:** 0.04 is the measured unpaired floor from §1a,
+  the strongest accuracy claim `test_3000` supports. `V_max` is measured, not chosen: a
+  crossover beyond it means **the device dies before it breaks even**, a clean negative.
+  The 50% asymptote condition prevents an accept driven purely by amortisation
+  arithmetic rather than by the cascade doing anything useful.
+- **Falsification:** no finite crossover at or below `V_max`, or an asymptote above
+  50% ⇒ the cascade does not pay for itself. **Report the full curve and V\* regardless** — a negative break-even result is exactly what measuring was for.
 
 - **⚠ STILL BLOCKED, see §1b.** `device_cost_usd` is null (59,900 INR and an FX rate are
   recorded but the USD figure is not derived), `measured_throughput_rps` and every
@@ -596,6 +610,47 @@ coverage, and the mix bias is small enough to ignore.
   explicit, preregistered ablation.
 - A 4-exemplar run uses the **first 4** of the frozen 8, so it is a strict subset of
   the 8-exemplar run and the two remain comparable.
+
+## 3h. Whole-file verification checklist
+
+Run before signing, and again before the final report. Every row is checkable by
+reading the file; **`match` is filled in by a human, not asserted here.**
+
+| # | section | expected | present? | match? |
+|---|---------|----------|----------|--------|
+| 1 | §1 Primary | macro-F1 named primary; accuracy, format-failure, truncation, escalation named secondary | ✅ | |
+| 2 | §1 Cost | USD/1,000 clauses; all rates from `configs/costs.yaml` (hard rule 5) | ✅ | |
+| 3 | §1 Uncertainty | ≥3 seeds mean±std (hard rule 2); paired bootstrap for same-row comparisons | ✅ | |
+| 4 | §1 Splits | four disjoint roles; enforced by `src/train/splits.py`, tested in `tests/test_splits.py` | ✅ | |
+| 5 | §1a | noise floors measured BEFORE any accept rule was written | ✅ ±0.0145 / ±0.0154 | |
+| 6 | §1b | cost-axis blockers listed with the specific null fields | ✅ | |
+| 7 | §2 | H1, H2, H3 each with a rationale and a way to be wrong | ✅ | |
+| 8 | E1 | anchored to a cited source (LexGLUE Table 3); INT8 headline | ✅ 0.80 | |
+| 9 | E2 | margin uses the paired/seed component, not the unpaired floor | ✅ [C3-gated] | |
+| 10 | E3 | INT8 vs FP32 paired; FP32-as-headline explicitly prohibited | ✅ ≤0.01 | |
+| 11 | E4 | Tier 1 model recorded before the run; Llama-vs-Qwen substitution rule stated | ✅ | |
+| 12 | E4b | two-tier fallback registered BEFORE E4 runs | ✅ | |
+| 13 | E5 | dev-only (hard rule 1); all three signals from the same logits | ✅ | |
+| 14 | E6 | curve is the deliverable; V\* reported not tested; power mandatory | ✅ | |
+| 15 | E7 | per-class deltas required, not just the aggregate | ✅ | |
+| 16 | C1 | tolerance stated in BOTH threshold and escalation-rate units | ✅ | |
+| 17 | C2 | scoped to Sonnet 5; null on compressed models ≠ evidence against anchoring | ✅ | |
+| 18 | C3 | gates every rule with a margin under 0.02; no accept rule of its own | ✅ | |
+| 19 | C4 | direction predicted in advance; <1% rate fallback registered in advance | ✅ | |
+| 20 | §3e | five instances; class stated as "failures that present as normal operation" | ✅ | |
+| 21 | §3f | Stage 1 output budgets; Sonnet residual risk stated as unmeasured | ✅ | |
+| 22 | §3g | `test_stratified_764` retired for the correct reason, rebuild trigger stated | ✅ | |
+| 23 | all | every accept rule has a falsification condition | ✅ | |
+| 24 | all | every number is anchored, or explicitly flagged as picked | ✅ | |
+| 25 | hard rule 7 | negative/rejected results stay in the report | ✅ E1, E2, E4→E4b, E6 | |
+
+**Known-unsettable at signing time, by design:**
+
+| rule | why it cannot be filled yet | unblocked by |
+|------|----------------------------|--------------|
+| E2 margin | `seed_sd` unmeasured | C3 |
+| E3 / E7 tolerances | provisional under 0.02 | C3 |
+| E6 conditions 2 and 3 | `device_cost_usd`, throughput, power all null | §1b + the Mac Mini harness |
 
 ## 4. Results log
 
