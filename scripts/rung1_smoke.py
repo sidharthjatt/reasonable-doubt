@@ -50,8 +50,16 @@ from src.data.schema import ParseFailure, parse_response  # noqa: E402
 # Haiku FIRST: it is the cheaper model, so if the money path is broken we find out on
 # the cheaper half. Same 20 rows for both, so token counts are directly comparable.
 MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-5"]
-MAX_TOKENS = 64          # the JSON answer is ~25 tokens; no reasoning block on Claude
+MAX_TOKENS = 64          # the JSON answer is ~25 tokens
 TEMPERATURE = 0.0
+
+# Extended thinking is EXPLICITLY DISABLED rather than left to a server-side default.
+# Rung 0 showed twice what happens when a reasoning budget eats the output budget:
+# gpt-oss returned empty content at 128 tokens, Qwen still truncated at 512. On a paid
+# model a truncated response still bills for the output tokens it burned. The SDK omits
+# this key by default, but the SDK also exposes an "adaptive" thinking mode, so we state
+# our intent in the payload instead of relying on what the default happens to be.
+THINKING = {"type": "disabled"}
 
 
 class AnthropicCounterAdapter:
@@ -109,18 +117,24 @@ def main() -> int:
     print(f"models        : {' then '.join(MODELS)} (same rows, same prompt)")
     print(f"batch         : NO   caching: NO   temperature: {TEMPERATURE}   "
           f"max_tokens: {MAX_TOKENS}")
+    print(f"thinking      : {THINKING['type'].upper()} — stated explicitly in the payload, "
+          "not inherited from a default")
     print(f"ledger        : {ledger.path}")
     print(f"recorded spend: ${ledger.cumulative_usd():,.4f}   "
           f"hard stop ${ledger.hard_stop_usd:,.2f}")
 
     # ------------------------------------------------------- exact request payload
-    example = {
-        "model": MODELS[0],
-        "max_tokens": MAX_TOKENS,
-        "temperature": TEMPERATURE,
-        "system": prompt.text,
-        "messages": [{"role": "user", "content": clauses[0]}],
-    }
+    def build_params(model: str, clause: str) -> dict:
+        return {
+            "model": model,
+            "max_tokens": MAX_TOKENS,
+            "temperature": TEMPERATURE,
+            "thinking": THINKING,
+            "system": prompt.text,
+            "messages": [{"role": "user", "content": clause}],
+        }
+
+    example = build_params(MODELS[0], clauses[0])
     print("\n" + "-" * 72)
     print("EXACT REQUEST PAYLOAD (row 1 of 20, system prompt elided for length)")
     print("-" * 72)
@@ -207,13 +221,118 @@ def main() -> int:
 
     print("\n" + "=" * 72)
     projected = require_confirmation(combined, ledger, confirm=args.confirm)
-    print(f"Proceeding. Projected cumulative after this rung: ${projected:,.4f}")
+    print(f"Proceeding. Projected cumulative after this rung: ${projected:,.4f}\n")
 
-    # ... send path deliberately below the gate; unreachable without --confirm.
-    raise SystemExit(
-        "\nSEND PATH NOT YET IMPLEMENTED — this script currently stops at the gate by "
-        "design. Rung 1 execution is added once the payload above has been reviewed."
-    )
+    # ---------------------------------------------------------------- send
+    normalizer = LabelNormalizer(load_labels())
+    results: dict[str, dict] = {}
+
+    for model in MODELS:
+        print("=" * 72)
+        print(f"SENDING — {model}")
+        print("=" * 72)
+        usage_total = None
+        rows_out = []
+
+        for i, (row, clause) in enumerate(zip(rows, clauses)):
+            params = build_params(model, clause)
+            key = provider.cache_key(
+                model, system=prompt.text,
+                messages=params["messages"],
+                params={k: params[k] for k in ("temperature", "max_tokens", "thinking")},
+            )
+            entry = cache.get_or_none(key)
+            if entry is not None:
+                body, usage_block = entry.response, entry.usage
+            else:
+                message = client.messages.create(**params)
+                body = message.model_dump()
+                usage_block = body["usage"]
+                # Cache BEFORE use (hard rule 3): a crash after the call must never
+                # cause the same prompt to be paid for twice.
+                cache.put(key, body, usage=usage_block, request_params=params)
+
+            # Thinking must be off. Verify against the RESPONSE, not our intent.
+            blocks = [b.get("type") for b in body.get("content", [])]
+            if any(b in ("thinking", "redacted_thinking") for b in blocks):
+                raise RuntimeError(
+                    f"{model} row {row}: response contains a thinking block "
+                    f"{blocks!r} despite thinking={THINKING}. Stop and investigate — "
+                    "a reasoning budget will truncate answers and bill for it."
+                )
+            if body.get("stop_reason") == "max_tokens":
+                print(f"  WARNING row {row}: stop_reason=max_tokens — answer truncated "
+                      f"at the {MAX_TOKENS}-token budget, and billed for it.")
+
+            u = provider.parse_usage(usage_block, model=model)
+            usage_total = u if usage_total is None else usage_total + u
+
+            text = "".join(b.get("text", "") for b in body.get("content", [])
+                           if b.get("type") == "text")
+            try:
+                parsed = parse_response(text)
+                label = normalizer.normalize(parsed.label)
+                conf = parsed.confidence
+            except ParseFailure:
+                label, conf = None, None
+
+            rows_out.append({
+                "row": row, "gold": gold[i], "predicted": label,
+                "confidence": conf, "raw": text,
+                "stop_reason": body.get("stop_reason"),
+                "usage": u.as_dict(),
+                "predicted_input_tokens": per_model_tokens[model]["per_request_input_tokens"][i],
+            })
+            print(f"  [{i + 1:2d}/{len(rows)}] row {row:<4} gold={gold[i]:<24} "
+                  f"pred={str(label):<24} conf={conf}")
+
+        est = estimates[model]
+        entry = ledger.record_actual(
+            f"rung1_{model}", usage_total, provider="anthropic", model=model,
+            batch=False, cache_ttl="5m", estimated_usd=est.gating_usd,
+            n_requests=len(rows), notes="Rung 1 smoke test; no batch, no caching",
+        )
+        results[model] = {
+            "usage": usage_total.as_dict(),
+            "estimated_usd": est.gating_usd,
+            "actual_usd": entry.cost_usd,
+            "predicted_input_tokens": per_model_tokens[model]["total_input_tokens"],
+            "rows": rows_out,
+        }
+        print(f"\n  estimated ${est.gating_usd:.6f}  ->  ACTUAL ${entry.cost_usd:.6f}"
+              f"  ({entry.cost_usd / est.gating_usd - 1:+.1%})")
+        print(f"  cumulative spend: ${ledger.cumulative_usd():.6f}\n")
+
+    # ---------------------------------------------------- reconciliation report
+    print("=" * 72)
+    print("RECONCILIATION")
+    print("=" * 72)
+    print(f"{'model':<28} {'pred in':>9} {'actual in':>10} {'delta':>8} "
+          f"{'est $':>9} {'actual $':>9}")
+    for model in MODELS:
+        r = results[model]
+        pred, act = r["predicted_input_tokens"], r["usage"]["input_tokens"]
+        print(f"{model:<28} {pred:>9,} {act:>10,} {act / pred - 1:>+7.1%} "
+              f"{r['estimated_usd']:>9.6f} {r['actual_usd']:>9.6f}")
+
+    ha, so = (results[m]["usage"]["input_tokens"] for m in MODELS)
+    print(f"\nTOKENIZER DELTA, actual billed input on identical text: "
+          f"{so / ha - 1:+.1%} ({so:,} vs {ha:,})")
+    print(f"\nTOTAL SPENT THIS RUNG: ${sum(r['actual_usd'] for r in results.values()):.6f}")
+    print(f"CUMULATIVE           : ${ledger.cumulative_usd():.6f} of "
+          f"${ledger.hard_stop_usd:.2f}")
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps({
+        "rung": 1, "manifest": manifest.name,
+        "manifest_sha256": manifest.text_sha256,
+        "prompt_sha256": prompt.sha256, "rows": rows,
+        "max_tokens": MAX_TOKENS, "temperature": TEMPERATURE, "thinking": THINKING,
+        "batch": False, "caching": False, "models": results,
+        "cache_stats": cache.cache_stats().as_dict(),
+    }, indent=2), encoding="utf-8")
+    print(f"\nWrote {args.out}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -93,6 +93,28 @@ over-predicted in few-shot relative to zero-shot.
 - **Predicted direction, recorded BEFORE the run:** yes — it will be over-predicted.
 - **Accept rule:** _(TODO — state the statistic and threshold, before running)_
 
+### 3e. Recorded failure class — library defaults that are wrong for this project
+
+Recorded **before** any paid run, so it is on the record that these were found by
+audit rather than discovered in a run we had paid for.
+
+All three bugs found so far share one shape: **a library or convention default that is
+reasonable in general and wrong for us, which degrades to a plausible number instead of
+raising.** None would have thrown an error. Each would have produced a figure that
+looked ordinary in a results table.
+
+| # | Default | Reasonable in general because | Wrong for us because | Found |
+|---|---------|-------------------------------|----------------------|-------|
+| 1 | `chars/4` token estimate as a tokenizer fallback | a rough token count is usually fine for capacity planning | it was ~30% off — the same magnitude as the Claude 4.7+ tokenizer effect this project exists to measure | Block 2 EDA |
+| 2 | `re.compile(r"\{.*\}", DOTALL)` to extract JSON from model output | greedy brace matching works when there is exactly one object | reasoning models emit DRAFT objects inside `<think>`; first-object parsing returns a confidently wrong label rather than an error | Rung 0, qwen3.6-27b |
+| 3 | `sklearn` `f1_score(zero_division=0)` | scoring an undefined class as 0.0 avoids a crash | it silently deflates macro-F1 in proportion to absent classes — worst on the long tail, which is exactly where the cascade must be measured | Block 4 audit |
+
+Consequence: **hard rule 11** (no silent degradation) was written after #1 and has since
+caught #2 and #3. The standing mitigation is that any library default touching a
+measured or billed quantity must be explicitly reviewed, not inherited — and where a
+degraded value is legitimately wanted, the caller must ask for it by name
+(`allow_absent_classes=True`, `assume_cache_hits=False`).
+
 ### 3c. Standing methodological limitations
 
 - **Exemplar selection policy was not ablated due to budget constraints.** Few-shot

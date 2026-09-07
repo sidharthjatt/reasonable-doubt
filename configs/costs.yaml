@@ -137,8 +137,17 @@ budget:
     stage_1:
       name: "Zero-shot baselines"
       runs: [sonnet5_zeroshot_3000, haiku45_zeroshot_3000]
-      estimated_usd: 3.00
-      max_usd: 7.00
+      # REVISED 2026-09-07 after measuring real token counts. The original 3.00/7.00
+      # was written before we knew the 100-label system prompt dominates every
+      # request: the cacheable prefix is 793 tok (Haiku) / 1084 tok (Sonnet), i.e.
+      # ~87% of a mean uncached request. Figures below are batch (0.5x), 3000 rows
+      # per model, output budgeted at the 64-token max.
+      #   UNCACHED (gating) : Haiku $1.84 + Sonnet $4.72 = $6.56
+      #   CACHED, 1h TTL    : Haiku $0.77 + Sonnet $1.80 = $2.56
+      # Gating on the uncached figure per hard rule 8; cache hits in batch are
+      # best-effort and must never be assumed by a budget guard.
+      estimated_usd: 2.56    # if prompt caching engages as hoped
+      max_usd: 7.00          # uncached worst case is $6.56; 7.00 retains headroom
       gate: >
         After stage 1 completes, read usage.cache_read_input_tokens and
         usage.cache_creation_input_tokens from the returned results and compute the
