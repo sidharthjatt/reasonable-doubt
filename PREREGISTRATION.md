@@ -936,6 +936,67 @@ number already shown to be unreliable. The guard is therefore behavioural —
 `assert_caching_engaged` (src/api/usage.py) fails a run whose cache fields are all
 zero — not a comparison against any published minimum.
 
+### 3k-RESULT. Stage 1 scored against §3k — the prediction is FALSIFIED (2026-09-08)
+
+Batch `msgbatch_014FYs1h3L4cVNYDke9hnXvn` (6,000 requests) and the few-shot batch
+`msgbatch_01QbUfqihLGmwG3wkYJVZuMU` (1,000) both ended; all 7,000 succeeded, 0 failed.
+Recorded once each in `results/spend_ledger.jsonl`. Cumulative spend **$3.5815** of the
+$15.00 hard stop.
+
+| leg | n | input (uncached) | cache_write | cache_read | output | est → actual |
+|-----|---|------------------|-------------|------------|--------|--------------|
+| stage1 Haiku 4.5 | 3000 | 2,797,272 | 0 | 0 | 72,246 | $6.9373 → **$1.5793** (−77.2%) |
+| stage1 Sonnet 5 | 3000 | 641,463 | **0** | 3,240,000 | 68,570 | $4.5543 → **$1.3083** (−71.3%) |
+| fewshot Sonnet 5 | 1000 | 216,946 | **2,702** | 2,699,298 | 22,789 | $3.1401 → **$0.6062** (−80.7%) |
+
+**Scored against §3k's own accept rule, which was written before submission:**
+
+| §3k predicted | observed | verdict |
+|---------------|----------|---------|
+| Sonnet cache writes **> 1, plausibly many** | **0** | **falsified** — fewer than Rung 2's one, not more |
+| Sonnet hit rate **materially below 74.2%** | **83.5%** | **falsified** — §3k: "a hit rate at or above 74.2% falsifies the prediction" |
+| Sonnet cost **> $1.3449** | **$1.3083** | **falsified** |
+| Haiku **0 writes / 0 reads** | 0 / 0 | **confirmed** (793-token prefix, below the minimum, §3j) |
+
+**Why Stage 1's Sonnet leg wrote nothing.** 3,240,000 / 3,000 = exactly **1,080 tokens
+read per request** — every one of the 3,000 was a read. Rung 2 wrote that same prefix
+(identical `prompt_sha256` `29a4c26e…`) at 17:55 UTC under a 1h TTL; Stage 1 was
+submitted ~18:00, and each read refreshes the TTL. **Stage 1 never met a cold prefix, so
+it never tested the concurrency mechanism at all.** Its hit rate beats Rung 2's precisely
+because Rung 2 already paid the one write that Stage 1 then rode for free. Recording the
+prediction as falsified on this leg alone would be scoring it on a run that could not
+have confirmed it either.
+
+**The few-shot leg does test the mechanism, and also refutes it.** Different prompt
+(`prompt_sha256` `cb9498ce…`), therefore a genuinely **cold** prefix, with 1,000 requests
+submitted at once:
+
+    cache_creation_input_tokens  2,702       = one prefix, written once
+    cache_read_input_tokens  2,699,298       = 2,699,298 / 2,702 = 999.0 exactly
+
+**One cold prefix, one thousand concurrent requests, exactly one write and 999 reads.**
+§3k's premise — that requests starting before the first write lands each pay their own
+write — did not hold at n=1000. The mechanism as described is wrong, not merely
+mis-sized.
+
+**What this does and does not license.** It falsifies §3k as written; that is settled.
+It is **not** a basis for asserting "batch caching always writes once." Per §3e this is
+**one cold-prefix batch, on one model, at one n**: untested at n=3000, untested on Haiku,
+untested for a prefix near the caching minimum, and untested across the
+submission-timing variation that §3k's mechanism was actually about. The honest summary
+is that the n=10 → n=3000 extrapolation §3k doubted turned out **sound** on this
+evidence, and the reason it doubted it turned out **not to be a real effect at n=1000**.
+
+**Retained consequences, which stand regardless.** §3k's budget note holds: gating
+assumed zero cache hits throughout (hard rule 8), so every leg came in far under its
+estimate and nothing was over-spent. And the behavioural guard `assert_caching_engaged`
+remains the right instrument — the two Sonnet legs would have been indistinguishable
+from "caching silently stopped working" on any check that compared token counts against
+a published minimum.
+
+**Kept under hard rule 7.** This is a preregistered prediction that was wrong, scored by
+the rule it shipped with, and it stays in the report.
+
 ### 3l. E2 arm selection, recorded BEFORE the run (2026-09-07)
 
 **Decision: one arm, `sqrt_inv_freq`, at 3 seeds. Not three arms at fewer seeds.**
