@@ -20,6 +20,10 @@ crashed with `LoraConfig object has no attribute 'velora_config'`.
    Restart button in the session panel. This step is not optional.
 3. Paste **CELL 2** (everything after the `CELL 2 of 2` banner) and run it.
 
+**Never use Run All, on any notebook, on any run — first or resumed.** Run All executes
+both cells in one kernel with no restart in between, which is the failure this protocol
+exists to prevent. The three steps above are the only supported way to start a cell.
+
 CELL 2 begins by asserting the running versions match the pins and **raises** if they
 do not. Previously PREFLIGHT passed while running versions that had never been
 introspected; that is what this check prevents.
@@ -54,13 +58,21 @@ environment.
      everything — but it speeds up a resume.
 3. **Check your quota before starting**: the GPU hours remaining figure is shown in the
    session options panel. Tier 1 needs 9–15h, Tier 0 needs 3–5h, of a 30h weekly quota.
-4. Paste the whole `.py` file into **one cell**. Do not split it.
+4. **Split the `.py` file into two cells at the `CELL 2 of 2` banner.** Everything
+   above the banner is CELL 1; everything below it is CELL 2. Do **not** paste the file
+   into one cell, and do **not** use **Run All** — either one runs the install and the
+   training code in the same kernel, with no restart between them, which is exactly how
+   the last two sessions were lost.
 
 ---
 
 ## Tier 1 — `kaggle_tier1.py` (start this first)
 
-Paste, then **Run All**. Expect 3–5 hours per seed, 3 seeds.
+CELL 1 → **restart the kernel** → run `kaggle_probe_qlora.py` (~2 min) → CELL 2.
+Expect 3–5 hours per seed, 3 seeds.
+
+The probe runs in its own cell *after* the restart and *before* CELL 2, in the same
+kernel CELL 2 will use. **If the probe fails, do not start Tier 1.**
 
 **A seed is finished when you see, in order:**
 
@@ -86,7 +98,14 @@ completion marker** — its presence is what makes a re-run skip the seed.
 
 ## Tier 0 — `kaggle_tier0.py`
 
-Same procedure. Expect ~1–1.5h per seed.
+Same protocol: CELL 1 → **restart the kernel** → run `kaggle_probe_tier0.py` (~90 s) →
+CELL 2. Expect ~1–1.5h per seed.
+
+Tier 0 is the notebook that **downgrades a preloaded package** (`transformers`
+5.0.0 → 4.57.6), so it carries *more* mixed-install risk than Tier 1, not less, and its
+ONNX export does not run until 3–5 hours in. **If the probe fails, do not start
+Tier 0** — a failure there is a failure you would otherwise have met after a full
+training run.
 
 Early on you must see:
 ```
@@ -99,9 +118,11 @@ A seed is finished when `tier0_ce_seed1.json` appears in `/kaggle/working` and y
 the selection metrics printed. Final line:
 `ALL SEEDS DONE — download /kaggle/working/*.json, *.npz and int8_* dirs`
 
-**To run E2's arm afterwards:** change one line near the top,
-`LOSS_ARM = "ce"` → `LOSS_ARM = "sqrt_inv_freq"`, and Run All again. Results land under
-different filenames, so nothing is overwritten. **Do this only after C3 reports**
+**To run E2's arm afterwards:** change one line near the top of CELL 2,
+`LOSS_ARM = "ce"` → `LOSS_ARM = "sqrt_inv_freq"`, then re-run **CELL 2 only** — the
+environment is already installed and the kernel already restarted, so CELL 1 must not
+be re-run in that kernel. Results land under different filenames, so nothing is
+overwritten. **Do this only after C3 reports**
 (see PREREGISTRATION §3l — the sequencing is CE 3 seeds → C3 → sqrt_inv_freq 3 seeds).
 
 ---
@@ -109,8 +130,35 @@ different filenames, so nothing is overwritten. **Do this only after C3 reports*
 ## If a session dies
 
 This is expected — Kaggle caps session length, and both notebooks are built for it.
+The *resume* is checkpoint-driven and needs nothing from you; the *environment* is what
+you have to get right, and **Run All is now the wrong answer for a resume too.**
 
-**Do exactly this: open the notebook again and Run All. Nothing else.**
+Two invariants govern every run, first or resumed:
+
+> **CELL 1 may only run in a kernel that has not yet imported the pinned packages.**
+> **CELL 2 may only run in a kernel that was restarted after CELL 1 last ran.**
+
+Run All violates the second on a first run, and can violate the first on a resume.
+
+**Which case are you in?** Restart the kernel, then run this in a scratch cell — it
+imports nothing that CELL 1 replaces, so it is safe in either case:
+
+```python
+import importlib.metadata as md
+for pkg in ("transformers", "peft", "trl"):   # Tier 0: transformers, optimum, onnxruntime
+    try: print(pkg, md.version(pkg))
+    except md.PackageNotFoundError: print(pkg, "NOT INSTALLED")
+```
+
+| what it prints | you are in | do this |
+|----------------|-----------|---------|
+| the pinned versions | **same session**, packages survived — kernel restart or interrupt only | run **CELL 2 only**. Do not re-run CELL 1. |
+| Kaggle's stock versions, or `NOT INSTALLED` | **new session**, fresh container | CELL 1 → **restart** → probe → CELL 2, the full protocol |
+
+If you cannot tell, take the second row: CELL 1 → restart → probe → CELL 2 is always
+correct, and costs about three minutes.
+
+Once CELL 2 is running, the resume itself is automatic:
 
 - Seeds whose `*_seed*.json` exists are **skipped** — you will see
   `seed 1: already complete, skipping`.
@@ -169,5 +217,5 @@ them offline at zero cost, so losing them means re-running the GPU work.
 | `pip` errors, no internet | Internet toggle off | turn it on, restart session |
 | `CUDA out of memory` (Tier 1) | batch too large for the assigned GPU | lower `BS` from 4 to 2; `GA` compensates |
 | `assert ... holdout sha` | dataset or sampling changed | **stop and report** — do not work around it |
-| session ends silently mid-training | Kaggle time cap | re-run the cell; it resumes |
+| session ends silently mid-training | Kaggle time cap | see **If a session dies** — check the versions first, then CELL 2 or the full protocol. Not Run All |
 | `bitsandbytes` import error | CPU-only session | accelerator is not set to GPU |
