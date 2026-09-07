@@ -182,3 +182,88 @@ def test_prompt_metadata_is_recorded_for_provenance(ledgar, labels):
     assert len(meta["prompt_sha256"]) == 64
     assert len(meta["template_sha256"]) == 64
     assert len(meta["exemplar_indices"]) == 4
+
+
+# ---------------------------------------------------------------------------
+# Reasoning-model output.
+#
+# Rung 0 on qwen3.6-27b scored 7% parse rate. All 51 "malformed" outputs contained a
+# correct final JSON object after </think>: the model answered, the parser failed. The
+# thinking block routinely contains DRAFT objects, some with different labels and
+# confidences, so taking the first object in the text produces a confidently wrong
+# answer rather than an error — the worst possible failure.
+# ---------------------------------------------------------------------------
+
+THINK_WITH_DRAFTS = (
+    "\n<think>\nThis looks like a notices clause.\n"
+    'Draft: {"label": "Assignments", "confidence": 0.60}\n'
+    'Reconsidering: {"label": "Payments", "confidence": 0.75}\n'
+    "</think>\n\n"
+    '{"label": "Notices", "confidence": 0.99}'
+)
+
+
+def test_answer_is_taken_from_after_the_reasoning_block():
+    out = parse_response(THINK_WITH_DRAFTS)
+    assert out.label == "Notices"
+    assert out.confidence == 0.99
+
+
+def test_draft_objects_inside_reasoning_are_never_returned():
+    """The specific wrong answer a first-object parser would give."""
+    out = parse_response(THINK_WITH_DRAFTS)
+    assert out.label not in ("Assignments", "Payments")
+
+
+def test_unclosed_reasoning_block_is_a_parse_failure_not_a_salvaged_draft():
+    """An unclosed <think> means the model was cut off before answering. Salvaging a
+    draft would convert a truncation into a plausible wrong answer."""
+    truncated = '\n<think>\nProbably {"label": "Draft Guess", "confidence": 0.5}\nStill think'
+    with pytest.raises(ParseFailure):
+        parse_response(truncated)
+
+
+def test_strict_mode_still_rejects_reasoning_wrapped_output():
+    """Instruction-following is measured separately from answer extraction."""
+    with pytest.raises(ParseFailure):
+        parse_response(THINK_WITH_DRAFTS, strict=True)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '<think>x</think>{"label": "Waivers", "confidence": 0.5}',
+        '<think>x</think>\n\n{"label": "Waivers", "confidence": 0.5}',
+        '<THINK>x</THINK>{"label": "Waivers", "confidence": 0.5}',
+        '<think attr="1">x</think>{"label": "Waivers", "confidence": 0.5}',
+        '<think>a</think><think>b</think>{"label": "Waivers", "confidence": 0.5}',
+    ],
+)
+def test_reasoning_block_variants(raw):
+    assert parse_response(raw).label == "Waivers"
+
+
+def test_braces_inside_string_literals_do_not_break_the_scan():
+    raw = '<think>t</think>{"label": "Waivers", "confidence": 0.5, "note": "a } brace"}'
+    with pytest.raises(ParseFailure):
+        parse_response(raw)  # extra field is forbidden — but it must FAIL, not crash
+
+
+def test_escaped_quotes_inside_strings_do_not_break_the_scan():
+    raw = '<think>said \\"{\\" here</think>{"label": "Waivers", "confidence": 0.5}'
+    assert parse_response(raw).label == "Waivers"
+
+
+def test_trailing_prose_after_the_json_is_tolerated():
+    raw = '{"label": "Waivers", "confidence": 0.5}\n\nHope that helps!'
+    assert parse_response(raw).label == "Waivers"
+
+
+def test_multiple_objects_without_reasoning_takes_the_last():
+    raw = '{"label": "Terms", "confidence": 0.1} then actually {"label": "Waivers", "confidence": 0.9}'
+    assert parse_response(raw).label == "Waivers"
+
+
+def test_no_json_anywhere_still_fails():
+    with pytest.raises(ParseFailure):
+        parse_response("<think>thinking</think>\n\nI think it is a notices clause.")
