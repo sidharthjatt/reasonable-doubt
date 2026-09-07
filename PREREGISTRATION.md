@@ -549,6 +549,36 @@ the entry stays in the record either way (hard rule 7).
 wrong direction, and proved unnecessary. Haiku at some value between 64 and 128 — no
 measurement supports any particular intermediate.
 
+### 3i. Amendment — Sonnet output budget 48 → 40 (2026-09-07)
+
+**Trigger:** a pre-submission upper bound breached `stage_1.max_usd`.
+
+Input-token counts were first estimated from a **40-row** sample. A **600-row** sample
+(free `count_tokens`, paced under the 100 rpm org limit) showed the 40-row means were
+**low**, and gave sd 137.0 (Haiku) / 204.2 (Sonnet) — a long tail, as
+`results/data_report.md` predicted (p99 ≈ 550 clause tokens, 1.2–1.6% over 512).
+
+Gating is computed from a **one-sided upper bound, mean + 2·SE** on the total, with a
+finite-population correction, not from the point estimate:
+
+| Sonnet output budget | Batch 1 upper bound | vs `max_usd` $7.00 |
+|----------------------|---------------------|--------------------|
+| 48 (previous) | $7.0571 | **BREACHES by $0.0571** |
+| **40 (adopted)** | **$6.9371** | clears by $0.0629 |
+
+Note the point estimate at 48 was **$7.0013** — over the line on its own, so no amount
+of sampling precision would have rescued it. The trim was necessary, not marginal.
+
+**Why trim rather than raise `max_usd`:** loosening a budget guard to fit a change is
+the wrong direction. `max_usd` is unchanged at $7.00.
+
+**Residual risk, restated.** §3f already recorded that Sonnet's 48-token budget was
+~1.9× its observed maximum of 25 (n=20, zero truncations) and that 0/20 is compatible
+with a true overrun rate near 15%. **At 40 the headroom drops to ~1.6× that observed
+maximum, so the risk recorded in §3f increases.** It is still not measured. Stage 1
+must report Sonnet's truncation count at 40; if non-zero, both §3f and this amendment
+were wrong, and both stay in the record (hard rule 7).
+
 ### 3g. Retired — `test_stratified_764` (2026-09-07)
 
 **Status: retired before it was built. Not rejected on its merits.**

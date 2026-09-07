@@ -151,9 +151,13 @@ budget:
       # 22.1 / max 25 with none. Haiku gets 128 (5x its mean) because it truncated;
       # Sonnet gets 48 (~2x its observed max) because it never came close to 64.
       # Gating total $6.7981 — clears max_usd WITHOUT amending it.
+      # AMENDED 2026-09-07 (see PREREGISTRATION 3i): Sonnet 48 -> 40. A 600-row
+      # count_tokens sample put Batch 1's one-sided upper bound at $7.0571 with
+      # Sonnet at 48, breaching max_usd $7.00. Trimming to 40 gives $6.9371,
+      # clearing by $0.0629. max_usd was NOT raised.
       max_output_tokens:
         claude-haiku-4-5-20251001: 128
-        claude-sonnet-5: 48
+        claude-sonnet-5: 40
       estimated_usd: 2.80    # if prompt caching engages as hoped
       max_usd: 7.00          # uncached worst case is $6.80; NOT amended
       gate: >
