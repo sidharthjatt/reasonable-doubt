@@ -52,12 +52,12 @@ from src.data.schema import ParseFailure, parse_response  # noqa: E402
 MODELS = ["claude-haiku-4-5-20251001", "claude-sonnet-5"]
 MAX_TOKENS = 64          # the JSON answer is ~25 tokens
 
-# anthropic SDK 1.4.0 does NOT expose `temperature` or `top_p` on Messages.create —
-# they are absent from the signature, not merely defaulted. Sampling temperature is
-# therefore NOT pinnable on this API version. Recorded as a methodological limitation:
-# run-to-run variance must be MEASURED across seeds (hard rule 2) rather than assumed
-# away by a temperature=0 we cannot actually set.
-TEMPERATURE = None
+# anthropic SDK 1.4.0 dropped `temperature` from the Messages.create SIGNATURE, so
+# passing it as a kwarg raises TypeError client-side. The API still accepts and
+# VALIDATES it (range 0..1, type-checked; unknown fields are rejected outright), so it
+# is pinnable via extra_body. Verified 2026-09-07 by raw HTTP. Note that temperature 0
+# is not a determinism guarantee — seed variance is still measured (hard rule 2).
+TEMPERATURE = 0.0
 
 # Extended thinking is EXPLICITLY DISABLED rather than left to a server-side default.
 # Rung 0 showed twice what happens when a reasoning budget eats the output budget:
@@ -122,8 +122,8 @@ def main() -> int:
     print(f"prompt        : {prompt.template_name} sha256={prompt.sha256[:16]}…")
     print(f"models        : {' then '.join(MODELS)} (same rows, same prompt)")
     print(f"batch         : NO   caching: NO   max_tokens: {MAX_TOKENS}")
-    print("temperature   : NOT SETTABLE — anthropic SDK 1.4.0 removed it from "
-          "Messages.create")
+    print(f"temperature   : {TEMPERATURE} — pinned via extra_body (SDK 1.4.0 dropped the "
+          "kwarg; the API still validates it)")
     print(f"thinking      : {THINKING['type'].upper()} — stated explicitly in the payload, "
           "not inherited from a default")
     print(f"ledger        : {ledger.path}")
@@ -138,6 +138,8 @@ def main() -> int:
             "thinking": THINKING,
             "system": prompt.text,
             "messages": [{"role": "user", "content": clause}],
+            # SDK 1.4.0 has no `temperature` kwarg; the API does. See TEMPERATURE above.
+            "extra_body": {"temperature": TEMPERATURE},
         }
 
     example = build_params(MODELS[0], clauses[0])
@@ -245,7 +247,9 @@ def main() -> int:
             key = provider.cache_key(
                 model, system=prompt.text,
                 messages=params["messages"],
-                params={k: params[k] for k in ("max_tokens", "thinking")},
+                params={"max_tokens": params["max_tokens"],
+                        "thinking": params["thinking"],
+                        "temperature": TEMPERATURE},
             )
             entry = cache.get_or_none(key)
             if entry is not None:
@@ -334,7 +338,7 @@ def main() -> int:
         "manifest_sha256": manifest.text_sha256,
         "prompt_sha256": prompt.sha256, "rows": rows,
         "max_tokens": MAX_TOKENS, "temperature": TEMPERATURE,
-        "temperature_note": "not settable on anthropic SDK 1.4.0",
+        "temperature_note": "pinned via extra_body; SDK 1.4.0 dropped the kwarg",
         "thinking": THINKING,
         "batch": False, "caching": False, "models": results,
         "cache_stats": cache.cache_stats().as_dict(),

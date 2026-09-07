@@ -115,6 +115,53 @@ measured or billed quantity must be explicitly reviewed, not inherited — and w
 degraded value is legitimately wanted, the caller must ask for it by name
 (`allow_absent_classes=True`, `assume_cache_hits=False`).
 
+### 3f. Amendment — Stage 1 per-model output budgets (2026-09-07)
+
+**Decision: per-model output budgets, Haiku 128 / Sonnet 48. `max_usd` NOT amended.**
+
+Rung 1 showed Haiku truncating 1 of 20 responses at a 64-token budget. Raising Haiku to
+128 while leaving Sonnet at 64 lifts the uncached gating figure to **$7.0381**, which
+breaches `stage_1.max_usd` of $7.00 by $0.04.
+
+The unexamined assumption was that both models need the same budget. Measured output at
+Rung 1 (20 rows each):
+
+| model | mean out | max out | truncations |
+|-------|----------|---------|-------------|
+| Haiku 4.5 | 25.2 | 64 | 1 |
+| Sonnet 5 | 22.1 | 25 | 0 |
+
+Sonnet never exceeded 25 tokens, so its 64-token budget was ~2.6x its observed maximum
+and was reserving money it could not spend. Cutting Sonnet to 48 (~1.9x observed max)
+frees more than Haiku needs:
+
+| configuration | uncached gating | vs $7.00 |
+|---------------|-----------------|----------|
+| Haiku 64, Sonnet 64 (current) | $6.5581 | clears |
+| Haiku 128, Sonnet 64 | $7.0381 | **breaches by $0.04** |
+| **Haiku 128, Sonnet 48 (adopted)** | **$6.7981** | **clears, $0.20 spare** |
+| Haiku 128, Sonnet 32 | $6.5581 | clears, but only 1.3x Sonnet's observed max |
+
+**Why not the three options as framed:**
+
+- *Raise `max_usd`* — rejected. Loosening a budget guard to fit a change is the wrong
+  direction, and it was not necessary once the Sonnet budget was examined.
+- *Leave 64 and accept truncation* — rejected. 1/20 is a wide interval (roughly
+  0.1%–25% at 95%); if the true rate is near 5%, Stage 1 loses ~150 of 3000 Haiku rows,
+  degrading the very macro-F1 baseline the run exists to produce. That is a measurement
+  cost, not just a money cost.
+- *Budget Haiku below 128* — rejected as unprincipled: no measurement supports any
+  particular intermediate value.
+
+**Honest limitation.** Haiku's single truncation was not budget starvation — the answer
+needs ~25 tokens. It emitted a fenced answer carrying an INVENTED label, then began
+self-correcting and ran out of room. 128 tokens gives that excursion more room to land,
+but does not prevent it. The truncation rate at 128 is therefore an open question that
+Stage 1's 3000 rows will answer; it is not assumed fixed.
+
+**Rejected-experiment note:** Sonnet 32 was considered and rejected for insufficient
+headroom over a maximum observed on only 20 samples.
+
 ### 3c. Standing methodological limitations
 
 - **Exemplar selection policy was not ablated due to budget constraints.** Few-shot
@@ -124,11 +171,26 @@ degraded value is legitimately wanted, the caller must ask for it by name
   N=8 it covers 8% of the label space, which does not achieve label coverage and so
   cannot justify distorting the class prior. The full label list in the system prompt
   already conveys the taxonomy; the exemplars' job is to demonstrate output format.
-- **Sampling temperature is not settable.** `anthropic` SDK 1.4.0 removes
-  `temperature` and `top_p` from `Messages.create` entirely — they are absent from the
-  signature, not defaulted. Runs therefore cannot be pinned to `temperature=0`, and
-  run-to-run variance must be MEASURED across seeds (hard rule 2) rather than assumed
-  away. Discovered at Rung 1, 2026-09-07.
+- **Sampling temperature IS pinnable, via `extra_body`.** *(Corrected 2026-09-07; an
+  earlier version of this entry claimed the opposite and was wrong.)* `anthropic` SDK
+  1.4.0 removes `temperature` from the `Messages.create` signature, so passing it as a
+  kwarg raises `TypeError` **client-side, before any HTTP request**. That is an SDK
+  fact, not an API fact. The API still accepts and validates it:
+
+  | request | result |
+  |---------|--------|
+  | `temperature=0.0` | HTTP 200 |
+  | `temperature=2.0` | HTTP 400 — `temperature: range: 0..1` |
+  | `temperature=-1.0` | HTTP 400 — `` `temperature` cannot be set to -1 for this model`` |
+  | `temperature="hot"` | HTTP 400 — `temperature: Input should be a valid number` |
+  | `definitely_not_a_real_param=123` (control) | HTTP 400 — `Extra inputs are not permitted` |
+
+  The control line is what makes this conclusive: unknown fields are rejected, so a
+  200 on `temperature=0.0` plus range- and type-validation means the parameter is
+  parsed and honoured, not silently discarded. All runs therefore pin
+  `temperature=0.0` through `extra_body`, and `temperature` stays in the cache key.
+  Seed-based variance measurement under hard rule 2 remains required regardless —
+  temperature 0 is not a determinism guarantee.
 - **Structured output was available and deliberately not used.** SDK 1.4.0 exposes
   `output_config.format` (JSON schema enforcement). Adopting it would drive the format
   failure rate to ~0 by construction — but format failure rate is a *measured* quantity

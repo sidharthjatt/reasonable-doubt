@@ -146,8 +146,16 @@ budget:
       #   CACHED, 1h TTL    : Haiku $0.77 + Sonnet $1.80 = $2.56
       # Gating on the uncached figure per hard rule 8; cache hits in batch are
       # best-effort and must never be assumed by a budget guard.
-      estimated_usd: 2.56    # if prompt caching engages as hoped
-      max_usd: 7.00          # uncached worst case is $6.56; 7.00 retains headroom
+      # Output budgets are PER MODEL, set from measured output length at Rung 1
+      # (20 rows each): Haiku mean 25.2 / max 64 with one truncation; Sonnet mean
+      # 22.1 / max 25 with none. Haiku gets 128 (5x its mean) because it truncated;
+      # Sonnet gets 48 (~2x its observed max) because it never came close to 64.
+      # Gating total $6.7981 — clears max_usd WITHOUT amending it.
+      max_output_tokens:
+        claude-haiku-4-5-20251001: 128
+        claude-sonnet-5: 48
+      estimated_usd: 2.80    # if prompt caching engages as hoped
+      max_usd: 7.00          # uncached worst case is $6.80; NOT amended
       gate: >
         After stage 1 completes, read usage.cache_read_input_tokens and
         usage.cache_creation_input_tokens from the returned results and compute the

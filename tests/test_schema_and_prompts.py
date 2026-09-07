@@ -267,3 +267,79 @@ def test_multiple_objects_without_reasoning_takes_the_last():
 def test_no_json_anywhere_still_fails():
     with pytest.raises(ParseFailure):
         parse_response("<think>thinking</think>\n\nI think it is a notices clause.")
+
+
+# ---------------------------------------------------------------------------
+# Fenced JSON.
+#
+# Haiku 4.5 emitted ```json fences on Rung 1 row 5 — but that response carried an
+# INVENTED label, so the parser returning None there proved nothing about fence
+# handling. Fence extraction with a VALID label was unexercised until these tests.
+# ---------------------------------------------------------------------------
+
+VALID = '{"label": "Governing Laws", "confidence": 0.93}'
+
+
+def test_fenced_json_with_a_valid_label():
+    assert parse_response(f"```json\n{VALID}\n```").label == "Governing Laws"
+
+
+def test_fenced_json_bare_fence_no_language_tag():
+    assert parse_response(f"```\n{VALID}\n```").label == "Governing Laws"
+
+
+def test_fenced_json_with_leading_prose():
+    raw = f"Here is my classification:\n\n```json\n{VALID}\n```"
+    out = parse_response(raw)
+    assert out.label == "Governing Laws" and out.confidence == 0.93
+
+
+def test_fenced_json_with_trailing_prose():
+    raw = f"```json\n{VALID}\n```\n\nLet me know if you need anything else."
+    assert parse_response(raw).label == "Governing Laws"
+
+
+def test_fenced_json_with_prose_on_both_sides():
+    raw = f"Sure!\n\n```json\n{VALID}\n```\n\nHope that helps."
+    assert parse_response(raw).label == "Governing Laws"
+
+
+def test_fence_opened_but_never_closed():
+    """The Rung 1 row-5 shape: a fence opens, and the response is cut off. The brace
+    scan must still recover the object, since the JSON itself completed."""
+    assert parse_response(f"```json\n{VALID}").label == "Governing Laws"
+
+
+def test_fence_opened_and_json_itself_truncated():
+    """Nothing recoverable — must FAIL rather than return a half-parsed object."""
+    with pytest.raises(ParseFailure):
+        parse_response('```json\n{"label": "Governing Laws", "confid')
+
+
+def test_fenced_json_inside_a_reasoning_block_is_ignored():
+    """A draft in a fence inside <think> must not beat the real answer."""
+    raw = (
+        '<think>\nDraft: ```json\n{"label": "Waivers", "confidence": 0.3}\n```\n</think>\n\n'
+        f"{VALID}"
+    )
+    assert parse_response(raw).label == "Governing Laws"
+
+
+def test_the_actual_rung1_row5_haiku_output_returns_none():
+    """Verbatim from the paid run. The fence parses, but the label is invented, so
+    the normalizer — not the parser — rejects it. Recorded as a format failure."""
+    raw = (
+        '```json\n{"label": "Restrictions On Transfers", "confidence": 0.15}\n```\n\n'
+        'Wait, let me reconsider. "Restrictions On Transfers" is not in the permitted '
+        "labels list. Looking at the actual content of this provision, it addresses:\n\n"
+        "1. Compliance"
+    )
+    parsed = parse_response(raw)
+    assert parsed.label == "Restrictions On Transfers"   # parser did its job
+    assert LabelNormalizer(load_labels()).normalize(parsed.label) is None  # not a label
+
+
+def test_strict_mode_rejects_every_fenced_form():
+    for raw in (f"```json\n{VALID}\n```", f"```\n{VALID}\n```", f"prose\n```json\n{VALID}\n```"):
+        with pytest.raises(ParseFailure):
+            parse_response(raw, strict=True)
