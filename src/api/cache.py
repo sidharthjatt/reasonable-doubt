@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.api.redaction import assert_no_secrets
+
 __all__ = [
     "CACHE_FORMAT_VERSION",
     "DEFAULT_CACHE_DIR",
@@ -266,6 +268,9 @@ class ResponseCache:
             request_params=dict(request_params or {}),
             timestamp_utc=datetime.now(timezone.utc).isoformat(),
         )
+        # Point-of-write guard: never persist secret material (see redaction.py).
+        assert_no_secrets(entry.to_json(), context=f"cache entry for {key.model_id}")
+
         path = self.path_for(key)
 
         if path.exists():

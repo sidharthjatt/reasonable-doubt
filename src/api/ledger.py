@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.api.cost import compute_cost, load_rate_card
+from src.api.redaction import assert_no_secrets
 from src.api.usage import Usage
 
 __all__ = [
@@ -345,6 +346,9 @@ class SpendLedger:
     # ------------------------------------------------------------------ writing
 
     def _append(self, entry: LedgerEntry) -> LedgerEntry:
+        # The ledger is version-controlled (hard rule 12), so a leak here would be
+        # committed. Guard at the point of write.
+        assert_no_secrets(entry.as_dict(), context=f"ledger entry for run {entry.run_id}")
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry.as_dict(), ensure_ascii=False) + "\n")
             fh.flush()
