@@ -714,6 +714,59 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3v. The resume rests on an unchecked filesystem assumption (2026-09-08)
+
+Lever 1 (§3u) spreads seeds across quota windows and depends entirely on a resume. The
+resume depends on checkpoints in `/kaggle/working` still existing next session.
+**Nothing has ever checked that they do**, and the belief differs by run mode:
+
+* **interactive**, Persistence = "Files only": believed to persist;
+* **commit** (Save & Run All): believed **not** to. Each version runs in a fresh
+  container, and the previous run's `/kaggle/working` becomes **that version's output**
+  rather than the next run's working directory.
+
+If the second is right, every commit starts seed 1 at `(fresh)` and lever 1 does not
+work on the commit path at all — discovered nine hours in. **The plan's load-bearing
+assumption was a filesystem behaviour nobody had tested**, which is §3e's shape exactly:
+not a wrong number, an unexamined default that would have presented as normal operation
+until it silently repeated 13.4 h of work.
+
+Kaggle's documentation cannot settle it — its pages render client-side and return no
+text to a fetch, the same wall met on quota accounting and the session cap. **So it is
+settled by measurement**, not argument: `notebooks/kaggle_probe_persist.py`, three
+commits of ~1 minute. It runs with **Accelerator = None**, so answering a filesystem
+question costs **zero GPU quota**. Run 1 writes a marker plus a checkpoint-shaped
+directory; run 2 reports `MARKER FOUND` or `NO MARKER`; run 3, with the notebook's own
+output attached as an input, prints the exact `/kaggle/input/<slug>/` restore path.
+Verified locally against all three branches with the Kaggle paths redirected.
+
+**A second finding, which is worse, and which the persistence question was hiding.**
+Two open Kaggle threads report that output from a **timed-out** commit cannot be
+retrieved: "Unable to download the output of 'timeout exceeded' notebook" and
+"[Bug] Can't access output files after 12-hour timeout". The logs show the files were
+written; users cannot get them.
+
+The plan as stated **required** commits to hit the cap: a seed needs ~13.4 h of training
+plus eval, so a single commit can only ever end in timeout — the one path with a known
+retrieval bug. **Consequence, and it holds whichever way the persistence probe
+resolves:** each commit must train a step budget it can finish and exit cleanly,
+producing a real version output. At 0.07 it/s, ~8 h is ~2,000 steps, so a seed is two
+bounded commits plus eval.
+
+**This is a change to how the run is executed, not to what is being measured.**
+Splitting one 13.4 h training run into two bounded ones alters neither the data order,
+the batch composition, the optimizer trajectory nor the number of steps — the checkpoint
+carries RNG state, optimizer state and scheduler position, and `ignore_data_skip=False`
+replays the dataloader to position (§3u). So it is **not** a preregistration amendment,
+and §3t's registered configuration is unchanged. It is recorded here because the
+distinction matters: a bounded commit is the same experiment, whereas
+`group_by_length` — refused in §3u — would not be.
+
+**Not yet done, and blocking.** `kaggle_tier1.py` still assumes `/kaggle/working`
+persists and has no step budget. The restore path and the bound cannot be written until
+the probe reports, because the restore's source path is one of the probe's outputs.
+**Seed 1 must not start for real until then.**
+
 ### 3u. Measured Tier 1 throughput; probe projection wrong by 13x (2026-09-08)
 
 **Measured on Kaggle, seed 1, one T4:** `15/3563 [02:56 < 13:21:05, 0.07 it/s]`, i.e.

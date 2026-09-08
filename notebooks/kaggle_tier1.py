@@ -436,7 +436,12 @@ for seed in SEEDS:
         cfg_kw = dict(output_dir=str(ck), seed=seed, num_train_epochs=EPOCHS,
             learning_rate=LR, per_device_train_batch_size=BS,
             gradient_accumulation_steps=GA, logging_steps=100,
-            save_strategy="steps", save_steps=500, save_total_limit=2,
+            # 200, not 500: at the MEASURED 0.07 it/s (3u) a 500-step cadence is one
+            # checkpoint every 2.0h, so a session killed by the cap loses up to 2h. 200
+            # is ~48min. A checkpoint here is the LoRA adapter plus Adam state, ~220MB,
+            # seconds to write. Checkpoint cadence changes NO training mathematics, so
+            # this is not a preregistration amendment.
+            save_strategy="steps", save_steps=200, save_total_limit=2,
             report_to=[], gradient_checkpointing=True,
             fp16=USE_FP16, bf16=USE_BF16)   # both explicit; bf16 default is None, not False
         cfg_kw[SEQ_LEN_KW] = MAX_LEN   # name resolved by PREFLIGHT, not assumed

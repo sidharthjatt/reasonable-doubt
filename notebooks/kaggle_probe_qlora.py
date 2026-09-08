@@ -229,3 +229,15 @@ print("PROBE PASSED — the dependency set runs QLoRA end to end. Start Tier 1."
       if ok else
       "PROBE FAILED — read the traceback above. Do NOT start Tier 1.")
 print("=" * 70)
+
+# RAISE, do not merely print. Under Save & Run All (Commit) every cell runs
+# unattended in one kernel: a probe that only prints on failure lets the run carry
+# straight on into CELL 2 and spend ~13.4h (3u) on the environment the probe just
+# rejected. Nobody is watching the output during a commit — that is the point of a
+# commit — so the failure has to stop the run itself.
+# RuntimeError, not sys.exit: SystemExit is special-cased by some notebook runners
+# and can be swallowed, which would be a silent failure of the failure path.
+if not ok:
+    raise RuntimeError(
+        "QLoRA probe FAILED — see the traceback above. Aborting so that a commit run "
+        "cannot proceed into Tier 1 on a broken environment.")

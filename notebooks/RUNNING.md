@@ -210,6 +210,38 @@ the LoRA adapter plus Adam state, roughly 220 MB, and writing it takes seconds.
 **This changes no training mathematics** — checkpoint cadence does not affect the model
 — so it is not a preregistration amendment.
 
+### BLOCKING: does /kaggle/working survive a commit? Answer this before Tier 1.
+
+**The whole multi-session plan rests on this and it has never been checked.** An
+interactive session with Persistence = "Files only" is believed to keep
+`/kaggle/working`. A **commit** is thought not to: each version runs in a fresh
+container, and the previous run's `/kaggle/working` becomes **that version's output**,
+not the next run's working directory. If that is right, every commit restarts seed 1 at
+`(fresh)` — and you find out nine hours in.
+
+Kaggle's documentation cannot settle it (its pages render client-side and return no text
+to a fetch), so **measure it**: `kaggle_probe_persist.py`, three commits of about a
+minute each. **Set Accelerator to NONE** — persistence is not GPU-specific, so this
+costs **zero GPU quota**. The file's header has the run procedure; it prints
+`MARKER FOUND` or `NO MARKER`, and on the third run prints the exact
+`/kaggle/input/<slug>/` path a restore would read from.
+
+**Do not start a 13 h run until this comes back.**
+
+### A commit must never hit the time cap
+
+Two open Kaggle threads report that output from a **timed-out** commit cannot be
+retrieved — *"Unable to download the output of 'timeout exceeded' notebook"* and
+*"[Bug] Can't access output files after 12-hour timeout"*. The logs show the files were
+written; users cannot get them.
+
+A seed needs ~13.4 h of training plus eval, so a single commit **can only ever end in
+timeout** — the one path with a known retrieval bug. **Therefore each commit must train
+a step budget it can finish and exit cleanly**, producing a real version output instead
+of a timeout. At the measured 0.07 it/s, ~8 h of training is ~2,000 steps, so a seed is
+two commits plus eval. This holds *whichever way the persistence question resolves*, so
+it is not contingent on the probe.
+
 ### Interactive sessions will not survive this. Use Save & Run All.
 
 An interactive session shows an **"Are you still there?"** prompt and terminates on

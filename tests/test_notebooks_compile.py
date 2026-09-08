@@ -34,7 +34,8 @@ CELL2_BANNER = "# ============================ CELL 2 of 2"
 # Files split into an IPython CELL 1 and a Python CELL 2; only CELL 2 is compiled.
 TWO_CELL = ["kaggle_tier0.py", "kaggle_tier1.py"]
 # Probes are plain Python end to end and must compile whole.
-WHOLE_FILE = ["kaggle_probe_qlora.py", "kaggle_probe_tier0.py"]
+WHOLE_FILE = ["kaggle_probe_qlora.py", "kaggle_probe_tier0.py",
+              "kaggle_probe_persist.py"]
 
 
 def _cell2(path: Path) -> str:
