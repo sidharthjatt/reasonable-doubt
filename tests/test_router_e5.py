@@ -254,3 +254,66 @@ def test_cascade_refuses_mismatched_lengths():
         cascade_points(score=np.zeros(5), tier0_correct=np.zeros(5, bool),
                        api_correct=np.zeros(4, bool),
                        tier0_usd_per_1k=0.0, api_usd_per_1k=1.0)
+
+
+# ---------------------------------------------------------------- npz loading
+
+
+import tempfile  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from src.router.load_logits import load_split, macro_f1_kwargs  # noqa: E402
+
+
+@pytest.fixture
+def npz(tmp_path):
+    rng = np.random.default_rng(11)
+    n, c = 2000, 100
+    p = tmp_path / "logits_ce_seed1.npz"
+    np.savez_compressed(
+        p,
+        dev_logits=rng.normal(size=(n, c)), dev_labels=rng.integers(0, c, n),
+        dev_2000_indices=np.arange(n), dev_absent_classes=np.array([14]),
+        sel_logits=rng.normal(size=(30, c)), sel_labels=rng.integers(0, c, 30),
+        test_logits=rng.normal(size=(50, c)), test_labels=rng.integers(0, c, 50),
+        test_3000_indices=np.arange(50),
+    )
+    return p
+
+
+def test_loading_dev_for_calibration_is_allowed(npz):
+    s = load_split(npz, "dev_2000", for_calibration=True)
+    assert s.logits.shape == (2000, 100)
+    assert list(s.absent_classes) == [14]
+    assert not s.covers_all_classes
+
+
+def test_loading_test_for_calibration_is_refused_at_the_loader(npz):
+    """Hard rule 1 enforced on the way IN, not only at the calibration call. A caller
+    that never consults the guard still cannot fit a threshold to test data."""
+    with pytest.raises(SplitMisuseError, match="REPORTING"):
+        load_split(npz, "test_3000", for_calibration=True)
+
+
+def test_allow_absent_classes_is_returned_only_for_the_split_that_needs_it(npz):
+    """`Books` is absent from dev_2000 by design, so macro-F1 there must be told to
+    allow it. test_3000 covers all 100, so the flag must NOT be handed over — carrying it
+    across would silence a real coverage problem on the reporting split."""
+    assert macro_f1_kwargs(load_split(npz, "dev_2000")) == {"allow_absent_classes": True}
+    assert macro_f1_kwargs(load_split(npz, "test_3000")) == {}
+
+
+def test_a_pre_dev_npz_is_refused_with_an_actionable_message(tmp_path):
+    """Tier 0 runs before 2026-09-08 wrote no dev logits. Calibrating on whatever else
+    happens to be in the file would be silent misuse of the wrong split."""
+    p = tmp_path / "old.npz"
+    np.savez_compressed(p, sel_logits=np.zeros((2, 100)), sel_labels=np.zeros(2))
+    with pytest.raises(KeyError, match="predates dev_2000 inference"):
+        load_split(p, "dev_2000", for_calibration=True)
+
+
+def test_dev_macro_f1_is_over_99_classes_not_100(npz):
+    """PREREGISTRATION 3a's reporting caveat, pinned so it cannot be forgotten."""
+    s = load_split(npz, "dev_2000")
+    assert s.n_classes == 100
+    assert s.n_classes - len(s.absent_classes) == 99

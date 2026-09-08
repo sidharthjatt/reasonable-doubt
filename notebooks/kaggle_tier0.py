@@ -142,13 +142,24 @@ assert BS * GA * N_VISIBLE_GPUS == REGISTERED_EFFECTIVE_BATCH, (
     f"not a tuning decision.")
 print(f"  effective train batch = BS {BS} x GA {GA} x n_gpu {N_VISIBLE_GPUS} = "
       f"{BS * GA * N_VISIBLE_GPUS}, matching the registered {REGISTERED_EFFECTIVE_BATCH}")
-HOLDOUT_SHA12 = "97eebc04d0c7"   # committed train_holdout_3000
-TEST3000_SHA12 = "e719c1109069"  # committed test_3000
+HOLDOUT_SHA12 = "97eebc04d0c7"    # committed train_holdout_3000
+TEST3000_SHA12 = "e719c1109069"   # committed test_3000
+DEV2000_SHA12 = "77d3341979f2"    # committed dev_2000 — THRESHOLD-ONLY (hard rule 1)
 
 # ---------------- split guard (duplicated so the cell is standalone) ---------
 SELECTION_SPLITS = {"train_holdout_3000", "train"}
 THRESHOLD_SPLITS = {"dev_2000", "validation", "dev"}
 REPORTING_SPLITS = {"test_3000", "test_stratified_764", "test"}
+def assert_threshold_split(name):
+    """Hard rule 1, enforced here as well as in src/router/calibrate.py.
+
+    dev_2000 is calibration-ONLY. It must never be used to select a model (that is what
+    train_holdout_3000 is for) and never to report (that is test_3000)."""
+    if name in REPORTING_SPLITS: raise RuntimeError(f"REFUSING: {name!r} is a REPORTING split")
+    if name in SELECTION_SPLITS: raise RuntimeError(f"REFUSING: {name!r} is a SELECTION split")
+    if name not in THRESHOLD_SPLITS: raise RuntimeError(f"unknown threshold split {name!r}")
+    return name
+
 def assert_selection_split(name):
     if name in REPORTING_SPLITS: raise RuntimeError(f"REFUSING: {name!r} is a REPORTING split")
     if name in THRESHOLD_SPLITS: raise RuntimeError(f"REFUSING: {name!r} is THRESHOLD-only (hard rule 1)")
@@ -203,9 +214,39 @@ assert _tsha.startswith(TEST3000_SHA12), f"test_3000 sha {_tsha[:12]} != {TEST30
 print(f"test_3000 verified {_tsha[:16]}… ({len(TEST_IDX)} rows, "
       f"range {min(TEST_IDX)}..{max(TEST_IDX)})")
 
+# dev_2000 — the ROUTER THRESHOLD CALIBRATION set (hard rule 1). Regenerated here rather
+# than read from configs/manifests (the notebook is standalone on Kaggle) and verified
+# against the committed sha exactly as train_holdout_3000 and test_3000 are. Verified
+# locally that this stratified() call reproduces the manifest's 2,000 indices and its
+# text_sha256 byte for byte before the constant was written down.
+#
+# The split guard is applied to the NAME before the data is touched, so dev cannot be
+# mistaken for a selection or reporting split at any point in this cell.
+assert_threshold_split("dev_2000")
+DEV_IDX = stratified(list(ds["validation"]["label"]), 2000, 20260907)
+_dsha = hash_texts(list(ds["validation"].select(DEV_IDX)["text"]))
+assert _dsha.startswith(DEV2000_SHA12), (
+    f"dev_2000 sha {_dsha[:12]} != {DEV2000_SHA12}. The calibration set does not match "
+    f"the committed manifest, so any threshold calibrated on it would be uncomparable "
+    f"to everything else in the report. STOP — do not work around this.")
+print(f"dev_2000 verified {_dsha[:16]}… ({len(DEV_IDX)} rows, "
+      f"range {min(DEV_IDX)}..{max(DEV_IDX)})")
+# dev_2000 covers 99 of 100 classes — `Books` (class 14) is too rare to earn a
+# proportional seat. This is deliberate (PREREGISTRATION 3a): a >=1-per-class floor would
+# distort the class distribution away from realistic traffic and bias the calibrated
+# threshold. Recorded in the npz so nothing downstream has to rediscover it, and so E5
+# must pass allow_absent_classes=True KNOWINGLY rather than by accident.
+_dev_labels = np.array([int(ds["validation"][i]["label"]) for i in DEV_IDX])
+DEV_ABSENT = sorted(set(range(100)) - set(_dev_labels.tolist()))
+print(f"  dev_2000 covers {100 - len(DEV_ABSENT)}/100 classes; absent: "
+      f"{[NAMES[c] for c in DEV_ABSENT]} — any macro-F1 on dev is an average over "
+      f"{100 - len(DEV_ABSENT)} classes, NOT 100. State this wherever it appears.")
+
 train_ds, sel_ds = prep("train", fit_idx), prep("train", hold)
+dev_ds = prep("validation", DEV_IDX)
 test_ds = prep("test", list(range(len(ds["test"]))))   # all 10k; subset offline by index
-print(f"fit {len(train_ds):,} | select {len(sel_ds):,} | test {len(test_ds):,}")
+print(f"fit {len(train_ds):,} | select {len(sel_ds):,} | dev {len(dev_ds):,} | "
+      f"test {len(test_ds):,}")
 
 def weights(arm):
     if arm == "ce": return None
@@ -394,11 +435,17 @@ for seed in SEEDS:
         tr.save_model(str(fp32)); tok.save_pretrained(str(fp32))
         shutil.rmtree(ckpt_dir, ignore_errors=True)   # fp32 saved — never retrain
 
-    sel = tr.predict(sel_ds); tst = tr.predict(test_ds)
+    sel = tr.predict(sel_ds); tst = tr.predict(test_ds); dev = tr.predict(dev_ds)
+    # dev_ arrays are what E5 calibrates router thresholds on (hard rule 1). They ride in
+    # the same npz as sel_ and test_ so one file carries every split E5 needs and cannot
+    # be paired with logits from a different seed or arm.
     np.savez_compressed(WORK / f"logits_{LOSS_ARM}_seed{seed}.npz",
                         sel_logits=sel.predictions, sel_labels=sel.label_ids,
                         test_logits=tst.predictions, test_labels=tst.label_ids,
-                        test_3000_indices=np.array(TEST_IDX))
+                        test_3000_indices=np.array(TEST_IDX),
+                        dev_logits=dev.predictions, dev_labels=dev.label_ids,
+                        dev_2000_indices=np.array(DEV_IDX),
+                        dev_absent_classes=np.array(DEV_ABSENT))
     del tr, model; gc.collect(); torch.cuda.empty_cache()
 
     # --- ONNX + INT8. INT8 is the DEPLOYED precision; E1 attaches to it, E3 is the delta.
@@ -422,9 +469,17 @@ for seed in SEEDS:
     fp32_test3000 = tst.predictions[TEST_IDX].argmax(-1)
     print("  evaluating INT8 on test_3000…")
     int8_logits = onnx_predict(int8_dir, [ds["test"][i]["text"] for i in TEST_IDX], MAX_LENGTH)
+    # INT8 dev logits too: INT8 is the DEPLOYED precision (E1, E3), so a threshold
+    # calibrated on FP32 dev logits would be calibrated for a model that is never served.
+    # 2,000 extra rows at batch 1 — seconds.
+    dev_int8_logits = onnx_predict(int8_dir,
+                                   [ds["validation"][i]["text"] for i in DEV_IDX], MAX_LENGTH)
     int8_test3000 = int8_logits.argmax(-1)
     np.savez_compressed(WORK / f"int8_logits_{LOSS_ARM}_seed{seed}.npz",
-                        test_3000_logits=int8_logits, test_3000_indices=np.array(TEST_IDX))
+                        test_3000_logits=int8_logits, test_3000_indices=np.array(TEST_IDX),
+                        dev_2000_logits=dev_int8_logits,
+                        dev_2000_indices=np.array(DEV_IDX),
+                        dev_absent_classes=np.array(DEV_ABSENT))
 
     out = {"model": MODEL, "loss_arm": LOSS_ARM, "seed": seed, "max_length": MAX_LENGTH,
            "epochs": EPOCHS, "lr": LR, "selection_split": "train_holdout_3000",

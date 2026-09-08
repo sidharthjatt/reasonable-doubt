@@ -420,14 +420,31 @@ The check: for the single canonical Tier 1 config, calibrate the router threshol
 the two thresholds agree. Agreement vindicates `dev_2000`; divergence is itself a
 finding. Costs no API spend — local Tier 1 inference time only.
 
-- **Accept rule (DRAFT):** the two thresholds agree within **1 decile of the routing
-  signal's distribution** on the full 10k validation split, AND the resulting escalation
-  rates differ by **≤ 3 percentage points**.
-- **Reasoning for the numbers:** a threshold is only meaningful through the escalation
-  rate it produces, so the rule is stated in both units — a threshold difference that
-  moves escalation by <3pp is operationally the same threshold. One decile is chosen
-  because the signal is calibrated by rank, not by absolute value, so a rank-based
-  tolerance survives any monotone rescaling (including temperature).
+- **Accept rule (REGISTERED 2026-09-08):** the resulting escalation rates differ by
+  **≤ 3 percentage points** — **this is the binding clause** — AND the two thresholds
+  agree within **1 decile of the routing signal's distribution** on the full 10k
+  validation split, as a **rank-invariance sanity check**.
+- **Reasoning, anchored not picked.** A threshold is only meaningful through the
+  escalation rate it produces, so the rule is stated in both units. `dev_2000` is drawn
+  from `validation` (its manifest records `split: validation`), so the two sets are
+  **nested**, and the sampling SD of the escalation-rate difference is
+  `sqrt((1 - n/N)^2 * p(1-p) * (1/n + 1/(N-n)))` with n=2,000, N=10,000:
+
+  | escalation rate p | SD of the difference | 3pp expressed in SD |
+  |---|---|---|
+  | 0.2 | 0.80pp | 3.8 SD |
+  | 0.3 | 0.92pp | 3.3 SD |
+  | 0.5 | 1.00pp | 3.0 SD |
+
+  **3pp is ~3 SD of that difference under the null that both sets calibrate to the same
+  threshold** — computed, not chosen for looking reasonable. Derived independently twice
+  before registration.
+- **The decile clause is a sanity check, not a second test, and is labelled so.** The
+  empirical quantile rank at n=2,000 has SD ~1pp, so one decile is **~9-11 SD** and can
+  never bind before the 3pp clause does. It is kept because expressing the tolerance in
+  rank terms is what makes it survive any monotone rescaling of the signal (temperature
+  included) — but reporting the rule as two independent conditions would overstate what
+  it tests.
 - **Falsification:** thresholds differ by more than a decile, or escalation by more than
   3pp ⇒ `dev_2000` is too small to calibrate on and the full 10k validation split should
   be used instead. That is a finding about our own method and stays in the report.
@@ -453,7 +470,8 @@ the anchoring effect directly, at no extra cost.
 - **Predicted direction, recorded BEFORE the run:** few-shot confidences cluster near
   0.9 more tightly than zero-shot confidences — i.e. lower variance and a mode at or
   near 0.9.
-- **Accept rule (DRAFT):** few-shot verbalized-confidence **sd ≤ 0.5× zero-shot sd**
+- **Accept rule (REGISTERED 2026-09-07, adopted VERBATIM 2026-09-08):** few-shot
+  verbalized-confidence **sd ≤ 0.5× zero-shot sd**
   for the same model on the same rows, AND the few-shot **mode within 0.02 of 0.9**
   (the anchored value).
 - **Reasoning for the numbers:** confidence is already severely compressed with no
@@ -472,6 +490,14 @@ the anchoring effect directly, at no extra cost.
   cannot place a mode at 0.9 whether it is anchored or not. **A null result on the
   compressed models is therefore NOT evidence against anchoring** and must not be
   reported as such.
+- **RECORDED LIMITATION — the threshold is conservative, and that is a Type II risk.**
+  At n~1,000 few-shot rows the sampling spread of an sd *ratio* is about +/-4.4%
+  (chi-square, 95%), so 0.5 sits ~11 SD from unity: even a ratio of 0.9 would be
+  detectable. A tighter threshold would have been defensible **had it been set before the
+  run**. It was not; the Stage 1 and few-shot results already exist on disk, and
+  tightening it now would be fitting the rule to the answer (see 3ad). **The rule stands
+  at 0.5, and this note is the accounting**: a null result here rules out a *large*
+  anchoring effect, not a small one.
 - **Falsification:** sd ratio > 0.5 and mode away from 0.9 ⇒ the fixed exemplar
   confidence did not anchor, and verbalized confidence is compressed for reasons
   intrinsic to the models rather than to our prompt.
@@ -490,8 +516,9 @@ runs. Specifically, test whether the class appearing 3× in the exemplar set is
 over-predicted in few-shot relative to zero-shot.
 
 - **Predicted direction, recorded BEFORE the run:** yes — it will be over-predicted.
-- **Accept rule (DRAFT):** the class appearing 3× in `exemplars_8` is predicted in
-  few-shot at **≥ 2× its zero-shot prediction rate** on the same rows, AND its shift is
+- **Accept rule (REGISTERED 2026-09-07, adopted VERBATIM 2026-09-08):** the class
+  appearing 3× in `exemplars_8` is predicted in few-shot at **≥ 2× its zero-shot
+  prediction rate** on the same rows, AND its shift is
   larger than that of any class appearing exactly once in the exemplar set.
 - **Reasoning for the numbers:** prediction rates for a mid-frequency class over 3,000
   rows have a standard error near 1 percentage point, so a doubling sits far outside
@@ -503,6 +530,11 @@ over-predicted in few-shot relative to zero-shot.
   to an absolute form: **+2 percentage points** over its zero-shot rate. The switch is
   decided by the measured zero-shot rate and **must be recorded before the few-shot run
   is scored**, never after seeing the few-shot number.
+  - **Procedure, since both runs are already on disk:** read the **zero-shot** prediction
+    rate of the 3x class from `results/stage1_results.json` and record which form of the
+    rule applies, in this file, **before opening any few-shot prediction.** The zero-shot
+    rate is the trigger's only input, so reading it does not contaminate the test; the
+    few-shot number is what must stay unseen until the form is fixed.
 - **Falsification:** shift < 2× (or < 2pp under the fallback), or not exceeding the
   single-exemplar classes ⇒ exemplar repetition did not bias predictions, and the
   uniform-draw exemplar policy carries less risk than §3c records.
@@ -557,6 +589,44 @@ declaring any limit, quota, or capability, take at least two readings separated 
 delta** — and include a control that is known to behave the opposite way
 (the `definitely_not_a_real_param` → HTTP 400 probe is what made the temperature result
 conclusive rather than merely suggestive). One sample describes a moment, not a rule.
+
+**A SECOND NEW CLASS — revising a rule whose data already exists (2026-09-08).**
+Recorded at Sid's instruction, about his own request.
+
+The ask was to write concrete accept rules for C1, C2 and C4 before Tier 0's results
+landed, on the grounds that they were unwritten and hard rule 6 was about to be breached.
+**They were not unwritten.** All three carried numbers and reasoning, committed at
+11:36-11:43 UTC on 2026-09-07 — **six hours before** the runs they score were submitted
+(few-shot 17:42 UTC, Stage 1 17:43 UTC). Hard rule 6 was already satisfied. The
+timestamps read `17:06 +0530`, which is what made them look later than the runs.
+
+**Acting on the request as stated would have converted a satisfied hard rule 6 into a
+breach.** C2 and C4 score the Stage 1 and few-shot results, which have been complete and
+polled on disk since 2026-09-07. Re-anchoring their thresholds now — however much better
+the new anchor — is fitting the rule to data that already exists. The revision would have
+*looked* like an improvement in rigour while being the exact thing preregistration
+prohibits.
+
+**The generalisable part, and it is the useful bit:**
+
+* **"The rule is marked DRAFT" is not evidence that it is unwritten.** A label describing
+  the author's confidence is not a fact about the registration. The commit history is the
+  fact.
+* **The check before revising ANY accept rule is whether the data it scores exists yet —
+  not how well-reasoned the revision is.** Quality of reasoning is irrelevant to this
+  question; only chronology matters. A better-anchored threshold chosen after the data
+  exists is worse than a cruder one chosen before.
+* Where the two split apart, chronology wins: C1 was legitimately revisable because Tier 1
+  has produced nothing, so its 3pp got a real sampling-theory anchor. C2 and C4 were
+  adopted **verbatim**, with C2's now-known conservatism recorded as a Type II limitation
+  rather than repaired.
+
+**Relation to the other entries.** Every §3e instance before the false positive is a real
+defect presenting as normal operation; the false positive is the inverse. This one is a
+third shape: **a correct-looking process improvement that would have destroyed the
+property it was meant to protect.** All three share a root — acting on a plausible reading
+of the situation without checking the fact it depends on — but this is the only one where
+the damage would have been to the method rather than to a measurement.
 
 **A NEW CLASS — the false positive (2026-09-08).** Every instance above is a **real
 defect that presented as normal operation**. This one is the inverse: **normal operation
@@ -797,6 +867,30 @@ reported, per-row `row_indices` are saved alongside predictions so the offline j
 cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
+
+### 3ad. C1/C2/C4 registered; two of them adopted verbatim (2026-09-08)
+
+Full description in §3e under "A SECOND NEW CLASS". Short form: a request to re-anchor
+C1, C2 and C4 rested on the premise that they were unwritten. They were committed
+2026-09-07 at 11:36-11:43 UTC, six hours before the runs they score (17:42/17:43 UTC), so
+hard rule 6 was already satisfied and revising C2 or C4 would have breached it.
+
+**Outcome, signed off before any edit:**
+
+| check | disposition | why |
+|---|---|---|
+| **C1** | **reworded and anchored** | scores Tier 1 routing thresholds; Tier 1 has produced nothing, so revision is legitimate. 3pp is now derived as ~3 SD of the nested-sample escalation-rate difference, and the decile clause is relabelled a rank-invariance sanity check because at ~9-11 SD it can never bind |
+| **C2** | **adopted verbatim** | scores few-shot vs Stage 1, both on disk. Conservatism of the 0.5x threshold recorded as a Type II limitation instead of being repaired |
+| **C4** | **adopted verbatim** | same. The <1% fallback trigger is read from the ZERO-SHOT rate only, recorded before any few-shot number is opened |
+
+No confidence value or predicted label from `stage1_results.json` or
+`fewshot_results.json` was read while these rules were being finalised.
+
+**What actually lands with Tier 0 is C3**, which the checks table already records as
+descriptive with no accept rule of its own. It gates E2, E3 and E7. E2's rule is
+registered as a **formula** — `>= sqrt(2) * 1.96 * seed_sd` — with one parameter C3
+measures; substituting a measured value into a preregistered formula is not writing a new
+rule, so hard rule 6 holds through that step.
 
 ### 3ac. The electricity tariff is ASSUMED, and E6 does not depend on it (2026-09-08)
 
