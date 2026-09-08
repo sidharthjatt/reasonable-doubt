@@ -22,7 +22,9 @@
 #
 #   RUN 1  Save Version -> Save & Run All (Commit). Read the output.
 #          Expect: "no marker" and run_index 1.
-#   RUN 2  Commit the SAME notebook again, changing nothing. Read the output.
+#   RUN 2  Commit again. **YOU MUST MAKE A REAL EDIT FIRST** — a commit whose diff is
+#          +0 -0 is SKIPPED by Kaggle and reports "Ran in 0 seconds" without running.
+#          Changing a comment is enough. Read the output.
 #          -> marker FOUND  => /kaggle/working carries over between commits.
 #          -> marker ABSENT => it does not. This is the expected result.
 #   RUN 3  Only if RUN 2 says ABSENT. In the editor: Add Input -> Notebook Output ->
@@ -124,7 +126,8 @@ ckdir.mkdir(exist_ok=True)
 print("\n" + "=" * 72)
 print(f"WROTE marker as run_index {runs[-1]['run_index']}  ->  {MARKER}")
 print(f"WROTE {ckdir}/ (a checkpoint-shaped directory, 1MB)")
-print("\nNow commit this notebook AGAIN, unchanged, and read section [1].")
+print("\nNow EDIT something (a comment is enough — a +0 -0 diff is skipped with")
+print("'Ran in 0 seconds'), commit again, and read section [1].")
 print("  MARKER FOUND  -> /kaggle/working carries over; the resume design works as is.")
 print("  NO MARKER     -> it does not; attach this notebook's output as an input and")
 print("                   commit once more to confirm the restore path in section [2].")

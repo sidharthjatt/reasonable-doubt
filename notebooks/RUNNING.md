@@ -210,7 +210,49 @@ the LoRA adapter plus Adam state, roughly 220 MB, and writing it takes seconds.
 **This changes no training mathematics** — checkpoint cadence does not affect the model
 — so it is not a preregistration amendment.
 
-### BLOCKING: does /kaggle/working survive a commit? Answer this before Tier 1.
+### SETTLED: /kaggle/working does NOT survive a commit
+
+Measured on Kaggle, three Batch commits, zero GPU (2026-09-08). **A fresh commit sees
+only `__notebook__.ipynb`** — no marker, no checkpoint directory. The previous run's
+`/kaggle/working` becomes **that version's output**, not the next run's working
+directory.
+
+**The restore path**, with the notebook's own output attached via
+**File → Add input → Your Work → Notebook**:
+
+```
+/kaggle/input/notebooks/<username>/<notebook-slug>/
+```
+
+`kaggle_tier1.py` **globs** this — it is not hardcoded, because Tier 1 runs under a
+different notebook name than the probe did, and a hardcoded path that stopped matching
+would silently start fresh, which is the 13.4 h failure. If an input is attached but
+holds no Tier 1 artefacts, or two do, the run **raises with the directory listing**.
+
+### Every commit needs a real edit
+
+**A commit whose diff is `+0 -0` is skipped and reports "Ran in 0 seconds".** It does not
+run. Changing a comment is enough — but in `kaggle_tier1.py` the edit you have to make
+anyway *is* the required edit: setting `RESUME_FROM_STEP_AT_LEAST` to the step the last
+commit reported.
+
+### The two per-commit constants
+
+| constant | what to set it to |
+|----------|-------------------|
+| `RUN_STEP_BUDGET` | steps to train in this commit. `2000` ≈ 8 h at 0.07 it/s, inside a 9 h cap with room for setup and the final save. |
+| `RESUME_FROM_STEP_AT_LEAST` | `0` for the first commit of seed 1; otherwise the `global_step` the previous commit printed. |
+
+`RESUME_FROM_STEP_AT_LEAST` is the **guard against a pinned notebook input**. If an
+attached input is pinned to the version current when you attached it, every commit would
+restore the same checkpoint and training would never advance — *looking like a normal
+resume the whole time*. The run compares the restored checkpoint against this number and
+raises if it is older.
+
+The notebook prints the exact value to use next, in a block that also lists the two UI
+steps. Follow it literally.
+
+### Old note (superseded, kept because the reasoning is still the record)
 
 **The whole multi-session plan rests on this and it has never been checked.** An
 interactive session with Persistence = "Files only" is believed to keep

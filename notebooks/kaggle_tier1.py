@@ -121,6 +121,7 @@ from transformers import (AutoConfig, AutoModelForCausalLM, AutoTokenizer,
                           BitsAndBytesConfig)
 from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import SFTTrainer
+from transformers import TrainerCallback
 # max_seq_length lives on SFTConfig in current TRL, NOT TrainingArguments — passing it
 # to TrainingArguments raises TypeError. Import defensively.
 from trl import SFTConfig
@@ -158,6 +159,25 @@ USE_FP16, USE_BF16 = True, False        # AMP mode. bf16 is impossible on T4.
 #   FALLBACK IF IT OOMs: BS 2 / GA 8. NOT BS 2 alone — the effective batch is
 #   BS x GA and must stay 16, because that is what E4 is registered at.
 MAX_LEN, EPOCHS, LR, BS, GA = 2560, 1, 2e-4, 4, 4
+# ===================== EDIT THESE TWO BEFORE EVERY COMMIT ====================
+# A commit whose diff is +0 -0 is SKIPPED by Kaggle and reports "Ran in 0 seconds",
+# so every commit needs a real edit anyway. These are that edit — which makes the
+# required edit the same act as recording progress.
+#
+# RUN_STEP_BUDGET: steps to train IN THIS COMMIT, then stop and checkpoint cleanly.
+#   ~2000 steps is ~8h at the measured 0.07 it/s (3u), inside a 9h design cap with room
+#   for setup and the final save. A commit MUST NOT hit the time cap: output from a
+#   timed-out commit is reportedly unretrievable (3v), so a capped run loses everything
+#   since the last checkpoint AND the version output.
+# RESUME_FROM_STEP_AT_LEAST: the global_step the PREVIOUS commit reported at its end.
+#   0 for the very first commit of a seed. The notebook prints the value to use next.
+#   This is the guard against a PINNED notebook input: if the attached input is stuck on
+#   an older version, the restored checkpoint is older than this and the run RAISES
+#   instead of silently re-training the same steps forever.
+RUN_STEP_BUDGET = 2000
+RESUME_FROM_STEP_AT_LEAST = 0
+# =============================================================================
+
 REGISTERED_EFFECTIVE_BATCH = 16   # PREREGISTRATION 3t, E4 — not merely this file's value
 assert BS * GA == REGISTERED_EFFECTIVE_BATCH, (
     f"effective batch is {BS * GA}, but E4 is registered at "
@@ -393,6 +413,105 @@ def _key(s): return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", s).strip(E
 LOOKUP = {_key(n): n for n in NAMES}
 def normalize(s): return LOOKUP.get(_key(s))
 
+# ============================ RESTORE ========================================
+# /kaggle/working does NOT carry over between commits — measured, 3v. Each commit runs
+# in a fresh container; the previous run's working directory becomes THAT VERSION'S
+# OUTPUT. To resume, attach it: File -> Add input -> Your Work -> Notebook, then pick
+# this notebook's latest version. It mounts read-only at
+#     /kaggle/input/notebooks/<username>/<notebook-slug>/
+# The slug is NOT hardcoded: this notebook will not be named "persist-probe", and a
+# hardcoded path that stops matching would silently start fresh — the failure that costs
+# 13.4h. It is globbed, and a mismatch RAISES with the directory listing.
+_IN_NB = Path("/kaggle/input/notebooks")
+_RESTORE_GLOBS = ["t1_ck_*", "t1_adapter_*", "tier1_seed*.json",
+                  "tier1_preds_seed*.json", "t1_progress_*.json"]
+_attached = sorted(d for d in _IN_NB.glob("*/*") if d.is_dir()) if _IN_NB.exists() else []
+print("\n=== RESTORE ===")
+print(f"attached notebook inputs: {[str(d) for d in _attached] or 'NONE'}")
+
+_sources = [d for d in _attached if any(any(d.glob(g)) for g in _RESTORE_GLOBS)]
+if len(_sources) > 1:
+    raise RuntimeError(
+        f"{len(_sources)} attached notebook inputs contain Tier 1 artefacts: "
+        f"{[str(d) for d in _sources]}. Which one is current is ambiguous, and guessing "
+        f"could resume from an older checkpoint. Detach all but the newest.")
+
+_restored = []
+if _sources:
+    src = _sources[0]
+    print(f"restoring from {src}")
+    for g in _RESTORE_GLOBS:
+        for item in sorted(src.glob(g)):
+            dst = WORK / item.name
+            if dst.exists():
+                print(f"    {item.name}: already in /kaggle/working, not overwritten")
+                continue
+            (shutil.copytree if item.is_dir() else shutil.copy2)(item, dst)
+            _restored.append(item.name)
+    print(f"restored {len(_restored)}: {_restored}")
+elif _attached:
+    # An input IS attached but holds nothing of ours. Starting fresh here would look
+    # exactly like a normal first run and quietly repeat 13.4h.
+    raise RuntimeError(
+        f"A notebook input is attached but contains no Tier 1 artefacts "
+        f"{_RESTORE_GLOBS}. Refusing to start fresh, because that is indistinguishable "
+        f"from a working resume until 13.4h have been spent.\n"
+        f"Attached: {[str(d) for d in _attached]}\n"
+        f"Contents: { {str(d): sorted(x.name for x in d.iterdir())[:20] for d in _attached} }")
+else:
+    if RESUME_FROM_STEP_AT_LEAST > 0:
+        raise RuntimeError(
+            f"RESUME_FROM_STEP_AT_LEAST is {RESUME_FROM_STEP_AT_LEAST}, so this is not "
+            f"the first commit — but NO notebook input is attached and there is nothing "
+            f"to resume from. Attach this notebook's latest version: "
+            f"File -> Add input -> Your Work -> Notebook.")
+    print("no notebook input attached and RESUME_FROM_STEP_AT_LEAST=0 -> first commit, "
+          "starting fresh. This is correct ONLY for the first commit of seed 1.")
+
+# ---- the pinned-input guard -------------------------------------------------
+# A notebook input may be PINNED to the version attached at the time. If so, every
+# commit restores the SAME checkpoint and training never advances — and each run looks
+# like a normal resume while doing so. Compare what was restored against what the
+# previous commit reported.
+def _max_ckpt_step():
+    steps = [int(c.name.split("-")[-1]) for d in WORK.glob("t1_ck_*")
+             for c in d.glob("checkpoint-*") if c.name.split("-")[-1].isdigit()]
+    return max(steps) if steps else 0
+
+_have = _max_ckpt_step()
+print(f"highest restored checkpoint step: {_have} | "
+      f"RESUME_FROM_STEP_AT_LEAST: {RESUME_FROM_STEP_AT_LEAST}")
+if _have < RESUME_FROM_STEP_AT_LEAST:
+    raise RuntimeError(
+        f"Restored checkpoint is at step {_have}, but the previous commit reported "
+        f"{RESUME_FROM_STEP_AT_LEAST}. The attached notebook input is STALE — most "
+        f"likely pinned to the version attached at the time rather than tracking the "
+        f"latest. Re-attach the newest version. Without this check the run would resume "
+        f"from {_have} every commit and never finish, looking normal throughout.")
+print("=== RESTORE OK ===\n")
+
+
+class StopAfterNSteps(TrainerCallback):
+    """Stop after RUN_STEP_BUDGET steps IN THIS RUN, saving at the stop point.
+
+    NOT `max_steps`. max_steps becomes num_training_steps, which builds the LR
+    scheduler, so max_steps=2000 would decay the learning rate to zero over 2000 steps
+    instead of the true 3563 — a different LR trajectory, i.e. a different experiment,
+    reported by nothing. Verified on the CPU harness: this callback reproduces the
+    uninterrupted schedule exactly; max_steps does not.
+
+    should_save is set alongside should_training_stop so the stop point is always
+    checkpointed, rather than losing back to the last save_steps boundary."""
+    def __init__(self, budget): self.budget, self.start = budget, None
+    def on_train_begin(self, args, state, control, **kw):
+        self.start = state.global_step
+    def on_step_end(self, args, state, control, **kw):
+        if state.global_step - self.start >= self.budget:
+            control.should_save = True
+            control.should_training_stop = True
+        return control
+
+
 for seed in SEEDS:
     done = WORK / f"tier1_seed{seed}.json"
     if done.exists():
@@ -481,7 +600,44 @@ for seed in SEEDS:
             f"anything but fp32; if this fires, TRL changed the cast at SFTTrainer "
             f"__init__ line ~1154 and the fix above no longer reaches it.")
 
+        _start_step = 0
+        if resume:
+            _start_step = max(int(c.name.split("-")[-1]) for c in ck.glob("checkpoint-*")
+                              if c.name.split("-")[-1].isdigit())
+        trainer.add_callback(StopAfterNSteps(RUN_STEP_BUDGET))
         trainer.train(resume_from_checkpoint=resume)
+        _end_step = trainer.state.global_step
+        _total = int(trainer.state.max_steps)
+        print(f"\n  seed {seed}: step {_start_step} -> {_end_step} of {_total}")
+
+        # A run that restored a checkpoint and advanced zero steps is the pinned-input
+        # failure caught after the fact, or a budget of 0. Either way it must not look
+        # like a successful commit.
+        if _end_step <= _start_step:
+            raise RuntimeError(
+                f"seed {seed} advanced no steps ({_start_step} -> {_end_step}). The "
+                f"commit did no work; do not chain another commit onto this output.")
+
+        (WORK / f"t1_progress_{seed}.json").write_text(json.dumps(
+            {"seed": seed, "global_step": _end_step, "total_steps": _total,
+             "complete": _end_step >= _total}))
+
+        if _end_step < _total:
+            # Budget exhausted mid-seed. Stop the whole notebook: do NOT fall through to
+            # eval on a partly-trained adapter, and do NOT start the next seed.
+            print("\n" + "=" * 70)
+            print(f"STEP BUDGET REACHED — seed {seed} is at {_end_step}/{_total}, "
+                  f"{_total - _end_step} steps remain (~{(_total-_end_step)/0.07/3600:.1f}h)")
+            print("This commit is FINISHED and its output is complete. To continue:")
+            print(f"  1. File -> Add input -> Your Work -> Notebook -> THIS notebook, "
+                  f"newest version")
+            print(f"  2. set RESUME_FROM_STEP_AT_LEAST = {_end_step}")
+            print(f"  3. Save Version -> Save & Run All (Commit)")
+            print("     (step 2 is also the edit that stops Kaggle skipping the commit)")
+            print("=" * 70)
+            del trainer
+            break
+
         trainer.model.save_pretrained(str(adapter)); tok.save_pretrained(str(adapter))
         shutil.rmtree(ck, ignore_errors=True)   # adapter saved — never retrain this seed
         model = trainer.model

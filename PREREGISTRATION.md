@@ -714,6 +714,80 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3w. Persistence measured; Tier 1 restructured for bounded commits (2026-09-08)
+
+**§3v's question, answered on Kaggle. Three Batch commits, zero GPU quota.**
+
+**`/kaggle/working` does NOT carry over between commits.** A fresh commit sees only
+`__notebook__.ipynb` — no marker, no checkpoint-shaped directory. The previous run's
+working directory becomes **that version's output**. The suspicion was right, and the
+resume design as written would have restarted seed 1 at `(fresh)` on every commit,
+**discovered 13.4 h in**.
+
+**Restore path**, with the notebook's own output attached via *Add input → Your Work →
+Notebook*: `/kaggle/input/notebooks/<username>/<notebook-slug>/`.
+
+**Three further findings from the same three commits, none of which was the question
+being asked:**
+
+1. **A commit with a `+0 -0` diff is skipped**, reporting "Ran in 0 seconds" without
+   running. `kaggle_probe_persist.py`'s own instructions said "commit the SAME notebook
+   again, changing nothing" — **the probe's procedure did not work as written**, and it
+   was caught only by someone running it. Fixed there and documented in RUNNING.md.
+2. **A notebook input may be pinned to the version current when it was attached.**
+   Unresolved at time of writing; a fourth commit is testing it. If pinned, every commit
+   restores the same checkpoint and training never advances — *while every run looks
+   like a normal resume*. This is §3e's shape in its purest form so far: not a wrong
+   value, a correct-looking loop that never terminates.
+3. Therefore the restore cannot rely on the environment being honest about freshness.
+
+**The guard, which works under both branches of (2).** Two constants are set per commit:
+`RUN_STEP_BUDGET` (steps to train this commit) and `RESUME_FROM_STEP_AT_LEAST` (the
+`global_step` the previous commit reported). After restoring, the highest checkpoint
+step must be **≥ `RESUME_FROM_STEP_AT_LEAST`**, or the run raises naming a stale input.
+A pinned input fails on the second chained commit, in seconds, instead of looping. The
+notebook prints the value to use next, so the loop is closed by the notebook rather than
+by memory.
+
+**This composes with finding (1) rather than merely coexisting with it:** since every
+commit *must* carry a real edit to run at all, and `RESUME_FROM_STEP_AT_LEAST` must
+change every commit, **the edit that makes the commit execute is the same act as
+recording progress.** A forgotten update is not a silent stale resume; it is a skipped
+commit or a raise.
+
+**Step budget: a callback, NOT `max_steps`.** `max_steps` becomes `num_training_steps`,
+which is what `Trainer.create_scheduler` builds the LR schedule from — so
+`max_steps=2000` would decay the learning rate to zero over 2,000 steps instead of the
+true 3,563. **A different LR trajectory is a different experiment, and nothing would
+have reported it.** Measured on the CPU harness, learning rate at each of 10 steps:
+
+| run | LR trajectory |
+|-----|---------------|
+| uninterrupted | `9e-4, 8e-4, 7e-4, 6e-4, 5e-4, 4e-4, 3e-4, 2e-4, 1e-4, 0` |
+| **budget callback**, 4 steps × 3 commits | **identical at every step** |
+| `max_steps=4` | `7.5e-4, 5e-4, 2.5e-4, 0` — decayed to zero in 4 steps |
+
+The callback sets `should_training_stop` **and** `should_save`, so the stop point is
+always checkpointed rather than losing back to the last `save_steps` boundary.
+
+**Bounded commits remain a change to execution, not to measurement** (§3v): same data
+order, batch composition, optimizer trajectory, step count and — now verified — the same
+learning rate at every step. **Not an amendment**; §3t stands unchanged.
+
+**Restore verified across seven branches** with the Kaggle paths redirected: first
+commit with nothing attached (proceeds); not-first commit with nothing attached
+(raises); input attached holding nothing of ours (raises); normal resume (proceeds);
+**pinned input** (raises); two attached inputs (raises as ambiguous); and a slug
+differing from the probe's (found, confirming the glob). A run that restores a
+checkpoint and then advances zero steps also raises, so the pinned case is caught after
+the fact as well as before.
+
+**Not verified:** none of the restructured code has run on Kaggle. The restore, the
+budget callback and the guards were exercised locally against redirected paths and a
+CPU harness. The pinned-vs-latest behaviour of an attached notebook input is still
+unknown; the guard is written to be correct either way, which is why it did not wait for
+that answer.
+
 ### 3v. The resume rests on an unchecked filesystem assumption (2026-09-08)
 
 Lever 1 (§3u) spreads seeds across quota windows and depends entirely on a resume. The
