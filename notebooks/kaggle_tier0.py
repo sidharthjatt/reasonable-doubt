@@ -68,7 +68,7 @@ def _require(cls, kwargs, label):
                            f"{sorted(n for n in _params(cls) if not n.startswith('_'))}")
     print(f"  PREFLIGHT: {label} accepts all {len(kwargs)} kwargs")
 
-import os, json, gc, hashlib, random, shutil
+import os, json, gc, hashlib, random, shutil, time
 from pathlib import Path
 from collections import Counter
 import numpy as np, torch
@@ -237,7 +237,61 @@ def onnx_predict(int8_dir, texts, max_length, batch=1):
         if i % 500 == 0: print(f"    int8 {i}/{len(texts)}", flush=True)
     return np.concatenate(out, 0)
 
+# ============================ RESTORE ========================================
+# /kaggle/working does NOT carry over between commits — measured, 3v. Each commit runs in
+# a fresh container and the previous run's working directory becomes THAT VERSION'S
+# OUTPUT. To carry results forward: File -> Add input -> Your Work -> Notebook, and pick
+# this notebook's latest version. It mounts read-only at
+#     /kaggle/input/notebooks/<username>/<notebook-slug>/
+# The slug is globbed, never hardcoded: a hardcoded path that stopped matching would
+# silently start fresh, which here means re-running seeds that are already done.
+#
+# Tier 0 needs this for two reasons even though all three seeds fit in ONE commit (3y):
+#   1. a commit that dies or overruns leaves nothing behind otherwise;
+#   2. E2's second arm (LOSS_ARM = "sqrt_inv_freq") is a SEPARATE commit run after C3
+#      reports, and the CE results must be carried into it so one final output holds
+#      every arm.
+# There is deliberately NO step budget here — see 3y. Tier 0 is 3.0-6.6h for all three
+# seeds against a 9h design cap, so a budget would be machinery that never fires.
+_IN_NB = Path("/kaggle/input/notebooks")
+_RESTORE_GLOBS = ["ck_*", "fp32_*", "int8_*", "onnx_*",
+                  "tier0_*_seed*.json", "logits_*_seed*.npz", "int8_logits_*_seed*.npz"]
+_attached = sorted(d for d in _IN_NB.glob("*/*") if d.is_dir()) if _IN_NB.exists() else []
+print("\n=== RESTORE ===")
+print(f"attached notebook inputs: {[str(d) for d in _attached] or 'NONE'}")
+_sources = [d for d in _attached if any(any(d.glob(g)) for g in _RESTORE_GLOBS)]
+if len(_sources) > 1:
+    raise RuntimeError(
+        f"{len(_sources)} attached notebook inputs contain Tier 0 artefacts: "
+        f"{[str(d) for d in _sources]}. Which is current is ambiguous, and guessing "
+        f"could resurrect a superseded result. Detach all but the newest.")
+if _sources:
+    src = _sources[0]; print(f"restoring from {src}")
+    _restored = []
+    for g in _RESTORE_GLOBS:
+        for item in sorted(src.glob(g)):
+            dst = WORK / item.name
+            if dst.exists():
+                print(f"    {item.name}: already present, not overwritten"); continue
+            (shutil.copytree if item.is_dir() else shutil.copy2)(item, dst)
+            _restored.append(item.name)
+    print(f"restored {len(_restored)}: {_restored}")
+elif _attached:
+    raise RuntimeError(
+        f"A notebook input is attached but contains no Tier 0 artefacts "
+        f"{_RESTORE_GLOBS}. Refusing to start fresh: that is indistinguishable from a "
+        f"working carry-forward until every seed has been recomputed.\n"
+        f"Attached: {[str(d) for d in _attached]}\n"
+        f"Contents: { {str(d): sorted(x.name for x in d.iterdir())[:20] for d in _attached} }")
+else:
+    print("no notebook input attached -> first commit for this arm, starting fresh.")
+print(f"completion markers present: "
+      f"{sorted(f.name for f in WORK.glob('tier0_*_seed*.json')) or 'none'}")
+print("=== RESTORE OK ===\n")
+
+_T_START = time.time()
 for seed in SEEDS:
+    _t_seed = time.time()
     done = WORK / f"tier0_{LOSS_ARM}_seed{seed}.json"
     if done.exists():
         print(f"seed {seed}: already complete, skipping"); continue
@@ -331,6 +385,14 @@ for seed in SEEDS:
     out["e3_int8_minus_fp32_macro_f1"] = (out["test_3000_int8"]["macro_f1"]
                                           - out["test_3000_fp32"]["macro_f1"])
     done.write_text(json.dumps(out, indent=2))
+    # Per-seed wall clock. Tier 0 has NO step budget (3y): all three seeds are estimated
+    # at 3.0-6.6h against a 9h cap, so a budget would be machinery that never fires. This
+    # number is the check on that estimate — if a seed exceeds ~2.5h the pessimistic end
+    # is real, and the remaining seeds should be split into their own commits by editing
+    # SEEDS, before a commit hits the cap and loses its whole output (3v).
+    _seed_h = (time.time() - _t_seed) / 3600
+    print(f"  seed {seed} wall clock: {_seed_h:.2f}h  (estimate 1.0-2.2h; if >2.5h, run "
+          f"the remaining seeds as separate commits)")
     print(json.dumps({k: out[k] for k in
           ("selection", "test_3000_fp32", "test_3000_int8", "e3_int8_minus_fp32_macro_f1")},
           indent=2))

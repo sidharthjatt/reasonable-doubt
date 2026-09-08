@@ -714,6 +714,87 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3y. Tier 0 sizing — restore yes, step budget no (2026-09-08)
+
+Tier 1 seed 1 commit 1 is running on Kaggle: PREFLIGHT passed, RESTORE OK, the fp32
+re-cast fired on 392 tensors, training under way. **The commit path works** — CELL 1
+uninstalled peft 0.19.1 and installed 0.20.0 cleanly in a Batch kernel and the
+mixed-install checks (§3p, ported in `8cc3221`) confirmed it. **No kernel restart is
+needed inside a commit**, because a commit starts from a fresh container. The
+restart remains mandatory for interactive runs.
+
+**Tier 0 runtime, computed from measured token lengths rather than the earlier guess.**
+Tokenised all 60,000 LEDGAR train rows with `microsoft/deberta-v3-base`:
+
+| | tokens |
+|---|---|
+| mean / median | **136 / 101** |
+| p90 / p99 / max | 278 / 561 / 1706 |
+| over `MAX_LENGTH=512` | 886 rows (**1.48%**, truncated) |
+| padded tokens per step, BS 16, dynamic padding | **6,141** (vs 2,139 real — **187% padding waste**) |
+
+3 epochs × 3,562 steps = **10,686 steps**, 66M padded tokens, ≈ **7.24e16 FLOPs**
+(no gradient checkpointing in Tier 0, so no recompute penalty):
+
+| sustained | h/seed (train) |
+|---|---|
+| 10 TFLOPS | 2.01 |
+| 15 TFLOPS | 1.34 |
+| 25 TFLOPS | 0.80 |
+
+Plus per seed ≈ 2 min eval (3×3,000 selection + 3,000 fp32 test on GPU), 3–6 min INT8 on
+x86 CPU at batch 1, and 12 s for the ONNX export and arm64 quantise (measured, §3
+probe). **1.0–2.2 h per seed, 3.0–6.6 h for all three**, against a 9 h design cap.
+
+**Decision: NO step budget for Tier 0.** It fits in one commit at both ends of the
+estimate, so a budget would be machinery that never fires — and untested machinery on a
+path that does not need it is a liability, not insurance. **The check on that decision is
+a printed per-seed wall clock**, with the threshold stated in the output: a seed over
+~2.5 h means the pessimistic end is real, and the remaining seeds should be split into
+separate commits by editing `SEEDS` — no code change, since a commit needs a real edit
+anyway (§3w).
+
+**Decision: restore block YES**, identical in mechanism to Tier 1's. Two reasons, and
+the second is not a contingency:
+
+1. a commit that dies or overruns otherwise leaves nothing retrievable (§3v);
+2. **E2's second arm is a separate commit by design.** §3l sequences it CE 3 seeds → C3
+   → `sqrt_inv_freq` 3 seeds, so the CE results must be carried into the later commit for
+   one final output to hold every arm. Without restore, the arms end up in two outputs
+   that must be merged by hand — an invitation to compare arms that were never in the
+   same place.
+
+Verified across four branches with redirected paths: first commit with nothing attached
+(proceeds), CE results carried into the E2-arm commit (restores), attached-but-empty
+(raises), two attached inputs (raises as ambiguous).
+
+**`group_by_length` is NOT adopted for Tier 0 either, and the temptation here is real.**
+187% padding waste means length-grouped batching could cut Tier 0's training time by
+roughly two thirds — far more than Tier 1's 27%/21%. Unlike Tier 1 it is not too late:
+Tier 0 has not started, so it *could* be registered before any seed runs. It is still
+refused, because **Tier 0 fits in one commit without it.** Buying time that is not needed,
+by changing batch composition on the tier whose accept rule is a reproduction of a
+published baseline (E1, macro-F1 ≥ 0.80 against LexGLUE's DeBERTa 0.831), is a bad trade:
+it would make any shortfall ambiguous between our training setup and our batching policy.
+Recorded so the option and the reason for declining it are both on the record.
+
+**Tier 0 and Tier 1 must never share a Kaggle notebook, and RUNNING.md now says so
+structurally rather than in passing.** `4.57.6 < 4.58` and `5.0.0 ≥ 4.58`: **no
+transformers version satisfies both**, so in one notebook whichever CELL 1 ran last wins
+and the other tier runs against a version it was never validated on. The doc now
+instructs creating two differently-named notebooks, forbids pasting either tier's cells
+into the other, states that each tier's probe belongs only in its own notebook, and notes
+that attaching the wrong tier's output raises "contains no Tier n artefacts" — which is
+the symptom of exactly this mistake. Both notebooks' CELL 2 already assert their own
+version range and raise within ~10 s; that is named in the doc as **the backstop, not the
+plan**.
+
+**Not verified:** the Tier 0 runtime is arithmetic over measured token lengths, not a
+measured run — the same method that was right for Tier 1 (§3u) where the probe's
+extrapolation was 13x wrong, but arithmetic nonetheless. The restore block has not run on
+Kaggle. The per-seed wall clock print is what converts the estimate into a measurement on
+the first commit.
+
 ### 3x. Attached inputs track latest; the stall guard is kept anyway (2026-09-08)
 
 **§3w finding (2) resolved on Kaggle: an attached notebook input tracks the LATEST

@@ -50,6 +50,35 @@ Both probes end in one line: `PASSED …` or `FAILED — DO NOT START TIER n`.
 The 90 s figure assumes the DeBERTa weights are already in the HF cache; a cold ~370 MB
 download is on top of that.
 
+### HARD RULE: Tier 0 and Tier 1 are two SEPARATE Kaggle notebooks. Never one.
+
+They require **incompatible** `transformers` versions and cannot both be satisfied in
+one environment:
+
+| notebook | transformers | why it cannot move |
+|----------|--------------|--------------------|
+| **Tier 1** | Kaggle's own **5.0.0** | `trl 1.12.0` needs `>=4.56.2`, `peft 0.20.0` no bound. Downgrading means uninstalling a preloaded package — the operation that caused the mixed install (§3p). |
+| **Tier 0** | pinned **`==4.57.6`** | `optimum-onnx` declares `transformers<4.58.0`, and Tier 0 needs optimum for the ONNX export. |
+
+`4.57.6 < 4.58` and `5.0.0 >= 4.58`. **There is no version that satisfies both.** Putting
+both notebooks in one Kaggle notebook means whichever CELL 1 ran last wins, and the other
+tier then runs against a version it was never validated on.
+
+**Therefore:**
+
+* **Create two Kaggle notebooks, with different names.** Suggested: `rd-tier1-qwen` and
+  `rd-tier0-deberta`.
+* **Never paste Tier 0 cells into the Tier 1 notebook, or the reverse.** Not "into a
+  later cell", not "after a restart" — a different notebook.
+* Each tier's probe belongs in **its own** tier's notebook, because a probe validating a
+  different environment than the notebook it gates certifies nothing.
+* The two attach **different** notebook outputs when resuming. Attaching Tier 1's output
+  to Tier 0 raises "contains no Tier 0 artefacts", which is a symptom of this mistake.
+
+Both notebooks' CELL 2 assert their own version range and **raise** if it is wrong, so
+this is caught in about ten seconds rather than after training — but the assertion is
+the backstop, not the plan. The plan is two notebooks.
+
 ### Why the two notebooks pin different versions
 
 | notebook | transformers | why |
