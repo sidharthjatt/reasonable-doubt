@@ -112,7 +112,7 @@ def _require(cls, kwargs, label):
             f"{sorted(n for n in _params(cls) if not n.startswith('_'))}")
     print(f"  PREFLIGHT: {label} accepts all {len(kwargs)} kwargs")
 
-import os, json, gc, hashlib, random, re, shutil, unicodedata
+import os, json, gc, hashlib, random, re, shutil, threading, time, unicodedata
 from pathlib import Path
 import numpy as np, torch
 from datasets import load_dataset, Dataset
@@ -279,7 +279,7 @@ SEQ_LEN_KW = _resolve(SFTConfig, ["max_length", "max_seq_length"], "sequence len
 _SFTCONFIG_KWARGS = ["output_dir","seed","num_train_epochs","learning_rate",
     "per_device_train_batch_size","gradient_accumulation_steps","fp16","bf16",
     "logging_steps","save_strategy","save_steps","save_total_limit","report_to",
-    "gradient_checkpointing"]
+    "gradient_checkpointing","disable_tqdm"]
 _require(SFTConfig, _SFTCONFIG_KWARGS, "SFTConfig")
 _require(SFTTrainer, ["model","train_dataset","peft_config","args"], "SFTTrainer")
 _require(LoraConfig, ["r","lora_alpha","lora_dropout","bias","task_type",
@@ -513,6 +513,69 @@ if _restored_total < RESUME_TOTAL_STEPS_AT_LEAST:
 print("=== RESTORE OK ===\n")
 
 
+# ======================== LIVENESS INSTRUMENTATION ===========================
+# Commit 1 ran 2h22m with no output after the re-cast line, and there was no way to
+# tell a hang from a silent log. Two causes, both real:
+#
+#   1. transformers' ProgressCallback.on_log writes through `tqdm.write()`, i.e. to
+#      STDERR, and the progress bar is \r-based. Our own prints go to stdout with
+#      flush=True and DID appear. A Batch log viewer that surfaces stdout promptly and
+#      stderr late or not at all shows exactly what was seen.
+#      (PrinterCallback, used when disable_tqdm=True, is no better: a bare `print(logs)`
+#      with no flush, into a block-buffered non-TTY stdout.)
+#   2. logging_steps=100 means NOTHING is emitted for the first 100 optimizer steps —
+#      ~24 min at the measured rate, and unbounded if the rate is wrong.
+#
+# The fix is three parts, and the thread is the important one.
+_HB = {"phase": "cell-2 start", "step": None, "total": None,
+       "t0": time.time(), "t_train": None}
+
+def _heartbeat_loop(interval_s=120):
+    """Print liveness from a DAEMON THREAD, not a Trainer callback.
+
+    This is the whole point: a callback-based heartbeat only fires when the training
+    loop reaches on_step_end, so it cannot distinguish "hung inside step 1" from
+    "hung before training started" — it is silent in both. A separate thread keeps
+    printing while the main thread is blocked, so silence from it means the PROCESS is
+    dead or the log pipe is broken, and output from it while steps do not advance means
+    the training loop is stuck. Those are different diagnoses and they need different
+    fixes.
+
+    Daemon, so it never keeps the kernel alive at the end of the run."""
+    while True:
+        time.sleep(interval_s)
+        el = (time.time() - _HB["t0"]) / 60
+        st, tot, t_tr = _HB["step"], _HB["total"], _HB["t_train"]
+        line = f"[heartbeat {el:7.1f} min] phase={_HB['phase']} step={st}/{tot}"
+        if st and t_tr and st > 0:
+            rate = st / (time.time() - t_tr)
+            line += f" | {rate:.4f} it/s"
+            if tot:
+                line += f" | {(tot - st) / rate / 3600:.1f}h to step {tot}"
+        print(line, flush=True)
+
+threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat").start()
+print("[heartbeat] thread started; prints every 2 min regardless of Trainer state",
+      flush=True)
+
+
+class FlushingLog(TrainerCallback):
+    """Re-emit Trainer's log dict on stdout WITH flush.
+
+    Does not replace ProgressCallback — it runs alongside it, so nothing is lost if the
+    tqdm/stderr path does work. Duplicated lines are a trivial price for not being blind."""
+    def on_train_begin(self, args, state, control, **kw):
+        _HB["phase"] = "training"; _HB["total"] = int(state.max_steps)
+        _HB["t_train"] = time.time(); _HB["step"] = int(state.global_step)
+        print(f"[train] begin at step {state.global_step} of {state.max_steps}", flush=True)
+    def on_step_end(self, args, state, control, **kw):
+        _HB["step"] = int(state.global_step)
+    def on_log(self, args, state, control, logs=None, **kw):
+        print(f"[log step {state.global_step}] {logs}", flush=True)
+    def on_save(self, args, state, control, **kw):
+        print(f"[save] checkpoint at step {state.global_step}", flush=True)
+
+
 class CommitStepBudget(TrainerCallback):
     """Stop after RUN_STEP_BUDGET steps IN THIS COMMIT, saving at the stop point.
 
@@ -569,6 +632,7 @@ for seed in SEEDS:
     else:
         resume = ck.exists() and any(ck.glob("checkpoint-*"))
         print(f"\n=== seed {seed} ({'RESUMING' if resume else 'fresh'}) ===")
+        _HB["phase"] = f"seed {seed}: 4-bit load"
         base = prepare_model_for_kbit_training(
             AutoModelForCausalLM.from_pretrained(MODEL, device_map=DEVICE_MAP,
                                                  quantization_config=quant,
@@ -588,7 +652,13 @@ for seed in SEEDS:
             "first real token of every padded sequence")
         cfg_kw = dict(output_dir=str(ck), seed=seed, num_train_epochs=EPOCHS,
             learning_rate=LR, per_device_train_batch_size=BS,
-            gradient_accumulation_steps=GA, logging_steps=100,
+            # 20, not 100: the first log line is the first evidence the loop is
+            # turning. At the measured 0.07 it/s that is ~5 min instead of ~24. Logging
+            # frequency changes no training mathematics.
+            gradient_accumulation_steps=GA, logging_steps=20,
+            # tqdm writes the bar AND log dicts to stderr; FlushingLog replaces both on
+            # stdout with flush. Explicit rather than left to the level-based default.
+            disable_tqdm=True,
             # 200, not 500: at the MEASURED 0.07 it/s (3u) a 500-step cadence is one
             # checkpoint every 2.0h, so a session killed by the cap loses up to 2h. 200
             # is ~48min. A checkpoint here is the LoRA adapter plus Adam state, ~220MB,
@@ -598,6 +668,7 @@ for seed in SEEDS:
             report_to=[], gradient_checkpointing=True,
             fp16=USE_FP16, bf16=USE_BF16)   # both explicit; bf16 default is None, not False
         cfg_kw[SEQ_LEN_KW] = MAX_LEN   # name resolved by PREFLIGHT, not assumed
+        _HB["phase"] = f"seed {seed}: SFTTrainer construction (tokenises {len(train_txt):,} rows)"
         trainer = SFTTrainer(model=base, train_dataset=train_txt,
             peft_config=LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none",
                 task_type="CAUSAL_LM",
@@ -639,6 +710,8 @@ for seed in SEEDS:
             _start_step = max(int(c.name.split("-")[-1]) for c in ck.glob("checkpoint-*")
                               if c.name.split("-")[-1].isdigit())
         trainer.add_callback(CommitStepBudget())
+        trainer.add_callback(FlushingLog())
+        _HB["phase"] = f"seed {seed}: trainer.train() entered"
         trainer.train(resume_from_checkpoint=resume)
         _end_step = trainer.state.global_step
         _total = int(trainer.state.max_steps)

@@ -714,6 +714,83 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3z. A run with no observable state (2026-09-08)
+
+Tier 1 commit 1 reached 2h22m with **no output at all** after the re-cast line at 328 s.
+The first `logging_steps=100` line was due at ~1758 s. The session still showed
+"Running". **There was no way to distinguish a hang from a silent log**, which is the
+same class as §3e instance 4 — a wait with a success condition and no failure condition —
+except here there was no condition at all, only absence.
+
+**Why the log was invisible, from source.** `disable_tqdm` defaults to `False`, so
+`ProgressCallback` is active, and its `on_log` writes through **`tqdm.write()` — to
+stderr** — with the bar itself `\r`-based. Our own prints use `flush=True` on stdout and
+**did** appear. A Batch log viewer that surfaces stdout promptly and stderr late, or not
+at all, produces exactly what was seen. `PrinterCallback`, the `disable_tqdm=True`
+alternative, is no better: a bare `print(logs)` with no flush into a block-buffered
+non-TTY stdout. Compounding it, `logging_steps=100` emits nothing for the first 100
+optimizer steps — ~24 min at the measured rate, and unbounded if the rate is wrong.
+
+**What can be ruled out from source, for Tier 1:**
+
+| candidate | ruled out because |
+|---|---|
+| DataLoader worker deadlock | `dataloader_num_workers` is never passed (0 occurrences; the `_SFTCONFIG_KWARGS` allowlist is cross-checked complete), so it is the default **0** — no worker processes exist |
+| distributed barrier | single process, `CUDA_VISIBLE_DEVICES=0`, PREFLIGHT asserts `device_count()==1`, no `WORLD_SIZE`/torchrun in a commit, so accelerate stays single-process and no `dist.barrier()` runs |
+| checkpoint load / data skip | `resume=False` on commit 1; RESTORE printed "starting fresh" |
+| network after the HF rate-limit warning | `report_to=[]`, and model, tokenizer and dataset all load **before** the re-cast print |
+| `torch.compile` | not used anywhere |
+| eval during training | `eval_strategy` never set → `"no"` |
+
+**What cannot be ruled out without CUDA:** actual throughput in a Batch container versus
+the interactive session where 0.07 it/s was measured; bitsandbytes 4-bit kernel behaviour
+on that specific container; whether the viewer surfaces stderr at all; a genuine
+CUDA-level stall.
+
+**Ranked, and the ranking is decision-relevant because the hypotheses predict different
+outcomes:** (1) log-path invisibility — consistent with every observation, and predicts
+the run is near step 573 and will stop cleanly at the 2,000-step budget around 8 h with
+retrievable output; (2) genuinely slower; (3) a real hang. **(2) and (3) both predict a
+cap timeout and total loss of the commit's output** (§3v).
+
+**The arithmetic that decides it.** The budget is 2,000 steps and setup cost 328 s:
+
+| | required rate |
+|---|---|
+| finish 2,000 steps inside a 9 h cap | ≥ **0.0624 it/s** |
+| inside a 12 h cap | ≥ **0.0467 it/s** |
+| measured earlier, interactive | 0.0700 it/s → 8.0 h ✓ |
+| **implied by no step-100 log at 8,520 s** | **< 0.0122 it/s → 46 h ✗** |
+
+So if the run really is that slow it **cannot finish under any cap** and is already lost.
+And **stopping it manually forfeits exactly what a cap timeout would** — neither produces
+retrievable output — so "stop to save the output" is not a reason to act either way. The
+only thing at stake in waiting is more quota.
+
+**Fix — three parts, and the thread is the one that matters.**
+
+1. **A daemon-thread heartbeat every 2 minutes**, not a Trainer callback. This is the
+   whole point: a callback heartbeat only fires when the loop reaches `on_step_end`, so
+   it is silent both when training is hung *and* when it is merely quiet — it cannot tell
+   them apart, which is the exact failure being fixed. A separate thread keeps printing
+   while the main thread is blocked. Silence from it now means the process is dead or the
+   log pipe is broken; output from it while `step` does not advance means the loop is
+   stuck. Different diagnoses, different fixes. Verified: it prints throughout a
+   deliberately blocked main thread, and reports step, it/s and projected hours once
+   training begins.
+2. **`FlushingLog`**, re-emitting Trainer's log dict on stdout with `flush=True`, and
+   announcing train-begin and each checkpoint save. It runs *alongside* `ProgressCallback`
+   rather than replacing it, so nothing is lost if the stderr path does work.
+3. **`logging_steps` 100 → 20** and **`disable_tqdm=True`** (added to the allowlist, per
+   §3-allowlist discipline). First evidence the loop is turning arrives in ~5 min instead
+   of ~24. Neither changes any training mathematics.
+
+**A live risk in Tier 0, which is running in parallel as this is written.** Tier 0 passes
+**`dataloader_num_workers=2`** — the one candidate ruled out for Tier 1 is *not* ruled out
+there, because worker processes do exist. Tier 0 also has no heartbeat, so if it goes
+quiet it is as unobservable as Tier 1 was. Recorded rather than changed: its commit is
+already running and an edit cannot reach it.
+
 ### 3y. Tier 0 sizing — restore yes, step budget no (2026-09-08)
 
 Tier 1 seed 1 commit 1 is running on Kaggle: PREFLIGHT passed, RESTORE OK, the fp32
