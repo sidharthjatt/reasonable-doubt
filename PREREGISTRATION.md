@@ -868,6 +868,93 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3af. The offline scorer is authoritative; the notebook's macro-F1 is a convenience number (2026-09-08)
+
+Both Kaggle notebooks compute macro-F1 inline with a bare
+`f1_score(..., zero_division=0)` call. That is the library default §3e instance 3 records
+as wrong for this project, it reports no `classes_averaged`, and it bypasses
+`src.eval.metrics.score` and its `allow_absent_classes` guard entirely.
+
+**Neither running notebook is being changed.** Instead the convention is settled by
+making the offline path authoritative:
+
+* **E1, E2 and E3 are scored by `src/eval/score_tier0.py`**, from the `.npz` logits,
+  through `src.eval.metrics.score`, with `allow_absent_classes` passed **explicitly** and
+  `classes_averaged` recorded on every result. Each result carries
+  `"scored_by": "src.eval.metrics.score (AUTHORITATIVE)"`.
+* **The notebook's in-run number is a CONVENIENCE figure** — it exists so a running seed
+  prints something legible — and is labelled as such wherever it appears.
+
+**The two conventions are identical on `test_3000`, so E1's and E4's headline numbers are
+unaffected.** `test_3000` and `train_holdout_3000` both record `classes_represented: 100`
+with `min_class_count: 1` in their committed manifests, so no class is averaged in at 0.0
+by either route. **The divergence is confined to `dev_2000`** (`classes_represented: 99`,
+`min_class_count: 0`) and therefore to **router threshold calibration**, never to a
+reported accuracy.
+
+**Demonstrated, not asserted** — `tests/test_score_tier0.py`:
+
+| test | shows |
+|---|---|
+| manifest coverage | reads 100/100/99 from the committed manifests, so a manifest change breaks the claim |
+| all classes present | the two numbers agree on `test_3000` |
+| a class absent, default label space | they still agree at 99/100 — **absence alone does not cause divergence**; what changes is `classes_averaged`, which the notebook never reports |
+| full label space | averaging dev over all 100 deflates macro-F1 by **exactly 99/100** — the §3e instance 3 failure, reproduced |
+| the flag never defaults | `score` raises without `allow_absent_classes` |
+| E1 headline | unchanged under the switch |
+
+**One nuance the tests surfaced, worth stating precisely:** the two numbers are equal to
+floating-point precision but **not bit-identical** — the routes average the same per-class
+F1 values in a different *order* (`sorted(set(gold))` versus the label list), so the sums
+differ in the last ulp (~1e-16). "Arithmetically identical" is the correct claim;
+"byte-identical" would have been false. The tests assert agreement to 1e-12, four orders
+tighter than anything that could affect a macro-F1 reported to four decimals.
+
+### 3ag. Pluralisation: exact matching is KEPT, and one justification for it was wrong (2026-09-08)
+
+Tier 1 emits a label **string**, matched **exactly** — the normaliser folds case,
+whitespace and edge punctuation and does nothing else ("no fuzzy rescue"). LEDGAR's label
+names are mostly plural (**73 of 100** end in `s`), so the natural model output
+`Governing Law` fails against the label `Governing Laws`, and every such near-miss is
+**both a format failure and a wrong answer**.
+
+**DECISION: exact matching is kept.**
+
+**The reason that holds.** `format_failure_rate` is a **measured quantity of this
+project**, not an obstacle to a better accuracy number. Folding singular to plural would
+repair the metric by deleting the finding — the same reasoning that left the SDK's JSON
+schema enforcement unused. A cascade whose middle tier cannot reliably emit a label in
+the required surface form is a cascade with a real defect, and E4 is supposed to be able
+to see it. The number is the point.
+
+**The reason that does NOT hold, retracted here.** It was argued — by me, and the
+argument was then relied on — that folding would be dangerous because *the label space
+contains both `Indemnity` and `Indemnifications`, so naive folding would create real
+collisions.* **That is false, and I did not check it before asserting it.**
+`collision_audit` over all 100 names finds **zero** pairs differing only by a trailing
+`s`, and zero under a broader `s` / `es` / `y↔ies` fold as well. `Indemnity` and
+`Indemnifications` are different stems and never collide. **A naive plural fold would
+create no collisions in this label space.** The decision therefore rests on the
+format-failure-rate argument **alone**, which is enough — but the collision claim is
+struck, and `tests/test_format_failures.py` pins the zero-collision fact so the discarded
+justification cannot creep back. This is §3ab's class again: a confident comparison
+between quantities that had not actually been put side by side.
+
+**The cost of the choice is reported, not assumed away.** `src/eval/format_failures.py`
+categorises every format failure as `pluralisation` (one trailing `s` from exactly one
+real label — what a fold *would* have repaired), `ambiguous` (a near-miss for more than
+one label, which no fold repairs without choosing arbitrarily), `case_or_edge` (must be
+0; non-zero means the normaliser regressed) or `other` (hallucinated labels, prose,
+truncation). **`recoverable_by_plural_fold` is reported with every Tier 1 result**, so the
+price of keeping exact matching is a number in the report.
+
+**Measured so far — 8 rows, UNTRAINED adapter (§3-smoke, not a Tier 1 result):**
+3 failures of 8, of which **pluralisation 0, ambiguous 0, other 3**
+(`Indemnities`, `Information Disclosure`, `Restrictions On Transfer`). On this tiny
+untrained sample a fold would have repaired **nothing**. That is 8 rows from a model that
+has not been trained; it bounds nothing and is recorded only so the instrument is known
+to work before the real predictions land.
+
 ### 3ae. C3 substitution — the reaction, registered before the number (2026-09-08)
 
 Tier 0's three CE seeds land in a few hours and will fix `seed_sd`, which is the only
@@ -908,13 +995,35 @@ result is therefore not proof that E2 is comfortably testable** — it is a poin
 that happens to fall in regime A, and the upper end of its own interval may be regime C.
 The script prints the band beside the margin and writes it into the substituted rule.
 
-**One ambiguity in the registration, flagged now while flagging it is still legitimate.**
-The formula names `seed_sd` without saying whether that is the point estimate or an upper
-confidence bound. `c3_substitute.py` uses the **point estimate**, which is the plain
-reading and the more permissive choice. Recording the alternative here, before the number
-exists, so that using the point estimate is a decision on the record rather than a
-default nobody noticed: a one-sided 95% upper bound on σ would be ~1.92× larger and would
-put most plausible outcomes in regime B or C.
+**DECIDED (2026-09-08): `seed_sd` is the POINT ESTIMATE.** The formula names `seed_sd`
+without saying whether that is the point estimate or an upper confidence bound, and the
+ambiguity is real. It is resolved toward the point estimate, and the reasoning is the
+part worth keeping:
+
+**Resolving an ambiguity toward the reading that makes E2 fail — while knowing that is
+what it does — is exactly as post-hoc as resolving it the other way.** A one-sided 95%
+upper bound on σ is ~1.92× larger and would push most plausible outcomes into regime B
+or C, i.e. would make E2 unacceptable-by-construction. Choosing it now, with that
+consequence known, would be choosing an outcome rather than a method. The point estimate
+is the plain reading of "the across-seed macro-F1 std measured by C3", it is what a
+reader of the registered formula would have computed, and it is what the script does.
+The upper bound is recorded here as the alternative that was considered and declined,
+with its effect stated, so the choice is auditable.
+
+**MANDATORY REPORTING CONDITION.** Because the point estimate was chosen over the
+conservative reading, **the χ² band must be reported alongside E2's result every single
+time it appears** — in the report, in any summary, and in any statement of whether E2
+passed. The required form states both:
+
+> E2 margin = *M* (from seed_sd = *s*, 3 seeds). At 3 seeds the 95% interval on the true
+> sd is [0.52·*s*, 6.28·*s*], so the margin consistent with the data spans
+> [*M*/1.92, *M*×6.28] — **a regime-A point estimate may have an interval reaching
+> regime C.**
+
+A margin quoted without that band overstates its precision by up to an order of
+magnitude. `c3_substitute.py` prints the band next to the margin and writes it into the
+substituted rule, so the two cannot become separated by accident — but the obligation is
+on the *report*, not only on the script.
 
 **Order of operations, which is the whole point:** run the script, read *only* `seed_sd`
 and the margin, commit the substituted rule, and **only then** open any E1/E2/E3 number.
