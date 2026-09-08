@@ -169,13 +169,24 @@ MAX_LEN, EPOCHS, LR, BS, GA = 2560, 1, 2e-4, 4, 4
 #   for setup and the final save. A commit MUST NOT hit the time cap: output from a
 #   timed-out commit is reportedly unretrievable (3v), so a capped run loses everything
 #   since the last checkpoint AND the version output.
-# RESUME_FROM_STEP_AT_LEAST: the global_step the PREVIOUS commit reported at its end.
-#   0 for the very first commit of a seed. The notebook prints the value to use next.
-#   This is the guard against a PINNED notebook input: if the attached input is stuck on
-#   an older version, the restored checkpoint is older than this and the run RAISES
-#   instead of silently re-training the same steps forever.
+# RESUME_TOTAL_STEPS_AT_LEAST: TOTAL steps across ALL seeds that the previous commit
+#   reported. 0 for the very first commit. The notebook prints the value to use next.
+#
+#   It is a TOTAL, and it is read from the per-seed progress files rather than from
+#   checkpoint directories, for two reasons found by trying it the other way:
+#     * a completed seed has its checkpoint directory deleted once the adapter is saved,
+#       so a checkpoint-derived number DROPS TO ZERO after a seed finishes and the guard
+#       would fire on a perfectly healthy chain;
+#     * per-seed step counts restart at 0 for each new seed, so only a total is
+#       monotonic across the whole run.
+#
+#   Measured 2026-09-08: an attached notebook input tracks the LATEST version, so the
+#   pinning this originally guarded against does not occur. The check is kept anyway. A
+#   stalled chain — for any reason, not just pinning — looks exactly like a normal
+#   resume, and that is the failure class this project keeps paying for. It costs one
+#   integer comparison; being wrong about it costs 13.4h.
 RUN_STEP_BUDGET = 2000
-RESUME_FROM_STEP_AT_LEAST = 0
+RESUME_TOTAL_STEPS_AT_LEAST = 0
 # =============================================================================
 
 REGISTERED_EFFECTIVE_BATCH = 16   # PREREGISTRATION 3t, E4 — not merely this file's value
@@ -459,40 +470,57 @@ elif _attached:
         f"Attached: {[str(d) for d in _attached]}\n"
         f"Contents: { {str(d): sorted(x.name for x in d.iterdir())[:20] for d in _attached} }")
 else:
-    if RESUME_FROM_STEP_AT_LEAST > 0:
+    if RESUME_TOTAL_STEPS_AT_LEAST > 0:
         raise RuntimeError(
-            f"RESUME_FROM_STEP_AT_LEAST is {RESUME_FROM_STEP_AT_LEAST}, so this is not "
-            f"the first commit — but NO notebook input is attached and there is nothing "
-            f"to resume from. Attach this notebook's latest version: "
+            f"RESUME_TOTAL_STEPS_AT_LEAST is {RESUME_TOTAL_STEPS_AT_LEAST}, so this is "
+            f"not the first commit — but NO notebook input is attached and there is "
+            f"nothing to resume from. Attach this notebook's latest version: "
             f"File -> Add input -> Your Work -> Notebook.")
-    print("no notebook input attached and RESUME_FROM_STEP_AT_LEAST=0 -> first commit, "
-          "starting fresh. This is correct ONLY for the first commit of seed 1.")
+    print("no notebook input attached and RESUME_TOTAL_STEPS_AT_LEAST=0 -> first "
+          "commit, starting fresh. Correct ONLY for the very first commit.")
 
 # ---- the pinned-input guard -------------------------------------------------
 # A notebook input may be PINNED to the version attached at the time. If so, every
 # commit restores the SAME checkpoint and training never advances — and each run looks
 # like a normal resume while doing so. Compare what was restored against what the
 # previous commit reported.
-def _max_ckpt_step():
-    steps = [int(c.name.split("-")[-1]) for d in WORK.glob("t1_ck_*")
-             for c in d.glob("checkpoint-*") if c.name.split("-")[-1].isdigit()]
-    return max(steps) if steps else 0
+def _progress():
+    """Per-seed {seed: global_step} from the progress files, and their total."""
+    out = {}
+    for f in sorted(WORK.glob("t1_progress_*.json")):
+        try:
+            d = json.loads(f.read_text()); out[int(d["seed"])] = int(d["global_step"])
+        except Exception as e:
+            raise RuntimeError(f"progress file {f} is unreadable ({e!r}). It is the "
+                               f"record the resume guard depends on; refusing to "
+                               f"continue and treat a missing number as zero.")
+    return out, sum(out.values())
 
-_have = _max_ckpt_step()
-print(f"highest restored checkpoint step: {_have} | "
-      f"RESUME_FROM_STEP_AT_LEAST: {RESUME_FROM_STEP_AT_LEAST}")
-if _have < RESUME_FROM_STEP_AT_LEAST:
+_prog, _restored_total = _progress()
+_ck = [int(c.name.split("-")[-1]) for d in WORK.glob("t1_ck_*")
+       for c in d.glob("checkpoint-*") if c.name.split("-")[-1].isdigit()]
+print(f"restored per-seed progress: {_prog or '{}'} | total {_restored_total} | "
+      f"checkpoints present at steps {sorted(_ck) or 'none'}")
+print(f"RESUME_TOTAL_STEPS_AT_LEAST: {RESUME_TOTAL_STEPS_AT_LEAST}")
+# >=, not >. The previous commit ended at this total, so restoring EXACTLY it is the
+# healthy case. Strictness belongs on progress made DURING this commit, asserted below.
+if _restored_total < RESUME_TOTAL_STEPS_AT_LEAST:
     raise RuntimeError(
-        f"Restored checkpoint is at step {_have}, but the previous commit reported "
-        f"{RESUME_FROM_STEP_AT_LEAST}. The attached notebook input is STALE — most "
-        f"likely pinned to the version attached at the time rather than tracking the "
-        f"latest. Re-attach the newest version. Without this check the run would resume "
-        f"from {_have} every commit and never finish, looking normal throughout.")
+        f"Restored total is {_restored_total} steps, but the previous commit reported "
+        f"{RESUME_TOTAL_STEPS_AT_LEAST}. The attached notebook input is STALE. Attach "
+        f"this notebook's newest version. Without this check the run would resume from "
+        f"{_restored_total} every commit and never finish, looking normal throughout.")
 print("=== RESTORE OK ===\n")
 
 
-class StopAfterNSteps(TrainerCallback):
-    """Stop after RUN_STEP_BUDGET steps IN THIS RUN, saving at the stop point.
+class CommitStepBudget(TrainerCallback):
+    """Stop after RUN_STEP_BUDGET steps IN THIS COMMIT, saving at the stop point.
+
+    The counter is CLASS-level and therefore shared across seeds. A per-seed budget was
+    the first version and was wrong: a commit that finished seed 1 and moved to seed 2
+    handed seed 2 a fresh full budget, so one commit could train 2 x RUN_STEP_BUDGET
+    (~16h at the measured rate) and hit the very time cap bounded commits exist to
+    avoid — silently, since each seed's own budget was respected.
 
     NOT `max_steps`. max_steps becomes num_training_steps, which builds the LR
     scheduler, so max_steps=2000 would decay the learning rate to zero over 2000 steps
@@ -502,20 +530,26 @@ class StopAfterNSteps(TrainerCallback):
 
     should_save is set alongside should_training_stop so the stop point is always
     checkpointed, rather than losing back to the last save_steps boundary."""
-    def __init__(self, budget): self.budget, self.start = budget, None
-    def on_train_begin(self, args, state, control, **kw):
-        self.start = state.global_step
+    used = 0        # steps consumed by THIS COMMIT, across every seed it touches
+
     def on_step_end(self, args, state, control, **kw):
-        if state.global_step - self.start >= self.budget:
+        CommitStepBudget.used += 1
+        if CommitStepBudget.used >= RUN_STEP_BUDGET:
             control.should_save = True
             control.should_training_stop = True
         return control
+
+    @classmethod
+    def exhausted(cls): return cls.used >= RUN_STEP_BUDGET
 
 
 for seed in SEEDS:
     done = WORK / f"tier1_seed{seed}.json"
     if done.exists():
         print(f"seed {seed}: complete, skipping"); continue
+    if CommitStepBudget.exhausted():
+        print(f"seed {seed}: not started — this commit's step budget is spent")
+        break
     ck = WORK / f"t1_ck_{seed}"; adapter = WORK / f"t1_adapter_{seed}"
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -604,7 +638,7 @@ for seed in SEEDS:
         if resume:
             _start_step = max(int(c.name.split("-")[-1]) for c in ck.glob("checkpoint-*")
                               if c.name.split("-")[-1].isdigit())
-        trainer.add_callback(StopAfterNSteps(RUN_STEP_BUDGET))
+        trainer.add_callback(CommitStepBudget())
         trainer.train(resume_from_checkpoint=resume)
         _end_step = trainer.state.global_step
         _total = int(trainer.state.max_steps)
@@ -613,10 +647,16 @@ for seed in SEEDS:
         # A run that restored a checkpoint and advanced zero steps is the pinned-input
         # failure caught after the fact, or a budget of 0. Either way it must not look
         # like a successful commit.
-        if _end_step <= _start_step:
+        # STRICTLY greater. A resume that restores correctly and then advances zero
+        # steps is a stalled chain, and a stalled chain is indistinguishable from a
+        # healthy resume in every other output this notebook produces.
+        _prev_for_seed = _prog.get(seed, 0)
+        if not (_end_step > _start_step and _end_step > _prev_for_seed):
             raise RuntimeError(
-                f"seed {seed} advanced no steps ({_start_step} -> {_end_step}). The "
-                f"commit did no work; do not chain another commit onto this output.")
+                f"seed {seed} made NO PROGRESS: started {_start_step}, ended {_end_step}, "
+                f"previous commit recorded {_prev_for_seed}. The chain has stalled. Do "
+                f"not chain another commit onto this output — it would repeat this "
+                f"commit forever while looking like a normal resume.")
 
         (WORK / f"t1_progress_{seed}.json").write_text(json.dumps(
             {"seed": seed, "global_step": _end_step, "total_steps": _total,
@@ -628,12 +668,15 @@ for seed in SEEDS:
             print("\n" + "=" * 70)
             print(f"STEP BUDGET REACHED — seed {seed} is at {_end_step}/{_total}, "
                   f"{_total - _end_step} steps remain (~{(_total-_end_step)/0.07/3600:.1f}h)")
+            _, _new_total = _progress()
             print("This commit is FINISHED and its output is complete. To continue:")
-            print(f"  1. File -> Add input -> Your Work -> Notebook -> THIS notebook, "
-                  f"newest version")
-            print(f"  2. set RESUME_FROM_STEP_AT_LEAST = {_end_step}")
-            print(f"  3. Save Version -> Save & Run All (Commit)")
-            print("     (step 2 is also the edit that stops Kaggle skipping the commit)")
+            print(f"  1. set RESUME_TOTAL_STEPS_AT_LEAST = {_new_total}")
+            print(f"  2. Save Version -> Save & Run All (Commit)")
+            print(f"     Step 1 is also the real edit Kaggle needs: a +0 -0 diff is")
+            print(f"     skipped with 'Ran in 0 seconds'.")
+            print(f"     The attached notebook input tracks the LATEST version")
+            print(f"     (measured 2026-09-08), so it does NOT need re-attaching —")
+            print(f"     attach it once, on the second commit.")
             print("=" * 70)
             del trainer
             break

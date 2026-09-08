@@ -714,6 +714,63 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3x. Attached inputs track latest; the stall guard is kept anyway (2026-09-08)
+
+**§3w finding (2) resolved on Kaggle: an attached notebook input tracks the LATEST
+version, not one pinned at attach time.** Run 5 read `run_index 2`, written by run 4.
+The chain works and no manual re-attach is needed between commits.
+
+**The guard is kept regardless, at the explicit instruction of the person running it,
+and the reason is the right one:** the pinning risk turned out not to exist, but *a
+stalled chain looks exactly like a normal resume*, and that is the failure class this
+project keeps paying for (§3e). The check costs one integer comparison. Being wrong
+about it costs 13.4 h per occurrence, repeatedly, with no output ever indicating a
+problem.
+
+**Where "strictly greater" belongs, which is not where it first appears to.**
+`RESUME_TOTAL_STEPS_AT_LEAST` is the total the *previous commit ended at*, so the
+restored total being **equal** to it is the healthy case. A strict comparison at restore
+time would fail every healthy resume. Strictness belongs on **progress made during the
+commit**: each seed must end strictly above both its own start and the previous commit's
+recorded step for that seed. Both checks now exist, at the layers where each is true.
+
+**Implementing that surfaced two defects in the code committed an hour earlier
+(`35060ff`), both of which would have presented as normal operation.**
+
+1. **The guard read checkpoint directories, which are deleted when a seed completes.**
+   `shutil.rmtree(ck)` runs once the adapter is saved, so a checkpoint-derived maximum
+   **drops to zero** the moment seed 1 finishes. The next commit would have raised
+   "the attached input is STALE" on a perfectly healthy chain — and the message would
+   have sent the operator hunting a nonexistent attachment problem. The guard now reads
+   the **per-seed progress files**, which persist, and compares a **total across seeds**,
+   which is monotonic where per-seed counts restart at 0.
+2. **The step budget was per seed, not per commit.** `StopAfterNSteps(RUN_STEP_BUDGET)`
+   was constructed inside the seed loop, so a commit that finished seed 1 and started
+   seed 2 handed seed 2 a fresh full budget. One commit could therefore train
+   2 × `RUN_STEP_BUDGET` — ~16 h at the measured rate — and hit the very time cap that
+   bounded commits exist to avoid (§3v), **while each seed's own budget was correctly
+   respected**. The counter is now class-level and shared across every seed the commit
+   touches, and the loop breaks before starting a seed it cannot fund.
+
+Defect 2 is the more instructive: the budget was not ignored, it was *applied at the
+wrong scope*. Every individual check passed. This is the same shape as §3o and §3t —
+a correct check pointed at the wrong object — and it is the fourth time in this project
+that scope, not logic, was the error.
+
+**Verified.** Restore across nine branches with the Kaggle paths redirected, including
+both regressions above: a completed seed with its checkpoints deleted (**passes**, where
+the previous implementation would have raised), and seed 1 complete plus seed 2 partway
+with totals summed (**passes**). Stalled chain, stale total, nothing attached on a
+non-first commit, an input holding nothing of ours, and two ambiguous inputs all
+**raise**. A differing notebook slug is still found, confirming the glob. Commit budget
+verified on the CPU harness with `RUN_STEP_BUDGET = 7` over three 10-step "seeds": seed 1
+ran to 7, seed 2 was not started, total 7 — where the per-seed bug would have permitted
+21.
+
+**Not verified:** none of this has run on Kaggle. The restore, both guards and the shared
+budget were exercised locally against redirected paths and a CPU harness with a tiny
+model. The first real commit is the test.
+
 ### 3w. Persistence measured; Tier 1 restructured for bounded commits (2026-09-08)
 
 **§3v's question, answered on Kaggle. Three Batch commits, zero GPU quota.**
