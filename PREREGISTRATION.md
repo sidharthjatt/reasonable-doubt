@@ -868,6 +868,58 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3ae. C3 substitution — the reaction, registered before the number (2026-09-08)
+
+Tier 0's three CE seeds land in a few hours and will fix `seed_sd`, which is the only
+free parameter in E2's registered accept rule. **What each possible value would mean is
+recorded here first**, so the reaction is preregistered along with the rule.
+
+`scripts/c3_substitute.py` performs the substitution mechanically:
+`margin = √2 × 1.96 × seed_sd`, with `seed_sd` the across-seed macro-F1 std on
+`train_holdout_3000` — **C3's registered metric, which is the selection split**. Because
+C3's metric is the selection split, the script has no reason to open a test field and
+does not. **The sealing is structural, not disciplinary.** A standard deviation carries no
+information about the level it was computed around, so printing it reveals nothing about
+whether E1 passed; a test asserts that two seed sets with the same spread and very
+different means produce byte-identical output.
+
+**Regimes, fixed in advance:**
+
+| margin | seed_sd | regime |
+|---|---|---|
+| ≤ 0.030 | ≤ 0.0108 | **A — comfortably testable.** At or below the 0.03 gain E2 itself calls plausible at 137.7× imbalance, so a real class-weighting effect of that size is detectable. |
+| 0.030 – 0.050 | 0.0108 – 0.0180 | **B — testable only for a LARGE effect.** The margin now exceeds E2's own plausible effect size, so the expected result would be declared not-accepted. E2 is still run and reported, with the margin stated and the fact that a plausible-sized effect sat outside detection stated with it. |
+| > 0.050 | > 0.0180 | **C — effectively untestable at 3 seeds.** The margin exceeds realistic headroom above E1 (LexGLUE DeBERTa macro-F1 is 0.831), so essentially no attainable arm could clear it. |
+| > 0.083 | > 0.030 | **C3's own falsification line**, registered in C3 before any run: several rules are unfalsifiable as written and must be loosened or moved to paired comparisons. |
+
+**Yes, regime C is possible, and it is named now rather than after the fact.** If it
+occurs, running `sqrt_inv_freq` for 3–5 GPU-hours would produce a foregone conclusion.
+The registered response is to **report E2 as not testable at this seed count with this
+margin**, state the measured `seed_sd`, and treat the GPU hours as available for
+something that can still discriminate — *not* to quietly widen the seed count until the
+margin shrinks, which would be choosing a threshold after seeing that the first one
+failed.
+
+**The margin inherits a 12× uncertainty band, and this is the part most likely to be
+forgotten.** The sample sd of **three** numbers is a very noisy estimate: with ν=2,
+`(n−1)s²/σ²` is χ²₂, so at 95% the true σ lies in `[0.52·s, 6.28·s]`. Whatever margin
+comes out, the interval consistent with the data spans a factor of twelve. **A regime-A
+result is therefore not proof that E2 is comfortably testable** — it is a point estimate
+that happens to fall in regime A, and the upper end of its own interval may be regime C.
+The script prints the band beside the margin and writes it into the substituted rule.
+
+**One ambiguity in the registration, flagged now while flagging it is still legitimate.**
+The formula names `seed_sd` without saying whether that is the point estimate or an upper
+confidence bound. `c3_substitute.py` uses the **point estimate**, which is the plain
+reading and the more permissive choice. Recording the alternative here, before the number
+exists, so that using the point estimate is a decision on the record rather than a
+default nobody noticed: a one-sided 95% upper bound on σ would be ~1.92× larger and would
+put most plausible outcomes in regime B or C.
+
+**Order of operations, which is the whole point:** run the script, read *only* `seed_sd`
+and the margin, commit the substituted rule, and **only then** open any E1/E2/E3 number.
+The same discipline kept with `stage1_results.json` for C2 and C4 (§3ad).
+
 ### 3ad. C1/C2/C4 registered; two of them adopted verbatim (2026-09-08)
 
 Full description in §3e under "A SECOND NEW CLASS". Short form: a request to re-anchor
