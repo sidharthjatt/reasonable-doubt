@@ -240,10 +240,16 @@ print("PREFLIGHT — validating every third-party signature before anything expe
 SEQ_LEN_KW = _resolve(SFTConfig, ["max_length", "max_seq_length"], "sequence length")
 
 # 2. Every other kwarg this cell passes, checked against the installed signature.
-_require(SFTConfig, ["output_dir","seed","num_train_epochs","learning_rate",
-    "per_device_train_batch_size","gradient_accumulation_steps","fp16","logging_steps",
-    "save_strategy","save_steps","save_total_limit","report_to",
-    "gradient_checkpointing"], "SFTConfig")
+# This list must name EVERY kwarg the cell passes to SFTConfig. "bf16" was passed
+# without being listed: it would not have failed, because bf16 is a dataclass field, but
+# an allowlist that happens to pass is not doing its job — it is the same shape as a
+# check that verifies the wrong property. The list is the claim; a kwarg missing from it
+# is unchecked whether or not it happens to be valid.
+_SFTCONFIG_KWARGS = ["output_dir","seed","num_train_epochs","learning_rate",
+    "per_device_train_batch_size","gradient_accumulation_steps","fp16","bf16",
+    "logging_steps","save_strategy","save_steps","save_total_limit","report_to",
+    "gradient_checkpointing"]
+_require(SFTConfig, _SFTCONFIG_KWARGS, "SFTConfig")
 _require(SFTTrainer, ["model","train_dataset","peft_config","args"], "SFTTrainer")
 _require(LoraConfig, ["r","lora_alpha","lora_dropout","bias","task_type",
     "target_modules"], "LoraConfig")
