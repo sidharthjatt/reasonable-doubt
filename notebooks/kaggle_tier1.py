@@ -425,7 +425,7 @@ for seed in SEEDS:
             "first real token of every padded sequence")
         cfg_kw = dict(output_dir=str(ck), seed=seed, num_train_epochs=EPOCHS,
             learning_rate=LR, per_device_train_batch_size=BS,
-            gradient_accumulation_steps=GA, fp16=True, logging_steps=100,
+            gradient_accumulation_steps=GA, logging_steps=100,
             save_strategy="steps", save_steps=500, save_total_limit=2,
             report_to=[], gradient_checkpointing=True,
             fp16=USE_FP16, bf16=USE_BF16)   # both explicit; bf16 default is None, not False

@@ -710,6 +710,80 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3s. The checks never ran — the file did not compile (2026-09-08)
+
+`kaggle_tier1.py` shipped from the §3r commit with `fp16` passed **twice** to the same
+`dict()` call: the pre-existing `fp16=True` was left in place when the explicit
+`fp16=USE_FP16, bf16=USE_BF16` pair was added beside it.
+
+```
+cfg_kw = dict(..., fp16=True, logging_steps=100,
+              ..., gradient_checkpointing=True,
+              fp16=USE_FP16, bf16=USE_BF16)
+SyntaxError: keyword argument repeated: fp16
+```
+
+**This is a compile-time error, so nothing in CELL 2 executes.** Not the version gate
+(§3p), not PREFLIGHT's signature checks (§3o), not the mixed-install crash-site check,
+not the precision/device gate written the same day to catch §3r's own failure class.
+Four sessions of accumulated guards, every one of them downstream of a file that never
+parsed. **A check is worth exactly as much as the file that reaches it.**
+
+**The compounding defect: the verification used the wrong instrument.** A CELL 2 parse
+check WAS run in that session and reported `tier1 CELL 2 parses`. It used `ast.parse`.
+Duplicate keyword arguments are rejected during symbol-table construction, not during
+parsing:
+
+```
+ast.parse("f = dict(a=1, a=2)")             -> succeeds
+compile("f = dict(a=1, a=2)", "<t>", "exec") -> SyntaxError: keyword argument repeated: a
+```
+
+So the check ran, passed, and was reported as passing, on a file that could not run.
+**This is §3o's class for the fourth time** — alongside import-presence checked for
+signature compatibility, one model generalised to all models, and one reading
+generalised to a rule. The shape is always *verifying a proxy for the property you care
+about*: here, "is this parseable" standing in for "will this execute".
+
+Instance 4 of §3e also applies: an operation with a success path and no failure path.
+`ast.parse` cannot report this defect, so its success carried no information about it.
+
+**Structural fix — `tests/test_notebooks_compile.py`, in the main suite (now 366 tests),
+not a one-off.** It compiles the `CELL 2 of 2` region of `kaggle_tier0.py` and
+`kaggle_tier1.py` and both probe files whole, with `compile(..., "exec")`. Four
+properties are pinned so the test cannot decay into the weaker check it replaces:
+
+* `test_ast_parse_would_not_have_caught_it` asserts the *divergence itself* — that
+  `ast.parse` accepts the exact defect that shipped and `compile` rejects it. Anyone
+  "simplifying" this back to `ast.parse` fails that test.
+* the `CELL 2 of 2` banner must exist exactly once per two-cell notebook, because the
+  banner is also what `notebooks/RUNNING.md`'s run protocol depends on — if it moves,
+  the test is compiling the wrong region *and* the run instructions are wrong.
+* CELL 1's exclusion is justified by an assertion that it still contains `!pip` and
+  still fails to compile, so the carve-out cannot outlive its reason.
+* verified by reintroducing the real defect: the suite fails with
+  `keyword argument repeated: fp16 (line 392 of the cell)`, and passes once reverted.
+
+**`kaggle_tier0.py` does NOT have this defect, and the premise that it might was
+wrong.** The §3r commit (`d84c53b`) touched `PREREGISTRATION.md`,
+`kaggle_probe_qlora.py` and `kaggle_tier1.py` only — **Tier 0 received no precision
+edits at all**, so there was no second `fp16` to duplicate. Its CELL 2 compiles clean.
+
+**But Tier 0 not receiving those edits is itself a finding, and two of §3r's defects
+apply to it unfixed:**
+
+| §3r defect | applies to Tier 0? | why |
+|------------|--------------------|-----|
+| `dtype="auto"` reading a bf16 config | **no** | Tier 0 pins `transformers==4.57.6`, which never defaults `dtype` to `"auto"` — verified two ways in a venv built from Tier 0's own pins: zero occurrences of `dtype = "auto"` in `from_pretrained`, against an explicit `dtype = "auto"` line in 5.0.0. The pin taken for `optimum-onnx` incidentally closes this. |
+| TRL's unconditional bf16 cast | **no** | Tier 0 uses `Trainer`, not `SFTTrainer`, and is not 4-bit |
+| `bf16` defaulting to `None` | **no** | `TrainingArguments.bf16` defaults to `False` in 4.57.6, not `None` as in 5.0.0 |
+| **DataParallel on two visible devices** | **YES** | Tier 0 sets no `CUDA_VISIBLE_DEVICES`. DeBERTa is neither 4-bit nor 8-bit, so `Trainer._wrap_model`'s `not is_loaded_in_8bit` guard passes and `nn.DataParallel` wraps it on "GPU T4 x2" |
+| **effective batch silently doubling** | **YES** | `train_batch_size = per_device_train_batch_size * max(1, n_gpu)`. Tier 0 runs `BS = 16`, so on two devices the effective batch becomes **32**. Unlike Tier 1's case this does not crash — DataParallel on a standard fp16 model works — it simply trains E1/E2 at a batch size no output reports. |
+
+The second pair is the more dangerous presentation of the two: Tier 1's version of this
+would have been loud, Tier 0's is silent. **Not fixed in this commit** — recorded here,
+and to be fixed before Tier 0 runs.
+
 ### 3r. T4 audit — every implicit precision, device and memory assumption (2026-09-08)
 
 Three probe runs on Kaggle each found a **different** T4-specific defect, and each was
