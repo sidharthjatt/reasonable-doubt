@@ -558,6 +558,55 @@ delta** — and include a control that is known to behave the opposite way
 (the `definitely_not_a_real_param` → HTTP 400 probe is what made the temperature result
 conclusive rather than merely suggestive). One sample describes a moment, not a rule.
 
+**A NEW CLASS — the false positive (2026-09-08).** Every instance above is a **real
+defect that presented as normal operation**. This one is the inverse: **normal operation
+flagged as a defect.**
+
+Reviewing the measured E6 energy inputs, I divided **load** SoC power by throughput —
+18.20 W ÷ 30.23 req/s = 0.6021 J/req — compared it against the reported **0.591**, found
+a 1.87% gap, and recorded an "internal inconsistency" in `configs/costs.yaml` and in
+§3aa, instructing that it be resolved on the next measurement.
+
+**There was no inconsistency.** The harness reports **marginal** power, which is the
+correct quantity:
+
+    (18.20 − 0.32) / 30.23  =  17.88 / 30.23  =  0.59147 J/req      vs 0.591 reported
+
+Exact agreement. I compared two quantities that were never meant to be equal, and 0.6021
+is a number nobody had claimed. The measurement was sound; **the divisor was wrong.**
+
+**This is not harmless, which is why it gets its own class rather than a footnote.** A
+spurious flag on a measured input to E6 discredits a sound measurement: the next reader
+finds a "known inconsistency" annotation on the energy term and reasonably discounts the
+whole energy analysis, or spends a re-measurement resolving a discrepancy that does not
+exist. False positives spend the same trust and attention that real findings need, and
+this project's entire method rests on flagged findings being worth reading. A checker
+that cries wolf degrades every other check in the file.
+
+**The mechanism, and the guard.** A derived quantity is only checkable against the
+**baseline it is defined against**, and that baseline was never written down — the field
+was a bare `power_draw_soc_watts: 18.20`, which does not say whether it is load, idle or
+marginal. The name admitted both readings and I took the wrong one.
+
+Mitigation, now in place:
+
+* the field is **split into three** — `power_draw_soc_watts_idle`, `_load`, `_marginal` —
+  so no single name can be read ambiguously;
+* `energy_joules_per_request` states **in the file** that it is derived from the marginal
+  figure, and why marginal is correct for E6 (idle is already carried by the capital
+  term, so charging it per-clause double-counts);
+* `tests/test_local_hardware.py` asserts the identity
+  `|marginal/rps − energy_j_per_req| < 0.005`, so the comment cannot drift from the
+  numbers — **and separately asserts that `load/rps` does NOT equal it**, pinning the
+  exact distinction that was missed. Verified both directions: perturbing the energy
+  figure to 0.650 fails the identity test with the full arithmetic in the message.
+
+**Standing rule added: state which baseline a derived quantity is defined against before
+checking it.** If the definition is not recorded, the check is not possible — and
+performing it anyway produces a confident comparison between unrelated numbers. The
+prior §3e instances all say *verify the property you care about, not a proxy*; this one
+adds that **you must first know what the property is defined against.**
+
 **Fourth retraction — two hypotheses weighted at once, one of which forbids the other
 (2026-09-08).** Diagnosing Tier 1's silent commit (§3z), I argued the leading explanation
 was that `ProgressCallback` writes through `tqdm` to **stderr** and the Batch log viewer
@@ -749,6 +798,33 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3ab. A false positive on a sound measurement (2026-09-08)
+
+Recorded as its own entry because it is a **new failure class for this project**, and the
+full description is in §3e under "A NEW CLASS — the false positive".
+
+**Short form.** I flagged a 1.87% "internal inconsistency" between the measured
+18.20 W, 30.23 req/s and 0.591 J/request, and wrote it into `configs/costs.yaml` and
+§3aa. It was wrong. The harness reports **marginal** power, and
+`(18.20 − 0.32) / 30.23 = 0.59147` matches 0.591 exactly. I divided by **load** power —
+a quantity nobody had claimed — and reported the mismatch as a defect.
+
+**Every other §3e instance is a real defect presenting as normal operation. This is the
+inverse: normal operation presenting as a defect.** It is not harmless — a spurious flag
+on a measured E6 input discredits a sound measurement and spends the attention that real
+findings need.
+
+**Root cause:** the field was a bare `power_draw_soc_watts`, which does not say whether
+it is load, idle or marginal. A derived quantity cannot be checked without knowing the
+baseline it is defined against, and that baseline was never written down.
+
+**Fixed:** field split into `_idle` / `_load` / `_marginal`; the marginal basis and its
+justification stated in `configs/costs.yaml`; and `tests/test_local_hardware.py` asserts
+`|marginal/rps − energy_j_per_req| < 0.005` **and** that `load/rps` does not equal it,
+pinning the distinction. The flag is removed from both files. **E6's numbers are
+unchanged** — 0.591 J/req, $1.390e-5 per 1k, V\* = 1,413,969 — because the measurement
+was always right.
+
 ### 3aa. E6 energy term MEASURED; the crossover barely moves (2026-09-08)
 
 `power_draw_watts` and `electricity_cost_usd_per_kwh` were the last two nulls blocking
@@ -758,8 +834,10 @@ measured per-clause floor rather than without one.**
 | quantity | value | source |
 |---|---|---|
 | throughput | **30.23 req/s** | measured, ONNX INT8, bs 1, max_length 512 |
-| SoC power | **18.20 W** | measured, `powermetrics` Combined Power |
-| energy | **0.591 J/request** | measured |
+| SoC power, idle | **0.32 W** | measured, `powermetrics` Combined Power |
+| SoC power, load | **18.20 W** | measured |
+| **SoC power, marginal** | **17.88 W** | load − idle; **the figure E6 uses** |
+| energy | **0.591 J/request** | = 17.88 / 30.23 = 0.59147 |
 | electricity | **$0.0847/kWh** | tariff |
 | **energy cost** | **$1.390e-5 per 1,000 clauses** | derived |
 | Sonnet 5 (batch, cached) | $0.4483 per 1,000 | §1 |
@@ -813,19 +891,22 @@ under that — moves V\* by **87 clauses out of 1.41 million**. Even 10x moves i
 **E6 turns on capital and volume; energy is not a lever at any plausible correction**,
 and that is now shown rather than assumed.
 
-**Two data-quality flags, recorded rather than smoothed over.**
+**Why MARGINAL power is the right baseline, and not merely the one that was measured.**
+Idle draw (0.32 W) is incurred whether or not Tier 0 serves a single clause. Charging it
+to per-clause cost would double-count baseline machine cost that the **capital term
+already carries** — the $633,862.43/V numerator exists precisely because the machine
+exists. The incremental term must therefore be the incremental power. The harness made
+this choice correctly.
 
-1. **The three measured numbers are not internally consistent.**
-   18.20 W ÷ 30.23 req/s = **0.6021 J/request**, against the reported **0.591** — a
-   **1.87%** disagreement. Either the power is 17.87 W or the throughput is 30.80 req/s.
-   0.591 is treated as authoritative because it was reported as the measured energy
-   figure; the derived 0.6021 gives $1.416e-5 per 1k, which changes nothing at three
-   orders of magnitude of headroom. Recorded in `configs/costs.yaml` beside the values.
-   **Resolve on the next measurement rather than averaging it away.**
-2. **`measured_throughput_rps_sd` is now null, not 0.24.** 0.24 was the spread of the
-   *28.97* measurement and does not describe *30.23*. Pairing an old spread with a new
-   mean would misreport the precision of a number E6 depends on. The new figure arrived
-   without a spread and the field says so.
+**One data-quality flag.** `measured_throughput_rps_sd` is now **null, not 0.24**. 0.24
+was the spread of the *28.97* measurement and does not describe *30.23*. Pairing an old
+spread with a new mean would misreport the precision of a number E6 depends on. The new
+figure arrived without a spread and the field says so.
+
+*(An earlier version of this entry carried a second flag, asserting a 1.87% internal
+inconsistency between the power, throughput and energy figures. **That flag was wrong and
+has been removed** — it compared LOAD power against a MARGINAL-power derivation. The
+three numbers agree exactly. See §3ab.)*
 
 **Carried forward, unchanged and still binding:** every one of these numbers was measured
 on the **UNTRAINED architecture probe**, not the trained Tier 0 artefact. Throughput is

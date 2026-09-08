@@ -120,16 +120,23 @@ local_hardware:
   # precision of a number the E6 curve depends on.
   measured_throughput_rps_sd: null
   # Energy term — MEASURED 2026-09-08, no longer null. See energy_note below for the
-  # SoC-vs-wall limitation, which is the reason the field is named _soc_watts.
-  power_draw_soc_watts: 18.20        # SoC package only (CPU+GPU+ANE). NOT wall power.
-  power_draw_wall_watts: null        # not obtainable from powermetrics; needs a meter
+  # SoC-vs-wall limitation, which is the reason the fields are named _soc_watts.
+  #
+  # THREE power figures, because LOAD and MARGINAL are different quantities and are not
+  # interchangeable. A single `power_draw_soc_watts` field invited exactly that confusion
+  # once already — see PREREGISTRATION 3ab, where load power was divided by throughput
+  # and the resulting mismatch was recorded as a defect in a measurement that was sound.
+  power_draw_soc_watts_idle: 0.32        # baseline, incurred whether or not Tier 0 serves
+  power_draw_soc_watts_load: 18.20       # total under sustained load
+  power_draw_soc_watts_marginal: 17.88   # load - idle; THIS is the one E6 uses
+  power_draw_wall_watts: null            # not obtainable from powermetrics; needs a meter
+  # DERIVED FROM THE MARGINAL FIGURE: 17.88 W / 30.23 req/s = 0.59147 J/req.
+  # Marginal, not load, is the correct baseline for E6: idle draw is incurred whether or
+  # not Tier 0 serves a single clause, so charging it to per-clause cost would
+  # double-count baseline machine cost that the capital term already carries.
+  # The identity is asserted in tests/test_local_hardware.py, so this comment cannot
+  # drift away from the numbers it describes.
   energy_joules_per_request: 0.591
-  # INTERNAL INCONSISTENCY, recorded rather than smoothed over: 18.20 W / 30.23 rps =
-  # 0.6021 J/req, which disagrees with the reported 0.591 by 1.87%. Either the power is
-  # 17.87 W or the throughput is 30.80 rps. 0.591 is treated as authoritative because it
-  # was reported as the measured energy figure. The discrepancy changes nothing that
-  # depends on it — both give ~$1.4e-5 per 1k clauses, ~1/32,000 of Sonnet 5 — but it is
-  # not silently averaged away. Resolve on the next measurement.
   electricity_cost_usd_per_kwh: 0.0847
   per_tier_throughput:
     tier0_encoder_onnx_int8:
@@ -147,11 +154,16 @@ local_hardware:
       # First measurement (idle 0.2 / load 16.0 W) came from the pre-fix harness whose
       # load loop re-initialised a 245 MB ORT session each pass, so it measured model
       # loading as well as inference. Re-measure with the fixed harness.
-      power_draw_soc_watts: 18.20     # MEASURED 2026-09-08 with the fixed harness
+      power_draw_soc_watts_idle: 0.32
+      power_draw_soc_watts_load: 18.20      # MEASURED 2026-09-08 with the fixed harness
+      power_draw_soc_watts_marginal: 17.88  # load - idle; E6 uses this one
       power_draw_wall_watts: null     # NOT obtainable from powermetrics; needs a meter
-      energy_joules_per_request: 0.591
+      energy_joules_per_request: 0.591      # = marginal / requests_per_second
       energy_note: >
-        MEASURED, not assumed. 0.591 J/request at $0.0847/kWh is $1.390e-5 per 1000
+        MEASURED, not assumed. 0.591 J/request is the MARGINAL figure
+        (17.88 W / 30.23 req/s = 0.59147), which is the right baseline for E6 because
+        idle draw is incurred regardless of whether Tier 0 serves anything.
+        At $0.0847/kWh that is $1.390e-5 per 1000
         clauses, which is 1/32,240 of Sonnet 5's $0.4483 per 1000. Including it moves
         E6's greenfield crossover from V* = 1,413,925 to 1,413,969 — UP by 44 clauses,
         because a positive per-clause cost makes local break even LATER, not earlier.
