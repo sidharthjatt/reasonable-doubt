@@ -94,7 +94,7 @@ amortisation window would have introduced:
 
 | case | assumption | local cost/1k | result |
 |------|-----------|---------------|--------|
-| **Greenfield** | hardware bought for this workload; capital attributable | $633.86 / V per 1k | **V\* ≈ 1.41M clauses** for Tier 0 alone, higher for the cascade by 1/(1 − escalation_rate) |
+| **Greenfield** | hardware bought for this workload; capital attributable | $633,862.43 / V + $1.390e-5 per 1k | **V\* = 1,413,969 clauses** for Tier 0 alone (energy-inclusive, §3aa), higher for the cascade by 1/(1 − escalation_rate) |
 | **Sunk capital** | the Mac Mini already exists (it does) | ~$0.000013 per 1k | **local wins from the first clause** |
 
 **Both are correct under their own assumption, and the honest report gives both.** The
@@ -104,9 +104,9 @@ breaks even** — V\* is ~18x the entire corpus. A reader deploying on hardware 
 already own reaches the opposite conclusion. The volume at which those two answers
 swap is the finding.
 
-`V_max` (what the device can process in its life) is **685,230,000** clauses at 3 years
-and 25% duty — far above V\*, so under the greenfield case the device does not die
-before break-even; it simply needs ~18 corpora of work to get there.
+`V_max` (what the device can process in its life) is **714,999,960** clauses at
+30.23 rps, 3 years and 25% duty — **506x V\***, so under the greenfield case the device
+does not die before break-even; it simply needs ~17.7 corpora of work to get there.
 
 **Power measurement caveat, stated precisely.** `powermetrics --samplers cpu_power`
 reports "Combined Power (CPU + GPU + ANE)" — **SoC package power only**. It excludes
@@ -347,9 +347,9 @@ this does not change any conclusion, but the number must be what it says it is.
      (capital attributable, V\* finite and ≤ V_max) and sunk-capital (marginal cost
      only). Neither is privileged; both curves appear in the report; **and**
   3. **Asymptote:** the cascade's high-volume cost/1k is **< 50%** of
-     Sonnet-5-alone's. Measurement has made this nearly automatic — energy is ~1/34,000
-     of the API line — so condition 3 is now a **sanity check, not a discriminator**,
-     and E6 rests on conditions 1 and 2.
+     Sonnet-5-alone's. Measurement has made this nearly automatic — the asymptote is
+     **0.0031%** of the API line, energy being **1/32,240** of it (§3aa) — so condition 3
+     is a **sanity check, not a discriminator**, and E6 rests on conditions 1 and 2.
 - **V\* IS THE REPORTED RESULT, NOT A TEST.** An earlier draft required *V\** ≤ 1,000,000
   clauses. **That number was picked, not anchored** — the same defect as E1's original
   0.70 — and no source fixes what volume a "realistic deployment" reaches; it depends
@@ -365,10 +365,13 @@ this does not change any conclusion, but the number must be what it says it is.
 - **Falsification:** no finite crossover at or below `V_max`, or an asymptote above
   50% ⇒ the cascade does not pay for itself. **Report the full curve and V\* regardless** — a negative break-even result is exactly what measuring was for.
 
-- **⚠ STILL BLOCKED, see §1b.** `device_cost_usd` is null (59,900 INR and an FX rate are
-  recorded but the USD figure is not derived), `measured_throughput_rps` and every
-  `per_tier_throughput` entry are null, and **`power_draw_watts` /
-  `electricity_cost_usd_per_kwh` are null**.
+- **⚠ PARTIALLY UNBLOCKED (2026-09-08).** `measured_throughput_rps` (30.23),
+  `power_draw_soc_watts` (18.20), `energy_joules_per_request` (0.591) and
+  `electricity_cost_usd_per_kwh` (0.0847) are now measured and in `configs/costs.yaml`;
+  the energy term is no longer null and the curve in §3aa is computed with it.
+  `device_cost_usd` remains **derived, not stored** (59,900 INR ÷ 94.50, per hard rule
+  5 and the FX-auditability note). Tier 1 and Tier 2 `per_tier_throughput` entries are
+  still null, so the **cascade** curve is not yet computable — only Tier 0's.
 
 - **What the curve changes about the measurement harness — answering the question
   directly:**
@@ -555,6 +558,38 @@ delta** — and include a control that is known to behave the opposite way
 (the `definitely_not_a_real_param` → HTTP 400 probe is what made the temperature result
 conclusive rather than merely suggestive). One sample describes a moment, not a rule.
 
+**Fourth retraction — two hypotheses weighted at once, one of which forbids the other
+(2026-09-08).** Diagnosing Tier 1's silent commit (§3z), I argued the leading explanation
+was that `ProgressCallback` writes through `tqdm` to **stderr** and the Batch log viewer
+was not surfacing it — and then, in the same analysis, published a table row reading
+*"implied by no step-100 log at 8,520 s → **< 0.0122 it/s**"* and concluded the run
+"cannot finish under any cap".
+
+**Those two claims are incompatible.** The throughput bound is derived *entirely* from
+the absence of a log line. If the log path is broken — the leading hypothesis — then the
+absence of a log line carries **no information whatsoever about throughput**, and the run
+may be perfectly healthy at the measured 0.07 it/s. The inference is only valid under the
+hypothesis it was offered as an alternative to. I ranked the hypotheses correctly and
+then reasoned as though the lowest-ranked one were established.
+
+This is §3e's original shape — *a structural fact inferred from a single observation* —
+with an extra turn: **the single observation was an absence, and an absence is evidence
+only if the channel that would have carried the signal is known to work.** Ruling out
+`dataloader_num_workers`, `dist.barrier()` and the rest from source was sound; converting
+silence into a number was not.
+
+**Restated on its actual grounds.** The decision to stop the run was right and the
+justification was wrong. It is **not** "the run is provably too slow" — that is
+unknowable from here. It is: **3 seeds × 13.4 h against a 30 h weekly quota cannot be run
+blind.** Every subsequent commit depends on reading throughput and step progress from the
+log. Spending 2.4 h once to buy legibility for all of them is cheap; discovering at the
+cap that the instrumentation never worked is not. The heartbeat, the flushed log and
+`logging_steps=20` are the deliverable, and the stopped run is what paid for them.
+
+**Standing rule added:** an inference from *absence of output* must state, and check, the
+assumption that the output channel works. Where it cannot be checked, the absence is not
+evidence and must not be converted into a bound.
+
 **Third retraction, a second axis (2026-09-07).** `temperature` was validated on
 Haiku 4.5 — range-checked, type-checked, with an unknown-field control — and the
 conclusion generalised to Sonnet 5. It does not hold: **Sonnet 5 returns
@@ -714,6 +749,96 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3aa. E6 energy term MEASURED; the crossover barely moves (2026-09-08)
+
+`power_draw_watts` and `electricity_cost_usd_per_kwh` were the last two nulls blocking
+E6's energy term. Both are now measured, so **E6's local curve is computed with a
+measured per-clause floor rather than without one.**
+
+| quantity | value | source |
+|---|---|---|
+| throughput | **30.23 req/s** | measured, ONNX INT8, bs 1, max_length 512 |
+| SoC power | **18.20 W** | measured, `powermetrics` Combined Power |
+| energy | **0.591 J/request** | measured |
+| electricity | **$0.0847/kWh** | tariff |
+| **energy cost** | **$1.390e-5 per 1,000 clauses** | derived |
+| Sonnet 5 (batch, cached) | $0.4483 per 1,000 | §1 |
+| **ratio** | **1 / 32,240** | derived |
+
+**The crossover, recomputed.** `cost_local(V) = 633,862.43/V + 1.390e-5` per 1,000
+clauses, against Sonnet 5's flat $0.4483:
+
+| | V\* |
+|---|---|
+| energy term excluded (previous figure) | 1,413,925 |
+| **energy term included** | **1,413,969** |
+| shift | **+44 clauses (+0.0031%)** |
+
+**The shift is UP, not down, and the direction is the whole point.** Adding a positive
+per-clause cost to the local curve makes local break even **later**:
+`V* = 633,862.43 / (0.4483 − e)`, and `e > 0` shrinks the denominator. So the previous
+figure was **an optimistic lower bound** — it understated local cost by omitting a real
+term — and the corrected figure sits above it. The conclusion is unchanged (~1.41M
+clauses, **17.7x the entire 80,000-clause LEDGAR corpus**, and 1/506 of `V_max`), but it
+is now an *inclusive* number rather than a bound. That is the only thing the measurement
+bought, and it is worth having: E6's whole design (§1b) is that the energy term is what
+stops the local curve tending to zero, and asserting it was negligible without measuring
+it would have been the §3e error in its usual costume.
+
+**The asymptote condition is now measured too.** E6's accept condition 3 requires the
+high-volume cost to be < 50% of Sonnet-5-alone. The measured asymptote is **0.0031%**.
+Condition 3 is a sanity check, not a discriminator; E6 rests on conditions 1 and 2.
+
+**SoC-only limitation, stated separately because it is a real limit on the measurement
+and not a caveat on the conclusion.** `powermetrics --samplers cpu_power` reports
+"Combined Power (CPU + GPU + ANE)" — **SoC package power only.** It excludes RAM, SSD,
+PSU losses, networking and fans. **It is not wall power, and wall power cannot be
+obtained from `powermetrics` at all**; it requires an external meter, which we do not
+have. So 18.20 W is a floor on the machine's true draw, and 0.591 J/request is a floor on
+true per-request energy. The field is named `power_draw_soc_watts` for that reason, with
+`power_draw_wall_watts` left null rather than filled with the SoC figure.
+
+**The limitation cannot change E6's answer, and that is demonstrable rather than
+asserted:**
+
+| wall correction | energy per 1k | V\* | vs no-energy |
+|---|---|---|---|
+| ×1 (SoC, measured) | $1.390e-5 | 1,413,969 | +0.0031% |
+| **×3** | $4.171e-5 | **1,414,056** | **+0.0093%** |
+| ×5 | $6.952e-5 | 1,414,144 | +0.0155% |
+| ×10 | $1.390e-4 | 1,414,363 | +0.0310% |
+
+A 3x wall-power correction — generous, since SoC-to-wall on a Mac Mini is typically well
+under that — moves V\* by **87 clauses out of 1.41 million**. Even 10x moves it by 438.
+**E6 turns on capital and volume; energy is not a lever at any plausible correction**,
+and that is now shown rather than assumed.
+
+**Two data-quality flags, recorded rather than smoothed over.**
+
+1. **The three measured numbers are not internally consistent.**
+   18.20 W ÷ 30.23 req/s = **0.6021 J/request**, against the reported **0.591** — a
+   **1.87%** disagreement. Either the power is 17.87 W or the throughput is 30.80 req/s.
+   0.591 is treated as authoritative because it was reported as the measured energy
+   figure; the derived 0.6021 gives $1.416e-5 per 1k, which changes nothing at three
+   orders of magnitude of headroom. Recorded in `configs/costs.yaml` beside the values.
+   **Resolve on the next measurement rather than averaging it away.**
+2. **`measured_throughput_rps_sd` is now null, not 0.24.** 0.24 was the spread of the
+   *28.97* measurement and does not describe *30.23*. Pairing an old spread with a new
+   mean would misreport the precision of a number E6 depends on. The new figure arrived
+   without a spread and the field says so.
+
+**Carried forward, unchanged and still binding:** every one of these numbers was measured
+on the **UNTRAINED architecture probe**, not the trained Tier 0 artefact. Throughput is
+weight-independent — identical ops on identical shapes — so it transfers; power and
+energy follow throughput for the same reason. **This must still be re-verified on the
+real INT8 artefact when it exists**, and E1's accept rule attaches to that artefact, not
+to this probe.
+
+**Still blocking the full E6 curve:** Tier 1 and Tier 2 `per_tier_throughput` entries
+remain null, so only **Tier 0's** curve is computable. The *cascade* curve — which is
+what E6's headline claim is about — needs Tier 1 serving numbers that do not exist until
+Tier 1 trains.
+
 ### 3z. A run with no observable state (2026-09-08)
 
 Tier 1 commit 1 reached 2h22m with **no output at all** after the re-cast line at 328 s.
@@ -760,12 +885,26 @@ cap timeout and total loss of the commit's output** (§3v).
 | finish 2,000 steps inside a 9 h cap | ≥ **0.0624 it/s** |
 | inside a 12 h cap | ≥ **0.0467 it/s** |
 | measured earlier, interactive | 0.0700 it/s → 8.0 h ✓ |
-| **implied by no step-100 log at 8,520 s** | **< 0.0122 it/s → 46 h ✗** |
+| ~~implied by no step-100 log at 8,520 s~~ | ~~< 0.0122 it/s → 46 h~~ **RETRACTED** |
 
-So if the run really is that slow it **cannot finish under any cap** and is already lost.
-And **stopping it manually forfeits exactly what a cap timeout would** — neither produces
-retrievable output — so "stop to save the output" is not a reason to act either way. The
-only thing at stake in waiting is more quota.
+**That last row is retracted — see the fourth retraction in §3e.** It derives a
+throughput bound entirely from the absence of a log line, while this same entry argues
+the leading explanation is that the log channel does not work. Under that hypothesis the
+absence carries **no information about throughput at all** and the run may be healthy at
+0.07 it/s. The two cannot both be weighted, and the bound was the weaker of the two.
+
+**What is actually known:** the required rates above are real, the measured 0.07 it/s is
+real, and **nothing observed distinguishes a healthy run from a stalled one.** That is
+the finding.
+
+**Stopping it manually forfeits exactly what a cap timeout would** — neither produces
+retrievable output — so "stop to save the output" is not a reason either way.
+
+**The real ground for stopping: 3 seeds × 13.4 h against a 30 h weekly quota cannot be
+run blind.** Every subsequent commit depends on reading throughput and step progress out
+of the log, and none of them can be steered without it. Spending 2.4 h once to buy
+legibility for all of them is cheap. Discovering at the cap that the instrumentation
+never worked is not.
 
 **Fix — three parts, and the thread is the one that matters.**
 
