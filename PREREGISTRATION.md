@@ -798,6 +798,73 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3ac. The electricity tariff is ASSUMED, and E6 does not depend on it (2026-09-08)
+
+`electricity_cost_usd_per_kwh: 0.0847` was sitting in `configs/costs.yaml` beside
+measured quantities with nothing marking it as unmeasured. **It is a guess** — roughly
+Rs 8/kWh at the recorded FX, an estimate of a Rajasthan domestic slab, supplied in
+conversation and **never read off a bill.**
+
+This is §3ab's class again — *a value whose basis is not stated* — with the basis being
+worse than ambiguous. The power field was ambiguous between load and marginal; this one
+is not a measurement at all, and sat in a file whose other entries are.
+
+**Field split, and a refusal rather than a fallback.**
+
+```yaml
+electricity_cost_usd_per_kwh_measured: null
+electricity_cost_usd_per_kwh_assumed: 0.0847
+```
+
+`src/eval/breakeven.py` reads `_measured` first and **raises `TariffUnavailableError`**
+rather than reaching for `_assumed`. The assumption is available only to a caller that
+passes `allow_assumed_tariff=True` — asked for by name — and every `BreakevenResult`
+returned then carries `tariff_is_assumed=True` and a `tariff_basis` string that begins
+"ASSUMED". This is hard rule 11 applied exactly: an approximation may be used when it is
+legitimately needed, but it must be requested explicitly, marked in the output, and never
+substituted silently. The assumed tariff cannot reach `src/api/cost.py`, which is the
+billing path, because nothing in that path reads `local_hardware`.
+
+**Sensitivity, in the same form as §3aa's wall-power table.** Reference is V\* with the
+energy term excluded entirely (1,413,925):
+
+| tariff | USD/kWh | energy $/1k | V\* | vs no-energy |
+|---|---|---|---|---|
+| 0.5x | 0.0423 | $6.952e-6 | 1,413,947 | +0.0016% |
+| **1.0x (assumed)** | **0.0847** | **$1.390e-5** | **1,413,969** | **+0.0031%** |
+| 2.0x | 0.1694 | $2.781e-5 | 1,414,012 | +0.0062% |
+| **10.0x** | 0.8470 | $1.390e-4 | **1,414,363** | **+0.0310%** |
+
+**A tenfold error in the tariff moves the crossover by 439 clauses out of 1.41 million —
+0.0310%, comfortably under 0.05%.** Combining the two unmeasured quantities at their
+worst — a 10x tariff error *and* a 3x SoC-to-wall correction together — gives
+V\* = 1,415,242, **+0.0931%**. Still under a tenth of one percent.
+
+**So the assumption is not load-bearing — but that is a finding, not a premise.** It
+would have been easy, and wrong by this project's standards, to write "energy is tiny so
+the tariff cannot matter" and move on. The claim is only worth anything because the table
+above was computed: §3ab was caused by exactly that kind of confident reasoning about
+numbers that had not been put side by side. E6's headline rests on **capital and
+volume**; the tariff, the SoC-only power figure, and both together are shown to be
+immaterial rather than assumed to be.
+
+**What would change this.** If a measured tariff arrives it goes in `_measured`, the flag
+clears automatically (tested), and V\* is recomputed — a difference of at most a few
+hundred clauses. If E6's API baseline ever drops by three orders of magnitude, energy
+stops being negligible and this table must be recomputed; the guard is that
+`breakeven()` **raises** rather than returning a negative or infinite V\* when energy
+meets or exceeds the API line, because that case is an E6 result to report, not an error
+to swallow.
+
+**Tests (`tests/test_local_hardware.py`, 10 total).** That `resolve_tariff` refuses
+without `allow_assumed_tariff`; that **every** result built on the assumed tariff carries
+`tariff_is_assumed=True`, across all four multipliers; that supplying a measured tariff
+**clears** the flag — without which the flag could be a hardcoded `True` and the previous
+test would still pass, verifying a constant instead of a property (§3o); that the four
+published V\* values match the code, so this table cannot drift from
+`src/eval/breakeven.py`; and that no `device_cost_usd` is ever stored, since hard rule 5
+requires it derived from INR and the FX rate.
+
 ### 3ab. A false positive on a sound measurement (2026-09-08)
 
 Recorded as its own entry because it is a **new failure class for this project**, and the
@@ -838,7 +905,7 @@ measured per-clause floor rather than without one.**
 | SoC power, load | **18.20 W** | measured |
 | **SoC power, marginal** | **17.88 W** | load − idle; **the figure E6 uses** |
 | energy | **0.591 J/request** | = 17.88 / 30.23 = 0.59147 |
-| electricity | **$0.0847/kWh** | tariff |
+| electricity | **$0.0847/kWh** | **ASSUMED, not measured — see §3ac** |
 | **energy cost** | **$1.390e-5 per 1,000 clauses** | derived |
 | Sonnet 5 (batch, cached) | $0.4483 per 1,000 | §1 |
 | **ratio** | **1 / 32,240** | derived |
@@ -897,6 +964,10 @@ to per-clause cost would double-count baseline machine cost that the **capital t
 already carries** — the $633,862.43/V numerator exists precisely because the machine
 exists. The incremental term must therefore be the incremental power. The harness made
 this choice correctly.
+
+**One input here is not a measurement.** The electricity tariff is an **assumption**,
+not a reading from a bill. §3ac states its basis, shows E6's sensitivity to it, and
+records the code and tests that stop it reaching the report unlabelled.
 
 **One data-quality flag.** `measured_throughput_rps_sd` is now **null, not 0.24**. 0.24
 was the spread of the *28.97* measurement and does not describe *30.23*. Pairing an old

@@ -100,3 +100,80 @@ def test_throughput_sd_not_paired_with_a_different_mean(hw: dict) -> None:
             "sd is set while throughput is back at 28.97 — check these came from the "
             "same measurement rather than being recombined from different ones."
         )
+
+
+# --------------------------------------------------------------------------------
+# The electricity tariff is an ASSUMPTION, not a measurement. These tests exist so it
+# cannot quietly become one. See PREREGISTRATION 3ac.
+# --------------------------------------------------------------------------------
+
+from src.eval.breakeven import (  # noqa: E402
+    TariffUnavailableError,
+    breakeven,
+    resolve_tariff,
+)
+
+SONNET_USD_PER_1K = 0.4483  # §1, batch + cached
+
+
+def test_tariff_is_not_silently_substituted(hw: dict) -> None:
+    """Hard rule 11: an approximation must be requested by name, never defaulted to."""
+    if hw["electricity_cost_usd_per_kwh_measured"] is not None:
+        pytest.skip("a measured tariff now exists; the fallback path is not in use")
+    with pytest.raises(TariffUnavailableError, match="allow_assumed_tariff"):
+        resolve_tariff(hw)
+
+
+def test_any_result_built_on_the_assumed_tariff_says_so(hw: dict) -> None:
+    """If _measured is null, EVERY E6 result must carry tariff_is_assumed=True.
+
+    This is the property that stops an assumed input reaching the report unlabelled.
+    """
+    if hw["electricity_cost_usd_per_kwh_measured"] is not None:
+        pytest.skip("a measured tariff now exists")
+    for mult in (0.5, 1.0, 2.0, 10.0):
+        r = breakeven(SONNET_USD_PER_1K, hw=hw, allow_assumed_tariff=True,
+                      tariff_multiplier=mult)
+        assert r.tariff_is_assumed is True, (
+            f"result at tariff x{mult} does not carry tariff_is_assumed while "
+            f"electricity_cost_usd_per_kwh_measured is null"
+        )
+        assert "ASSUMED" in r.tariff_basis
+
+
+def test_measured_tariff_would_clear_the_flag(hw: dict) -> None:
+    """The flag tracks the data, not a hardcoded constant.
+
+    Without this, `tariff_is_assumed = True` could be permanently wired on and the test
+    above would still pass — verifying a constant rather than a property.
+    """
+    measured = dict(hw, electricity_cost_usd_per_kwh_measured=0.0847)
+    r = breakeven(SONNET_USD_PER_1K, hw=measured, allow_assumed_tariff=False)
+    assert r.tariff_is_assumed is False
+    assert resolve_tariff(measured).basis.startswith("measured")
+
+
+def test_tariff_sensitivity_matches_the_published_table(hw: dict) -> None:
+    """Pin PREREGISTRATION 3ac's numbers so the doc cannot drift from the code."""
+    ref = breakeven(SONNET_USD_PER_1K, hw=hw, allow_assumed_tariff=True,
+                    tariff_multiplier=0.0).v_star          # energy-free reference
+    expected = {0.5: 1413947, 1.0: 1413969, 2.0: 1414012, 10.0: 1414363}
+    for mult, v in expected.items():
+        got = breakeven(SONNET_USD_PER_1K, hw=hw, allow_assumed_tariff=True,
+                        tariff_multiplier=mult).v_star
+        assert round(got) == v, f"tariff x{mult}: V*={got:,.0f}, table says {v:,}"
+    worst = breakeven(SONNET_USD_PER_1K, hw=hw, allow_assumed_tariff=True,
+                      tariff_multiplier=10.0).v_star
+    assert (worst / ref - 1) < 0.0005, (
+        f"a 10x tariff now moves V* by {(worst/ref-1)*100:.4f}%, over the 0.05% at which "
+        f"3ac calls the assumption non-load-bearing. Re-open that conclusion."
+    )
+
+
+def test_device_cost_is_derived_from_inr_not_stored_as_usd(hw: dict) -> None:
+    """Hard rule 5 / the FX-auditability note: no hardcoded USD device cost."""
+    assert "device_cost_usd" not in hw, (
+        "a USD device cost has been stored. It must stay derived from "
+        "device_cost_amount and fx.usd_per_inr_rate so the report can be audited "
+        "against the rate and its date."
+    )

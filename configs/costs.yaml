@@ -137,7 +137,21 @@ local_hardware:
   # The identity is asserted in tests/test_local_hardware.py, so this comment cannot
   # drift away from the numbers it describes.
   energy_joules_per_request: 0.591
-  electricity_cost_usd_per_kwh: 0.0847
+  # TARIFF — ASSUMED, NOT MEASURED. Split so the basis cannot be misread, for the same
+  # reason the power field was split (PREREGISTRATION 3ab): a value whose basis is not
+  # stated invites a confident wrong reading. This one is worse than ambiguous — it is a
+  # guess.
+  #
+  # 0.0847 USD/kWh is ~Rs 8/kWh at the recorded FX, a guess at a Rajasthan domestic slab.
+  # It was supplied in conversation, NOT read off a bill, and has never been verified.
+  # Do not promote it to _measured without an actual tariff document.
+  #
+  # src/eval/breakeven.py reads _measured FIRST and will REFUSE to fall back to _assumed
+  # unless the caller passes allow_assumed_tariff=True, and every result it returns
+  # carries tariff_is_assumed. Hard rule 11: an approximation must be asked for by name
+  # and must be marked in the output; it may never be substituted silently.
+  electricity_cost_usd_per_kwh_measured: null
+  electricity_cost_usd_per_kwh_assumed: 0.0847
   per_tier_throughput:
     tier0_encoder_onnx_int8:
       requests_per_second: 30.23
