@@ -158,7 +158,11 @@ USE_FP16, USE_BF16 = True, False        # AMP mode. bf16 is impossible on T4.
 #   FALLBACK IF IT OOMs: BS 2 / GA 8. NOT BS 2 alone — the effective batch is
 #   BS x GA and must stay 16, because that is what E4 is registered at.
 MAX_LEN, EPOCHS, LR, BS, GA = 2560, 1, 2e-4, 4, 4
-assert BS * GA == 16, f"effective batch must stay 16 (registered for E4), got {BS*GA}"
+REGISTERED_EFFECTIVE_BATCH = 16   # PREREGISTRATION 3t, E4 — not merely this file's value
+assert BS * GA == REGISTERED_EFFECTIVE_BATCH, (
+    f"effective batch is {BS * GA}, but E4 is registered at "
+    f"{REGISTERED_EFFECTIVE_BATCH} in PREREGISTRATION 3t. The documented OOM fallback is "
+    f"BS 2 / GA 8, which preserves it; changing the product is an amendment.")
 EVAL_BS = 8            # halved automatically on OOM; 2560-token prompts are large
 MAX_NEW_TOKENS = 16                    # longest label = 5 tokens + eos; 16 is 2.7x margin
 EVAL_N = 3000

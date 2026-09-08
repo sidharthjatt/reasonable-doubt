@@ -23,6 +23,13 @@
 # The 90 s target assumes the DeBERTa weights are already in the HF cache. A cold
 # first download of ~370 MB is additional and depends on Kaggle's network.
 # =============================================================================
+# ONE GPU, PINNED BEFORE TORCH IS IMPORTED — the same pin kaggle_tier0.py uses.
+# A probe that runs on a different device configuration than the notebook it certifies
+# is not certifying that notebook. This file was written before the DataParallel /
+# effective-batch defect was known and did not have the pin; see PREREGISTRATION 3t.
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 import inspect, sys, time, traceback
 
 T0 = time.time()

@@ -212,6 +212,8 @@ this does not change any conclusion, but the number must be what it says it is.
   - Note in our favour: LexGLUE used `*-base` DeBERTa; we use **DeBERTa-v3**-base, which
     is generally stronger. If we land materially below 0.80 the likely cause is our
     training setup, not the task.
+- **Training configuration:** registered in §3t (effective batch 16, 1 visible GPU,
+  3 epochs, lr 2e-5, max_length 512, seeds 1/2/3).
 - **Falsification:** mean macro-F1 **< 0.80** across 3 seeds ⇒ Tier 0 as specified does
   not reproduce the published DeBERTa baseline on LEDGAR; report it and investigate the
   training setup before changing the encoder or dropping the tier. **Negative result
@@ -266,6 +268,8 @@ this does not change any conclusion, but the number must be what it says it is.
 - **Reasoning for the number:** a middle tier only earns its complexity and its serving
   cost if it is *detectably* better than the tier below. 0.04 is the unpaired floor from
   §1a — below it we cannot tell Tier 1 from Tier 0 on this test set.
+- **Training configuration:** registered in §3t (effective batch 16 as BS 4 x GA 4,
+  1 visible GPU, 1 epoch, lr 2e-4, max_length 2560, LoRA r=16, seeds 1/2/3).
 - **Falsification:** Tier 1 within 0.04 of Tier 0 ⇒ **the middle tier is not justified.**
   Proceed to **E4b**, which is registered NOW so that reporting a two-tier cascade cannot
   read as a post-hoc rescue.
@@ -709,6 +713,88 @@ reported, per-row `row_indices` are saved alongside predictions so the offline j
 cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
+
+### 3t. Training configurations, registered — they never were (2026-09-08)
+
+Found while adding an effective-batch assertion to Tier 0. The instruction was to state
+Tier 0's **registered** effective batch in the assertion message rather than infer it
+from the file's constants. **There is no registered batch size** — not for E1, not for
+E2, not for E4. E1's entry registers hypothesis, metric, split, accept rule, provenance
+and falsification; E2's and E4's do the same. **No experiment registers a single
+training hyperparameter.**
+
+**This makes an existing assertion an overclaim.** `kaggle_tier1.py` line 161 reads:
+
+```python
+assert BS * GA == 16, f"effective batch must stay 16 (registered for E4), got {BS*GA}"
+```
+
+The assertion is right and the parenthetical is false: 16 is the value in the file, and
+attributing it to a registration that does not exist dresses a constant up as a
+commitment. Written by me in `d84c53b`, caught here only because someone asked the
+assertion to cite its source. **An assertion that names a wrong authority is worse than
+one that names none** — it defeats exactly the check a reader would otherwise make.
+
+**Registered now, before any training run**, so hard rule 6 is satisfied and so both
+notebooks' assertions have something real to cite. These are the values the notebooks
+already contain; nothing is being changed, it is being *recorded*.
+
+**Tier 0 — E1, E2, E3** (`kaggle_tier0.py`)
+
+| parameter | registered value |
+|-----------|------------------|
+| model | `microsoft/deberta-v3-base` |
+| max sequence length | 512 |
+| epochs | 3, best epoch selected on `train_holdout_3000` |
+| learning rate | 2e-5 |
+| `per_device_train_batch_size` | 16 |
+| `gradient_accumulation_steps` | 1 (library default, not set in the file) |
+| **effective train batch** | **16** |
+| visible GPUs | **1** |
+| precision | fp16 AMP |
+| seeds | 1, 2, 3 |
+
+**Tier 1 — E4** (`kaggle_tier1.py`)
+
+| parameter | registered value |
+|-----------|------------------|
+| model | `Qwen/Qwen2.5-1.5B-Instruct` |
+| max sequence length | 2560 |
+| epochs | 1 |
+| learning rate | 2e-4 |
+| `per_device_train_batch_size` | 4 |
+| `gradient_accumulation_steps` | 4 |
+| **effective train batch** | **16** |
+| visible GPUs | **1** |
+| precision | fp16 AMP, 4-bit NF4 base, fp32 trainable params (§3r) |
+| LoRA | r=16, alpha=32, dropout=0.05, 7 target modules |
+| seeds | 1, 2, 3 |
+
+**"Visible GPUs: 1" is a registered experimental parameter, not an implementation
+detail.** §3r established that a second visible device silently doubles the effective
+batch through `train_batch_size = per_device_train_batch_size * max(1, n_gpu)`. That
+makes device count part of the training configuration, so it is registered alongside the
+batch size rather than left to the session's accelerator setting. The **documented
+fallback** for Tier 1 (BS 2 / GA 8 under memory pressure, §3r) preserves the registered
+effective batch of 16 and is therefore *within* this registration; any change to the
+effective batch itself is an amendment.
+
+**Tier 0's exposure, now fixed.** Tier 0 set no `CUDA_VISIBLE_DEVICES`, and DeBERTa is
+neither 4-bit nor 8-bit, so `Trainer._wrap_model`'s `not is_loaded_in_8bit` guard passes
+and `nn.DataParallel` wraps it on "GPU T4 x2" — training E1/E2 at an effective batch of
+**32** against the 16 registered above, silently, because DataParallel on a standard
+fp16 model simply works. `kaggle_probe_tier0.py` had the same omission, which is its own
+defect: **a probe running on a different device configuration than the notebook it
+certifies is not certifying that notebook.** Both now pin one device before torch is
+imported and assert it.
+
+**Practice note.** Two of this session's defects were assertions that were individually
+correct while pointing at the wrong thing — `ast.parse` checking parseability instead of
+compilability (§3s), and this one citing a registration that did not exist. The
+mitigation is the same in both cases and is not "write more assertions": it is that **an
+assertion must be traceable to the thing it claims authority from**, and that claim must
+be checkable. Where the authority is a preregistered value, the file says so and the
+value exists here.
 
 ### 3s. The checks never ran — the file did not compile (2026-09-08)
 

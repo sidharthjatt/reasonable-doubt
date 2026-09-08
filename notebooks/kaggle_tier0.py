@@ -27,6 +27,25 @@ print("=" * 70)
 
 # ============================ CELL 2 of 2 =====================================
 
+# ONE GPU, PINNED BEFORE TORCH IS IMPORTED. This must be the first executable line:
+# torch reads CUDA_VISIBLE_DEVICES when it initialises CUDA, and setting it after
+# `import torch` is a no-op that leaves no trace.
+#
+# Kaggle's "GPU T4 x2" gives two devices, and on two devices this notebook trains at the
+# WRONG BATCH SIZE without saying so:
+#
+#   1. TrainingArguments: train_batch_size = per_device_train_batch_size * max(1, n_gpu).
+#      BS is 16, so two devices make the effective batch 32 against the 16 registered in
+#      PREREGISTRATION 3t. Nothing in the output reports this.
+#   2. transformers Trainer._wrap_model, line ~1665:
+#          if self.args.n_gpu > 1 and not getattr(model, "is_loaded_in_8bit", False):
+#              model = nn.DataParallel(model)
+#      DeBERTa is neither 4-bit nor 8-bit, so the guard passes and the model is wrapped.
+#      Unlike Tier 1's 4-bit case this does not crash — DataParallel on a standard fp16
+#      model works — which is what makes it the more dangerous of the two.
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 # ---- PREFLIGHT: verify signatures BEFORE the dataset downloads or weights load ----
 import inspect
 
@@ -85,6 +104,23 @@ from optimum.onnxruntime import ORTQuantizer as _ORTQ
 assert hasattr(_AQC, "arm64"), "AutoQuantizationConfig.arm64 missing in this optimum"
 _require(_AQC.arm64, ["is_static","per_channel"], "AutoQuantizationConfig.arm64")
 _require(_ORTQ.quantize, ["save_dir","quantization_config"], "ORTQuantizer.quantize")
+# Device count is a REGISTERED experimental parameter (PREREGISTRATION 3t), not a
+# session setting: a second visible device multiplies the effective batch via
+# train_batch_size = per_device_train_batch_size * max(1, n_gpu), and makes Trainer wrap
+# the model in DataParallel (its guard tests is_loaded_in_8bit only, and DeBERTa is
+# neither 4-bit nor 8-bit). This check deliberately references NO training constant:
+# they are defined below, and a PREFLIGHT check that reads a name defined later dies of
+# NameError having verified nothing.
+import torch as _torch
+N_VISIBLE_GPUS = _torch.cuda.device_count()
+print(f"  PREFLIGHT: visible GPUs={N_VISIBLE_GPUS} "
+      f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')!r})")
+assert _torch.cuda.is_available(), "no GPU — set Accelerator to GPU"
+assert N_VISIBLE_GPUS == 1, (
+    f"{N_VISIBLE_GPUS} GPUs visible. CUDA_VISIBLE_DEVICES must pin exactly one BEFORE "
+    f"torch is imported. E1/E2/E3 are registered at 1 visible GPU (PREREGISTRATION 3t); "
+    f"with {N_VISIBLE_GPUS} the effective batch is multiplied by {N_VISIBLE_GPUS} and "
+    f"Trainer wraps the model in DataParallel, both silently.")
 print("PREFLIGHT PASSED\n")
 
 WORK = Path("/kaggle/working"); WORK.mkdir(exist_ok=True)
@@ -93,6 +129,19 @@ SEEDS = [1, 2, 3]
 LOSS_ARM = "ce"            # E1 baseline. E2 arms: sqrt_inv_freq | effective_number | inv_freq
 MAX_LENGTH = 512
 EPOCHS, LR, BS = 3, 2e-5, 16
+# gradient_accumulation_steps is not set below, so it is the library default of 1 and
+# the effective train batch is BS * 1 * n_gpu. PREREGISTRATION 3t registers E1/E2/E3 at
+# an effective batch of 16 on ONE visible GPU; both halves are asserted, because either
+# one alone permits the other to drift.
+REGISTERED_EFFECTIVE_BATCH = 16   # PREREGISTRATION 3t, E1/E2/E3
+GA = 1                            # TrainingArguments default; stated so it is visible
+assert BS * GA * N_VISIBLE_GPUS == REGISTERED_EFFECTIVE_BATCH, (
+    f"effective batch is BS {BS} x GA {GA} x n_gpu {N_VISIBLE_GPUS} = "
+    f"{BS * GA * N_VISIBLE_GPUS}, but E1/E2/E3 are registered at "
+    f"{REGISTERED_EFFECTIVE_BATCH} in PREREGISTRATION 3t. Changing it is an amendment, "
+    f"not a tuning decision.")
+print(f"  effective train batch = BS {BS} x GA {GA} x n_gpu {N_VISIBLE_GPUS} = "
+      f"{BS * GA * N_VISIBLE_GPUS}, matching the registered {REGISTERED_EFFECTIVE_BATCH}")
 HOLDOUT_SHA12 = "97eebc04d0c7"   # committed train_holdout_3000
 TEST3000_SHA12 = "e719c1109069"  # committed test_3000
 
