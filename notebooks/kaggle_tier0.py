@@ -68,14 +68,14 @@ def _require(cls, kwargs, label):
                            f"{sorted(n for n in _params(cls) if not n.startswith('_'))}")
     print(f"  PREFLIGHT: {label} accepts all {len(kwargs)} kwargs")
 
-import os, json, gc, hashlib, random, shutil, time
+import os, json, gc, hashlib, random, shutil, threading, time
 from pathlib import Path
 from collections import Counter
 import numpy as np, torch
 from torch import nn
 from datasets import load_dataset
 from sklearn.metrics import f1_score
-from transformers import (AutoModelForSequenceClassification, AutoTokenizer,
+from transformers import (AutoModelForSequenceClassification, AutoTokenizer, TrainerCallback,
                           DataCollatorWithPadding, Trainer, TrainingArguments)
 
 import transformers as _tf
@@ -237,6 +237,58 @@ def onnx_predict(int8_dir, texts, max_length, batch=1):
         if i % 500 == 0: print(f"    int8 {i}/{len(texts)}", flush=True)
     return np.concatenate(out, 0)
 
+# ======================== LIVENESS INSTRUMENTATION ===========================
+# Ported from kaggle_tier1.py after commit 1 there ran 2h22m with no output and a hang
+# could not be distinguished from a silent log (PREREGISTRATION 3z).
+#
+# Tier 0 needs this MORE than Tier 1 did, not less: Tier 1's silence was diagnosed by
+# ruling out DataLoader worker deadlock, because Tier 1 never sets
+# dataloader_num_workers. TIER 0 SETS IT TO 2, so worker processes actually exist here
+# and that candidate is NOT ruled out.
+#
+# The heartbeat is a DAEMON THREAD, not a Trainer callback, and that is the point: a
+# callback only fires when the loop reaches on_step_end, so it is silent both when
+# training is hung and when it is merely quiet. A thread keeps printing while the main
+# thread is blocked. Silence from it means the process is dead or the log pipe is
+# broken; output from it while step does not advance means the loop is stuck.
+_HB = {"phase": "cell-2 start", "step": None, "total": None,
+       "t0": time.time(), "t_train": None}
+
+def _heartbeat_loop(interval_s=120):
+    while True:
+        time.sleep(interval_s)
+        el = (time.time() - _HB["t0"]) / 60
+        st, tot, t_tr = _HB["step"], _HB["total"], _HB["t_train"]
+        line = f"[heartbeat {el:7.1f} min] phase={_HB['phase']} step={st}/{tot}"
+        if st and t_tr and st > 0:
+            rate = st / (time.time() - t_tr)
+            line += f" | {rate:.3f} it/s"
+            if tot:
+                line += f" | {(tot - st) / rate / 60:.0f} min to step {tot}"
+        print(line, flush=True)
+
+threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat").start()
+print("[heartbeat] thread started; prints every 2 min regardless of Trainer state",
+      flush=True)
+
+
+class FlushingLog(TrainerCallback):
+    """Trainer's own log path writes through tqdm to STDERR; this re-emits on stdout
+    with flush. Runs alongside ProgressCallback, so nothing is lost if stderr works."""
+    def on_train_begin(self, args, state, control, **kw):
+        _HB["phase"] = "training"; _HB["total"] = int(state.max_steps)
+        _HB["t_train"] = time.time(); _HB["step"] = int(state.global_step)
+        print(f"[train] begin at step {state.global_step} of {state.max_steps}", flush=True)
+    def on_step_end(self, args, state, control, **kw):
+        _HB["step"] = int(state.global_step)
+    def on_log(self, args, state, control, logs=None, **kw):
+        print(f"[log step {state.global_step}] {logs}", flush=True)
+    def on_evaluate(self, args, state, control, metrics=None, **kw):
+        print(f"[eval step {state.global_step}] {metrics}", flush=True)
+    def on_save(self, args, state, control, **kw):
+        print(f"[save] checkpoint at step {state.global_step}", flush=True)
+
+
 # ============================ RESTORE ========================================
 # /kaggle/working does NOT carry over between commits — measured, 3v. Each commit runs in
 # a fresh container and the previous run's working directory becomes THAT VERSION'S
@@ -334,8 +386,10 @@ for seed in SEEDS:
             report_to=[], logging_steps=200, dataloader_num_workers=2),
         train_dataset=train_ds, eval_dataset=sel_ds,
         data_collator=DataCollatorWithPadding(tok), compute_metrics=metrics)
+    tr.add_callback(FlushingLog())
 
     if not skip_training:
+        _HB["phase"] = f"seed {seed}: trainer.train() entered"
         tr.train(resume_from_checkpoint=resume)
         tr.save_model(str(fp32)); tok.save_pretrained(str(fp32))
         shutil.rmtree(ckpt_dir, ignore_errors=True)   # fp32 saved — never retrain
