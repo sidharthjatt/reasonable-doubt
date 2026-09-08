@@ -714,6 +714,66 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3u. Measured Tier 1 throughput; probe projection wrong by 13x (2026-09-08)
+
+**Measured on Kaggle, seed 1, one T4:** `15/3563 [02:56 < 13:21:05, 0.07 it/s]`, i.e.
+**~13.4 h per seed**, ~40 h for three against a 30 h weekly quota. Also confirmed on the
+real GPU: `trainable param dtypes after re-cast: {'torch.float32'} (392 tensors changed)`
+— TRL's bf16 cast (§3r) did occur and the fp32 re-cast reached all 392 tensors — and
+`train token length: mean 607 p99 1061 MAX 2378 | over MAX_LEN: 0`, confirming §3r's
+length distribution and that MAX_LEN 2560 truncates nothing.
+
+**Two estimates, one right and one badly wrong.**
+
+| estimate | predicted | measured | error |
+|----------|-----------|----------|-------|
+| §3r FLOPs arithmetic (6ND + 33% recompute, 8–13 TFLOPS sustained) | 13–21 h/seed | **13.4 h** | correct, at the fast end |
+| probe's measured-step extrapolation | ~1.0 h/seed | **13.4 h** | **13x low** |
+
+**The measurement was worse than the arithmetic, and the reason matters.** §3r named the
+probe's biases and still under-weighted them: one warm-up-inclusive step, on 10 rows of
+~40 tokens against a fit-set mean of 607, at `max_steps=1` so no steady state was ever
+reached. Roughly 15x on sequence length alone, which is most of the 13x. The lesson is
+not "prefer arithmetic to measurement" — it is that **a measurement taken outside the
+regime it is extrapolated to is not a measurement of that regime**, and labelling it an
+estimate does not repair that. §3e's rule about one observation applies to a
+badly-scoped measurement exactly as it does to one reading of a counter.
+
+The probe's projection should therefore either be removed or run on realistic-length
+rows for enough steps to reach steady state. It has served its purpose — the number is
+now known from the real run — and is not worth the GPU minutes to fix.
+
+**Quota decision: lever 1 — spread the seeds across quota windows.** Recorded with the
+reason, since it constrains what may be traded later:
+
+* **Lever 2 (DDP across both T4s) is not taken.** Its premise — that quota is charged in
+  wall-clock session hours rather than per-GPU hours — could not be established, and the
+  six unverified interactions are enumerated in the session record.
+* **Lever 3 (shrink the fit set) is rejected on experimental, not engineering, grounds.**
+  E4's accept rule is macro-F1 ≥ E1 + 0.04. Cutting training data to buy quota makes the
+  central hypothesis *harder to pass* by weakening the arm under test, so a negative E4
+  would no longer distinguish "the middle tier is not justified" from "we under-trained
+  it to save GPU hours." That confound is not worth the hours.
+* **Lever 1 costs calendar time and nothing else.** Correctness is unaffected, seeds stay
+  comparable, and the resume machinery already exists.
+
+**Consequence: the resume path is now load-bearing and has never been exercised.** At
+13.4 h no seed completes in one session under either candidate cap, so *every* seed
+spans at least two. Operational procedure — cap, checkpoint cadence, the commit path and
+the exact resume confirmation — is in `notebooks/RUNNING.md`.
+
+**`group_by_length` and similar: rejected, and it is a preregistration question.**
+Padding waste at BS 4 is **27%** (34.6M real tokens against 44.0M padded, simulated from
+the measured mean/p99/max), so length-grouped batching could recover at most ~21% — it
+is not a lever that changes the quota arithmetic. It is refused on comparability
+grounds regardless: **it changes batch composition, therefore the sequence of gradient
+updates, therefore what "seed 1" means.** §3t registers the effective batch and the
+seeds; batching policy belongs in that registration. Since seed 1 is already running
+under random batching, adopting it now would make seed 1 incomparable to seeds 2 and 3,
+which is a straightforward violation of hard rule 2's mean ± std over three seeds. **Off
+the table for this run entirely.** Any future adoption is an amendment recorded before
+*any* seed of that run executes.
+
 ### 3t. Training configurations, registered — they never were (2026-09-08)
 
 Found while adding an effective-batch assertion to Tier 0. The instruction was to state

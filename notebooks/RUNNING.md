@@ -174,7 +174,9 @@ correct, and costs about three minutes.
 
 Once CELL 2 is running, the resume itself is automatic:
 
-- Seeds whose `*_seed*.json` exists are **skipped** — you will see
+- Seeds whose `*_seed*.json` exists are **skipped**. The two notebooks print
+  *different* strings, so match the one for the notebook you are running:
+  Tier 1 prints `seed 1: complete, skipping`; Tier 0 prints
   `seed 1: already complete, skipping`.
 - A seed that was interrupted **resumes from its last checkpoint** — you will see
   `=== seed 2 (RESUMING) ===`.
@@ -187,6 +189,99 @@ If you see `=== seed 1 (fresh) ===` when you expected `RESUMING`, the working di
 was cleared. That costs time but is not incorrect; the run is still valid.
 
 ---
+
+## Long runs: the session cap, and running as a commit
+
+**Tier 1 is measured at ~13.4 h per seed on one T4** (0.07 it/s over 3,563 steps,
+seed 1, 2026-09-08). **No seed fits in one session under any cap**, so the resume path
+below is load-bearing rather than a contingency.
+
+**Session cap.** Two independent secondary readings agree that Kaggle raised notebook
+runtime from 9 h to **12 h for CPU and GPU** (9 h remains for TPU), which explains the
+9-vs-12 disagreement between sources: anything written before the increase says 9.
+**Neither reading is primary** — Kaggle's own pages render client-side and return no
+quota text to a fetch — so **plan for 9 h.** It is safe under both, and the difference
+is real: at `save_steps=500` a 9 h cut loses ~1.1 h of work, a 12 h cut ~0.1 h.
+
+**Recommended: lower `save_steps` from 500 to 200.** At 0.07 it/s a 500-step cadence is
+one checkpoint every **2.0 h**, so a kill lands on average 1 h — worst case 2 h — after
+the last one. 200 steps is ~48 min, bounding the loss at ~0.8 h. A checkpoint here is
+the LoRA adapter plus Adam state, roughly 220 MB, and writing it takes seconds.
+**This changes no training mathematics** — checkpoint cadence does not affect the model
+— so it is not a preregistration amendment.
+
+### Interactive sessions will not survive this. Use Save & Run All.
+
+An interactive session shows an **"Are you still there?"** prompt and terminates on
+inactivity. A 13 h run left in a browser tab will be killed. **Save Version → Save & Run
+All (Commit)** runs a copy of the notebook **in the background on a separate machine**,
+and survives closing the browser and the interactive session timing out.
+
+**But a commit runs every cell in ONE kernel with no restart between CELL 1 and CELL 2 —
+the exact condition the two-cell protocol exists to prevent.** Whether that is safe turns
+on a question this repo has not answered: a commit starts from a *fresh container*, so
+the mixed install only recurs if Kaggle's kernel has already imported `peft` before
+CELL 1 runs. That is plausible-sounding either way, and this project has now lost three
+sessions to plausible-sounding.
+
+**Do not assume it. Measure it, in this order:**
+
+1. **Commit the PROBE notebook first** (`kaggle_probe_qlora.py` as its own notebook:
+   CELL 1, then the probe). ~5 minutes of quota. It exercises CELL 1 → import in a
+   single kernel with no restart — structurally identical to what a Tier 1 commit does,
+   at 1/150th the cost.
+2. **If the probe commit passes**, the commit path is safe: commit Tier 1.
+3. **If it fails at the version gate or the `velora_config` crash-site check**, the
+   commit path genuinely needs restructuring. The fix is not to re-order cells — no cell
+   order gives you a restart inside a commit — it is to **run CELL 2 in a subprocess**,
+   which gets a fresh interpreter and therefore a guaranteed-clean import state:
+   write CELL 2 to a file, then `!python /kaggle/working/tier1_cell2.py`.
+
+A commit run also makes the probe's exit behaviour matter: `kaggle_probe_qlora.py`
+currently **prints** `PROBE FAILED` without raising, so in a commit the run would carry
+straight on into CELL 2 and spend 13 h anyway. Give it a hard `raise` before committing
+anything that depends on it gating.
+
+### Exactly what to do when a seed is killed mid-training
+
+Seed 1 dying at, say, step 2,100 of 3,563 is the expected case, not a failure.
+
+**Step 1 — new session or same one?** Open the notebook, restart the kernel, and run the
+version snippet from **If a session dies** above. A commit that hit the cap always means
+a new container, so after a commit: assume new.
+
+**Step 2 — run the cells.**
+
+| situation | what to run |
+|-----------|-------------|
+| new container (the usual case) | CELL 1 → **restart** → probe → CELL 2 |
+| same session, packages survived | **CELL 2 only** |
+
+**Step 3 — confirm it RESUMED and did not restart.** Four lines, in order:
+
+```
+=== seed 1 (RESUMING) ===          <- the word RESUMING. "(fresh)" means it restarted.
+  trainable param dtypes after re-cast: {'torch.float32'} (392 tensors changed)
+```
+then a progress bar that **starts near the last checkpoint, not at 0/3563**.
+
+- `=== seed 1 (RESUMING) ===` is the marker. It appears only when
+  `t1_ck_1/checkpoint-*` exists.
+- **`=== seed 1 (fresh) ===` means the checkpoint directory is gone** and you are paying
+  the full 13.4 h again. Stop and check `/kaggle/working` before letting it run.
+- **Expect a delay of several minutes before the progress bar moves.** `ignore_data_skip`
+  defaults to `False`, so Trainer replays the dataloader to the resume position — for
+  ~2,000 steps that is 32,000 examples of collation. **This is the skip, not a hang**,
+  and it is what preserves the data order for the seed.
+
+**Why a resume stays comparable to an uninterrupted run:** the checkpoint carries RNG
+state, optimizer state and scheduler position, and the data skip restores the batch
+sequence. A resumed seed is the same experiment as an unresumed one. That is the reason
+`ignore_data_skip` must stay `False` even though it costs minutes.
+
+**Never delete `/kaggle/working` between runs** — the completion markers
+(`tier1_seed*.json`), the adapters (`t1_adapter_*`) and the checkpoints (`t1_ck_*`) all
+live there.
 
 ## After Tier 0: re-score INT8 on the Mac
 
