@@ -156,8 +156,8 @@ this does not change any conclusion, but the number must be what it says it is.
 | E7 | `max_length` 256 vs 512 ablation | loses **< 0.02** macro-F1 paired AND **≥ 1.5×** faster; per-class deltas required | planned **[C3-gated]** |
 | E8 | Few-shot vs zero-shot Sonnet-5, paired on 1,000 rows | **`fraction_closed` ≥ 0.50 AND paired-bootstrap CI excludes 0** ⇒ premise live, defer restatement; **≤ 0.20** ⇒ capability not prompting. Band in full below | **registered — see E8 below** |
 | C1 | Calibration-set robustness (§3a) | thresholds agree within **1 decile** AND escalation within **3pp** | planned |
-| C2 | Few-shot confidence anchoring (§3b) | **Sonnet 5 ONLY**: few-shot sd **≤ 0.5×** zero-shot sd AND mode within 0.02 of 0.9 | planned |
-| C4 | Exemplar class over-prediction (§3d) | 3× class predicted at **≥ 2×** its zero-shot rate AND above every 1× class; **+2pp fallback if zero-shot rate < 1%** | planned |
+| C2 | Few-shot confidence anchoring (§3b) | **Sonnet 5 ONLY**: few-shot sd **≤ 0.5×** zero-shot sd AND mode within 0.02 of 0.9 | **RUN — FAILS both clauses; no anchoring** |
+| C4 | Exemplar class over-prediction (§3d) | 3× class predicted at **≥ 2×** its zero-shot rate AND above every 1× class; **+2pp fallback if zero-shot rate < 1%** | **RUN — ratio form (§3am); FAILS both clauses** |
 
 ### C3 — Noise-floor measurement *(no accept rule; this is instrumentation)*
 
@@ -1116,6 +1116,104 @@ reported, per-row `row_indices` are saved alongside predictions so the offline j
 cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
+
+### 3an. E6's aggregate delta hid its per-seed structure — and the structure changes the claim (2026-09-09)
+
+§3al replaced a wrong yardstick with a paired row bootstrap. That was necessary and not
+sufficient: **the row bootstrap resamples ROWS, not SEEDS**, so its p = 0.0756 is a
+row-level p and carries **none** of the seed-level uncertainty. Reporting it alone
+repeated the original error's shape at one remove — a single interval standing in for a
+structure it cannot see.
+
+| seed | tier0 | cascade | delta | applied esc. | esc. n | T0 correct | API correct |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.7582 | 0.7567 | **−0.0015** | 4.00% | 120 | 47 | 48 |
+| 2 | 0.7514 | 0.7564 | +0.0049 | 3.23% | 97 | 33 | 42 |
+| 3 | 0.7471 | 0.7625 | +0.0153 | 4.93% | 148 | 50 | 52 |
+
+**1. SIGN CONSISTENCY — FAILS, at the bar this project already uses.** E5 required
+**sign-consistent 3/3** before calling `max_softmax` *reliably* better than `margin`
+(§3ai). The cascade is positive on **2 of 3** seeds. The per-seed delta sd is **0.0085**,
+which **exceeds the mean delta of +0.0063**. Applying our own bar: **the cascade is not
+reliably better than Tier 0 alone.** Both tests are reported, neither replaces the other:
+
+| test | result |
+|---|---|
+| paired row bootstrap (3,000 rows) | +0.0063, 95% CI [−0.0004, +0.0103], p = 0.0756 |
+| seed sign-consistency (3 seeds) | **2/3 — FAILS** |
+
+**2. IT IS VARIANCE REDUCTION, NOT A LEVEL GAIN — and the direct test settles it.**
+corr(Tier 0 quality, delta) = **−0.965**: the worst seed gains most and the best seed
+*loses*. Across-seed sd falls from **0.0056 (tier0) to 0.0034 (cascade)**, ratio 0.61.
+That is a variance signature, and the decisive measurement is on the escalated rows
+themselves — **McNemar, pooled over seeds, on exactly the rows the router chose**:
+
+> Tier 0 right & API wrong: **79**. Tier 0 wrong & API right: **91**. Net **+12 of 365**.
+> Exact binomial **p = 0.399**.
+
+**On the very rows the cascade acts, the API is not reliably better than the encoder it
+is replacing.** So "the cascade adds accuracy" is **NOT supported**. What is supported is
+narrower and partly mechanical: escalated rows get a **seed-invariant** API prediction,
+and the router selects precisely the low-margin rows where Tier 0 is *most* seed-unstable,
+so replacing ~4% of rows removes a disproportionate share of across-seed variance **by
+construction**. At n = 3 seeds an sd ratio is not testable anyway. **The claim we may
+make is "the cascade reduces across-seed variance, by a mechanism that would produce that
+result even with no accuracy benefit" — not "the cascade is more accurate."**
+
+**3. THRESHOLD TRANSFER — a single dev-calibrated threshold does not hold its escalation
+rate.** One `dev_2000` margin quantile at target 4.06% realizes **4.00% / 3.23% / 4.93%**
+on test: spread **1.70pp**, ratio **1.53×**.
+
+- This is **C1-shaped territory arriving unregistered.** It is **not C1**: C1 compares
+  `dev_2000` against the nested full 10k validation split for one model, and its 3pp bar
+  is ~3 SD of *that* nested-sampling null (§3a). Across **retraining seeds** the null is
+  different and 3pp has no derivation here. **Quoting C1's 3pp against this number would
+  be borrowing a bar from a different question** — it is recorded as a measurement, not
+  scored against a rule it was not written for.
+- **Deployment consequence, stated plainly:** a threshold chosen once and shipped has a
+  realized escalation rate that moves by **~50% relative** across retrainings of the same
+  model on the same data. Since Tier 2 dominates marginal cost, **the API bill moves with
+  it** — the cost axis of the E6 frontier is drawn at a rate the deployed system would
+  not reliably hold. Any SLA or budget stated as "escalates ~4%" is unsupported; the
+  honest form is a range.
+
+### 3ao. E8's 1,000 rows were taken POSITIONALLY, and that is the take-first-N defect again (2026-09-09)
+
+`scripts/submit_batch.py` selects `rows = man.indices[:n]`. `test_3000`'s manifest records
+*"Indices are ascending, preserving the split's chronological row order."* So the 1,000
+few-shot rows are **not a sample** — they are the **chronologically earliest third** of a
+**deliberately chronological** test split (dataset rows 1–3424 of 9,992). §3d already
+records the take-first-8 problem for exemplars; this is the same defect on the evaluation
+set, and it went unnoticed because a subset of a stratified manifest *looks* like a sample.
+
+**It is measurable, and it is not negligible.** Tier 0 on the first 1,000 vs the remaining
+2,000, scored over the **95 classes both cover** so the label space is held constant:
+
+| seed | first-1000 | rest-2000 | difference |
+|---|---|---|---|
+| 1 | 0.8000 | 0.7924 | +0.0075 |
+| 2 | 0.8007 | 0.7803 | +0.0204 |
+| 3 | 0.7895 | 0.7744 | +0.0151 |
+
+**Sign-consistent 3/3, mean +0.0143.** The earliest rows are genuinely easier. **E8's
+pairing is unaffected** — both arms ran on the same rows, so the *prompt* comparison is
+valid and `delta_fs` stands. What is affected is **generalisation**: E8's numbers describe
+the earliest third of the 2019 test split, not `test_3000`, and must be labelled that way.
+
+**Number hygiene — two figures that must never be set side by side unqualified.**
+
+| figure | value | what it is |
+|---|---|---|
+| E8 `gap` | **+0.1524** | Tier 0 − Sonnet zero-shot, **first-1,000 rows, 97 classes** |
+| frontier | **+0.1374** | Tier 0 − Sonnet zero-shot, **test_3000, 100 classes** |
+
+**These are not the same quantity and their difference is not a finding.** Both the row set
+and the label-averaging space differ, and both differences push the same way: the earlier
+rows are easier (+0.0143 measured above), and the 3 classes absent from the subset are rare
+ones Tier 0 handles poorly, so excluding them from the average inflates the subset score.
+Tier 0 reads **0.7782** on the subset against **0.7523** on the full set — a **+0.0260**
+artefact of scope, not of model quality. **Wherever either number appears next to the
+other, this note travels with it.**
 
 ### 3am. C4's rate-fallback switch, recorded BEFORE any few-shot prediction is scored (2026-09-09)
 
@@ -3011,6 +3109,15 @@ experiment id. Never edit a past entry — add a correcting entry instead.
 - **Accept rule met?** The registered band resolves to **CAPABILITY, NOT PROMPTING** — the
   CI includes 0, which the band routes to the ≤ 0.20 disposition, and the point estimate
   closes 1.2% of the gap. **Restatement of H1/E4/E4b/E6 proceeds.**
+- **Row provenance — POSITIONAL, not sampled (§3ao).** The 1,000 rows are
+  `manifest.indices[:1000]`, i.e. the **chronologically earliest third** of a deliberately
+  chronological test split, not a seeded draw. The pairing is unaffected (both arms ran on
+  the same rows), so `delta_fs` stands; **generalisation is affected** — these numbers
+  describe the earliest third of the 2019 test split, not `test_3000`.
+- **Number hygiene (§3ao).** E8's `gap` of **+0.1524** (first-1,000 rows, 97 classes) and
+  the frontier's **+0.1374** (`test_3000`, 100 classes) are **not the same quantity**;
+  Tier 0 alone reads 0.7782 vs 0.7523 across the two scopes, a +0.0260 artefact of row set
+  and label space. This note travels with either figure whenever they appear together.
 - **Notes.** Few-shot moved Sonnet-5 by an amount indistinguishable from zero, while Tier 0
   beats it by 0.1524 on the same rows with an interval nowhere near zero. **The deficit is
   in the task, not the prompt.**
@@ -3037,11 +3144,90 @@ experiment id. Never edit a past entry — add a correcting entry instead.
 - **Cost:** $0.00.
 - **Accept rule met?** n/a — instrumentation under C3's remit (paired-bootstrap floors),
   not an arm with its own rule.
+- **Per-seed structure, which the aggregate hides (§3an):** deltas −0.0015 / +0.0049 /
+  +0.0153 — **sign-consistent 2/3, FAILING** the 3/3 bar E5 used for "reliably better";
+  per-seed delta sd **0.0085 exceeds the mean delta**. The row bootstrap's p is a
+  **row-level** p and does not carry seed-level uncertainty; both tests are reported.
+  McNemar on the escalated rows, pooled: **79 / 91, net +12 of 365, p = 0.399** — on the
+  rows the cascade acts, the API is **not** reliably better than the encoder. The
+  supported claim is **variance reduction by construction**, not a level gain.
 - **Notes.** The conclusion ("would not claim the cascade beats Tier 0 alone") stands, but
   **not for the reason first given.** See §3al: the across-seed sd was the wrong yardstick,
   and 0.0063 was 1.1-1.9× it rather than inside it. The correct paired interval is
   **tighter**, and puts the result at **borderline** (p = 0.076, lower bound -0.0004),
   not comfortably null.
+
+### C2 — few-shot confidence anchoring *(2026-09-09)*
+
+- **Experiment id:** C2 (registered 2026-09-07, adopted verbatim 2026-09-08, §3ad/§3b)
+- **Config / command:** `python scripts/score_c2_c4.py`; `claude-sonnet-5`, same 1,000
+  rows, zero-shot vs few-shot. **Scope: Sonnet 5 only**, per §3b.
+- **Result:**
+
+  | arm | mean | sd | mode | distinct values |
+  |---|---|---|---|---|
+  | zero-shot | 0.8514 | **0.1598** | 0.98 | 31 |
+  | few-shot | 0.8443 | **0.1412** | **0.85** | 26 |
+
+  - sd ratio **0.8837** vs bar **≤ 0.5** — **FAIL**
+  - few-shot mode **0.85** vs bar **within 0.02 of 0.90** — **FAIL**
+- **Cost:** $0.00.
+- **Accept rule met?** **NO — C2 fails both clauses.**
+- **Notes.** The predicted direction was **wrong**. A fixed `"confidence": 0.9` in all
+  eight exemplars did **not** anchor Sonnet 5's verbalized confidence: the spread narrowed
+  by ~12%, not the ~50% required, and the mode moved to 0.85 — *away* from the anchored
+  value, not toward it. Per §3b's falsification clause this means the compression of
+  verbalized confidence is **intrinsic to the model, not induced by our prompt**, which
+  strengthens rather than weakens H2's case for a continuous margin over verbalized
+  confidence. §3b's recorded Type II limitation still applies in the other direction: at
+  0.5 the bar rules out a *large* anchoring effect, and a ratio of 0.88 is not evidence of
+  *no* effect, only of no large one.
+
+### C4 — exemplar class over-prediction *(2026-09-09)*
+
+- **Experiment id:** C4 (registered 2026-09-07, adopted verbatim 2026-09-08; rate-fallback
+  form fixed in **§3am before any few-shot prediction was read**)
+- **Config / command:** `python scripts/score_c2_c4.py`; same 1,000 rows. Form: **RATIO**
+  (`Governing Laws` zero-shot 5.80% > 1% trigger), bar **≥ 2×**. The +2pp fallback does
+  not apply.
+- **Result:**
+
+  | class | exemplars | zero-shot | few-shot | ratio | shift |
+  |---|---|---|---|---|---|
+  | **Governing Laws** | **3×** | 5.80% | 5.90% | **1.02×** | +0.10pp |
+  | Compliance With Laws | 1× | 2.30% | 2.20% | 0.96× | −0.10pp |
+  | Organizations | 1× | 0.30% | 0.80% | 2.67× | +0.50pp |
+  | Remedies | 1× | 0.50% | 0.90% | 1.80× | +0.40pp |
+  | Solvency | 1× | 0.70% | 0.70% | 1.00× | +0.00pp |
+  | Waivers | 1× | 0.30% | 1.10% | 3.67× | +0.80pp |
+
+  - ratio **1.02×** vs bar **≥ 2×** — **FAIL**
+  - 3× shift **+0.10pp** vs largest 1× shift **+0.80pp** — **FAIL** (second clause)
+- **Cost:** $0.00.
+- **Accept rule met?** **NO — C4 fails both clauses.**
+- **Notes.** The predicted direction was **wrong**. Repeating a class three times in the
+  exemplar set did **not** bias predictions toward it: `Governing Laws` moved by 1 row in
+  1,000. Per §3d's falsification clause, **exemplar repetition did not bias predictions,
+  and the uniform-draw exemplar policy carries less risk than §3c records.**
+  **Caveat on the second clause, which cuts against reading it as a finding:** the 1×
+  classes that "moved more" sit on single-digit counts (`Waivers` 3→11 rows, `Organizations`
+  3→8), where a ratio is unstable — precisely the instability C4's own 1% rate-fallback
+  exists to guard against, applied to the comparison classes rather than to the 3× class.
+  The safe statement is that **no class shifted materially**, not that the 1× classes
+  shifted more.
+  **This supersedes the "89 vs 91 distinct classes predicted" remark in the E8 entry**,
+  which was a descriptive aggregate and **not** C4 (§3am).
+
+### E6 per-seed structure — instrumentation *(2026-09-09)*
+
+- **Experiment id:** E6 supporting; see §3an
+- **Config / command:** `python scripts/e6_seed_structure.py`
+- **Result:** sign-consistency **2/3 (fails)**; corr(tier0 quality, delta) **−0.965**;
+  across-seed sd **0.0056 → 0.0034**; McNemar on escalated rows **79/91, p = 0.399**;
+  realized escalation **4.00 / 3.23 / 4.93%** from one dev threshold (spread 1.70pp,
+  1.53×); Tier 0 first-1000 vs rest-2000 over 95 common classes **+0.0143, 3/3 sign-consistent**.
+- **Cost:** $0.00.
+- **Accept rule met?** n/a — instrumentation under C3's remit.
 
 ### _(template — copy per run)_
 
