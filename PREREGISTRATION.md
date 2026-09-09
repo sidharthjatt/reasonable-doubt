@@ -154,6 +154,7 @@ this does not change any conclusion, but the number must be what it says it is.
 | E5 | Routing signal: margin vs max-softmax vs entropy | best **AUROC ≥ 0.75** AND **≥ 0.05** above worst, on `dev_2000` only | planned |
 | E6 | **Cost-vs-volume break-even curve** — the headline | (1) within **0.04** macro-F1 of Sonnet-5-alone; (2) finite crossover **V\* ≤ V_max**; (3) asymptote **< 50%** of Sonnet-5. **V\* is reported, not tested** | **BLOCKED by §1b** |
 | E7 | `max_length` 256 vs 512 ablation | loses **< 0.02** macro-F1 paired AND **≥ 1.5×** faster; per-class deltas required | planned **[C3-gated]** |
+| E8 | Few-shot vs zero-shot Sonnet-5, paired on 1,000 rows | **`fraction_closed` ≥ 0.50 AND paired-bootstrap CI excludes 0** ⇒ premise live, defer restatement; **≤ 0.20** ⇒ capability not prompting. Band in full below | **registered — see E8 below** |
 | C1 | Calibration-set robustness (§3a) | thresholds agree within **1 decile** AND escalation within **3pp** | planned |
 | C2 | Few-shot confidence anchoring (§3b) | **Sonnet 5 ONLY**: few-shot sd **≤ 0.5×** zero-shot sd AND mode within 0.02 of 0.9 | planned |
 | C4 | Exemplar class over-prediction (§3d) | 3× class predicted at **≥ 2×** its zero-shot rate AND above every 1× class; **+2pp fallback if zero-shot rate < 1%** | planned |
@@ -468,6 +469,62 @@ this does not change any conclusion, but the number must be what it says it is.
      all. It remains a reported quality of Tier 0 ("milliseconds") and is what E7 tests,
      but it is no longer on the critical path for the headline result. **Throughput and
      power are.**
+
+### E8 — Does few-shot prompting close the Sonnet↔Tier 0 gap? *(registered 2026-09-09, BEFORE the numbers were opened)*
+
+- **Why this exists.** E6's frontier put Tier 0 alone **above** Sonnet-5 alone on
+  macro-F1, which is the reverse of what H1, E4, E4b and E6's conditions all presuppose.
+  Before any of those is restated, the one alternative explanation that costs nothing has
+  to be ruled out: **Stage 1 was zero-shot.** If the gap is a prompting artefact rather
+  than a capability difference, the premise is not falsified and nothing should be
+  rewritten. `results/fewshot_results.json` — 1,000 Sonnet-5 rows, batch
+  `msgbatch_01QbUfqihLGmwG3wkYJVZuMU`, already paid for at $0.6062 — answers it offline.
+- **Arms, paired.** Sonnet-5 **few-shot** (8 exemplars, `exemplars_8`) vs Sonnet-5
+  **zero-shot** (`stage1_results.json`), **restricted to the same 1,000 rows**. The
+  few-shot ids are a verified strict subset of `stage1`'s 3,000 and of `test_3000`'s
+  manifest indices, so the comparison is row-for-row, not 1000-vs-3000. Both arms are
+  scored over the **identical label-averaging set** — the classes present in the gold of
+  those 1,000 rows — because macro-F1 is defined relative to that set and a 1,000-row
+  subset does not cover all 100 classes. `classes_averaged` is reported with every
+  figure.
+- **Metric:** macro-F1 primary, accuracy alongside. Parsing via
+  `src.data.schema.parse_response`; label matching EXACT per §3ag; unmatched counted
+  WRONG per `src.eval.metrics`.
+- **Quantities, defined before they are computed.**
+  - `delta_fs` = macro-F1(few-shot) − macro-F1(zero-shot), same 1,000 rows.
+  - `gap` = macro-F1(Tier 0 INT8, mean over seeds 1–3, same 1,000 rows) −
+    macro-F1(zero-shot, same 1,000 rows). This is what few-shot would have to close.
+  - `fraction_closed` = `delta_fs` / `gap`.
+  - A **paired bootstrap over rows** (10,000 resamples, seed 20260909, percentile 95%
+    CI) on `delta_fs`. Paired because it is the same rows under two prompts; an unpaired
+    or across-seed sd is the wrong yardstick and must not be quoted here.
+- **Accept rule — the band, mechanical, registered before the numbers.**
+
+  | `fraction_closed` | CI on `delta_fs` | disposition |
+  |---|---|---|
+  | **≥ 0.50** | excludes 0 | **PREMISE LIVE.** The gap is substantially a prompting artefact. Restatement of H1/E4/E4b/E6 is **deferred**; the correct next step is few-shot at full `test_3000` scale, not a rewrite. |
+  | **≤ 0.20** | either | **CAPABILITY, NOT PROMPTING.** Eight exemplars move Sonnet a small amount; the deficit is in the task, not the prompt. Restatement proceeds. |
+  | **0.20 < f < 0.50** | any | **INDETERMINATE.** Neither disposition is licensed; more few-shot rows, or a class-covering prompt, before anything is restated. |
+  | any | includes 0 | few-shot has **no measurable effect** at n=1,000; treat as ≤ 0.20 and say the CI, not the point estimate. |
+
+- **Stated in advance, and it BOUNDS what E8 can conclude.** `exemplars_8` covers
+  **6 distinct classes of 100** (`classes_represented: 6`, `max_class_count: 3`,
+  `min_class_count: 0`). Eight examples cannot teach a 100-class taxonomy — 94 classes
+  are never shown. So:
+  - A **small** `delta_fs` is the *expected* outcome under the capability hypothesis and
+    is legitimate evidence for it, in the specific form: *the deficit is not fixed by
+    in-context examples at this budget.*
+  - A small `delta_fs` **does NOT** establish that no prompt closes the gap. E8 falsifies
+    "prompting closes it" **only for the 8-exemplar prompt actually run.** A
+    class-covering prompt (≥100 exemplars) is untested and unbudgeted. Any write-up
+    sentence that generalises past the 8-exemplar prompt is out of E8's evidence.
+  - Under §3d/C4 the 8 exemplars are also expected to *bias* prediction toward their 6
+    classes, which on a 100-class macro-F1 can push `delta_fs` **negative**. A negative
+    `delta_fs` is a real result, is reported, and is not re-run away (hard rule 7).
+- **Falsification:** `fraction_closed ≥ 0.50` with a CI excluding 0 falsifies "the
+  cascade premise is dead" and stops the restatement.
+- **Cost:** $0.00. Responses are on disk; no API call, no GPU. Nothing is appended to
+  the spend ledger.
 
 ### E7 — `max_length` latency ablation
 
