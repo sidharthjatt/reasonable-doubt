@@ -23,10 +23,50 @@ from src.router.calibrate import compare_signals, sweep_thresholds
 LABEL = "FP32-calibrated, INT8 deployment pending E3 resolution"
 
 
+def read_provenance(npz_path: Path) -> dict:
+    """Decide whether these logits may be calibrated on — from PROVENANCE, not the name.
+
+    The original guard refused any filename containing "int8", written when every INT8
+    number in the project came from Kaggle's non-VNNI x86 kernel and was at chance
+    (§3ah). That is no longer the discriminating fact. INT8 re-measured on arm64 tracks
+    FP32 to 0.0048 macro-F1 and is the DEPLOYED precision, so refusing it by name would
+    now block the only calibration that matches deployment.
+
+    The question became "was this measured on a kernel that works?", which a filename
+    cannot answer and an embedded provenance record can. Files written before provenance
+    existed carry none; those are treated as FP32 only if the name does not say int8, and
+    refused otherwise — an unlabelled INT8 file is exactly the Kaggle output.
+    """
+    with np.load(npz_path, allow_pickle=False) as z:
+        raw = str(z["provenance"]) if "provenance" in z.files else None
+    if raw:
+        p = json.loads(raw)
+        precision, isa = p.get("precision", "?"), p.get("isa", "?")
+        if precision == "int8" and isa != "arm64_local":
+            raise SystemExit(
+                f"refusing {npz_path.name}: precision=int8 on isa={isa!r}. Only INT8 "
+                f"measured on arm64 (the deployed ISA) may be calibrated on; the x86 "
+                f"kernel scored test_3000 at chance (§3ah), so those logits are noise.")
+        return {"precision": precision, "isa": isa, "provenance": p}
+    if "int8" in npz_path.name.lower():
+        raise SystemExit(
+            f"refusing {npz_path.name}: the name says INT8 but the file carries NO "
+            f"provenance, so the ISA it was measured on is unknown. The Kaggle dev run "
+            f"wrote exactly such files from the broken x86 kernel (§3ah). Regenerate "
+            f"with scripts/dev_logits_int8_local.py, which records provenance.")
+    return {"precision": "fp32", "isa": "unrecorded_assumed_gpu_fp32", "provenance": None}
+
+
+def label_for(prov: dict) -> str:
+    if prov["precision"] == "int8":
+        return "INT8-calibrated on arm64 — the DEPLOYED precision (E3 met, max |delta| 0.0083)"
+    return LABEL
+
+
 SEEDS = (1, 2, 3)
 
 
-def aggregate(out_path: Path) -> int:
+def aggregate(out_path: Path, prefix: str = "e5_sweep_fp32") -> int:
     """Mean +/- sd across seeds, and E5's rule adjudicated on the AGGREGATE.
 
     This lives in the script rather than in a person's terminal because hard rule 2
@@ -42,15 +82,20 @@ def aggregate(out_path: Path) -> int:
 
     per = {}
     for s in SEEDS:
-        p = Path(f"results/e5_sweep_fp32_seed{s}.json")
+        p = Path(f"results/{prefix}_seed{s}.json")
         if not p.exists():
             raise SystemExit(
                 f"missing {p}. E5's aggregate needs all {len(SEEDS)} seeds — hard rule 2 "
                 f"requires mean +/- std over >=3 seeds, and a mean over fewer is not that "
                 f"quantity. Run the per-seed sweeps first.")
         per[s] = json.loads(p.read_text())
-        if per[s].get("precision") != "fp32":
-            raise SystemExit(f"{p} has precision={per[s].get('precision')!r}, expected 'fp32'")
+    precisions = {per[s].get("precision") for s in SEEDS}
+    isas = {per[s].get("isa") for s in SEEDS}
+    if len(precisions) != 1 or len(isas) != 1:
+        raise SystemExit(
+            f"seeds disagree on provenance: precision={precisions}, isa={isas}. "
+            f"Averaging AUROCs across precisions would report a number measured on "
+            f"neither system.")
 
     signals = sorted(per[SEEDS[0]]["aurocs"])
     ranks = {s: {sig: i + 1 for i, sig in
@@ -71,7 +116,8 @@ def aggregate(out_path: Path) -> int:
     stable = {sig: len(set(agg[sig]["per_seed_rank"])) == 1 for sig in signals}
     rank1_every_seed = [sig for sig in signals if agg[sig]["per_seed_rank"] == [1] * len(SEEDS)]
 
-    print(f"\n=== E5 aggregate over {len(SEEDS)} seeds — {LABEL} ===")
+    prec, isa = precisions.pop(), isas.pop()
+    print(f"\n=== E5 aggregate over {len(SEEDS)} seeds — precision={prec} isa={isa} ===")
     print(f"{'signal':22s} {'mean':>8s} {'sd':>8s}   ranks")
     for sig in sorted(signals, key=lambda x: -means[x]):
         print(f"  {sig:20s} {means[sig]:8.4f} {agg[sig]['sd']:8.4f}   "
@@ -95,8 +141,7 @@ def aggregate(out_path: Path) -> int:
         sweeps[sig] = by_target
 
     out = {"experiment": "E5 (exploratory, AGGREGATE)", "status": "NOT the router result",
-           "precision": "fp32", "precision_label": LABEL,
-           "blocked_by": "E3 falsified (3ah); INT8 dev logits at chance",
+           "precision": prec, "isa": isa,
            "n_seeds": len(SEEDS), "seeds": list(SEEDS),
            "aurocs": agg,
            "best_signal_by_mean": best, "spread_of_means": spread,
@@ -106,7 +151,7 @@ def aggregate(out_path: Path) -> int:
            "sweeps_mean_over_seeds": sweeps}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {out_path}  [{LABEL}]")
+    print(f"\nwrote {out_path}  [precision={prec} isa={isa}]")
     return 0
 
 
@@ -124,28 +169,25 @@ def main() -> int:
                     help="default: results/e5_sweep_fp32_seed<seed>.json")
     ap.add_argument("--aggregate", action="store_true",
                     help="read the per-seed files and write mean +/- sd across seeds")
+    ap.add_argument("--prefix", default="e5_sweep_fp32",
+                    help="per-seed filename stem for --aggregate (e.g. e5_sweep_int8)")
     ap.add_argument("--targets", type=float, nargs="+",
                     default=[0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50])
     a = ap.parse_args()
 
     if a.aggregate:
-        return aggregate(a.out or Path("results/e5_sweep_fp32_aggregate.json"))
+        return aggregate(a.out or Path(f"results/{a.prefix}_aggregate.json"), a.prefix)
     if a.npz is None or a.seed is None:
         raise SystemExit("--npz and --seed are required unless --aggregate is passed")
     out_path = a.out or Path(f"results/e5_sweep_fp32_seed{a.seed}.json")
 
-    # Substring, not prefix: the dev-inference commit writes dev_logits_int8_*.npz, which
-    # a prefix check would wave through — and it uses the SAME `dev_logits` key as the
-    # FP32 file, so nothing downstream would notice.
-    if "int8" in a.npz.name.lower():
-        raise SystemExit(
-            f"refusing {a.npz.name}: INT8 dev logits are at chance pending E3 (3ah). "
-            "Calibrating on them would fit thresholds to noise and report it as a router.")
+    prov = read_provenance(a.npz)
 
+    active_label = label_for(prov)
     d = load_split(a.npz, "dev_2000", for_calibration=True)   # loader vocabulary, not the npz prefix
     cmp_ = compare_signals(d.logits, d.labels, split="dev_2000")
 
-    print(f"\n=== E5 signal comparison — {LABEL} ===")
+    print(f"\n=== E5 signal comparison — {active_label} ===")
     print(f"seed {a.seed}  n={cmp_.n}  tier0 correct={cmp_.n_correct} "
           f"({cmp_.n_correct/cmp_.n:.4f})  classes absent={len(d.absent_classes)}")
     print(f"random-escalation null AUROC {cmp_.random_null:.4f} "
@@ -176,9 +218,12 @@ def main() -> int:
             print(f"    esc {p['escalation_rate']:.3f} @ th {p['threshold']:+.4f} "
                   f"-> retained acc {p['retained_accuracy']:.4f}")
 
-    out = {"experiment": "E5 (exploratory)", "status": "NOT the router result",
-           "precision": "fp32", "precision_label": LABEL,
-           "blocked_by": "E3 falsified (3ah); INT8 dev logits at chance",
+    out = {"experiment": "E5", "status": ("router result on the deployed precision"
+             if prov["precision"] == "int8" else "NOT the router result"),
+           "precision": prov["precision"], "isa": prov["isa"],
+           "precision_label": active_label, "provenance": prov["provenance"],
+           "blocked_by": (None if prov["precision"] == "int8"
+                          else "reported on FP32; INT8 is the deployed precision"),
            "seed": a.seed, "npz": a.npz.name, "split": "dev_2000",
            "n": cmp_.n, "n_tier0_correct": cmp_.n_correct,
            "dev_absent_classes": d.absent_classes.tolist(),
@@ -186,7 +231,7 @@ def main() -> int:
            "random_null_ci95": list(cmp_.random_null_ci95), "sweeps": sweeps}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {out_path}  [{LABEL}]")
+    print(f"\nwrote {out_path}  [{active_label}]")
     return 0
 
 
