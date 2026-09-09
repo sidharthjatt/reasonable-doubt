@@ -1117,6 +1117,151 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3ap. Four corrections to §3an/§3ao, and the finding is the opposite shape (2026-09-09)
+
+**A. The C2 direction claim was backwards.** I wrote that the few-shot mode "moved *away*
+from the anchored 0.9". |0.98 − 0.9| = **0.08**; |0.85 − 0.9| = **0.05**. It moved
+**toward** it. The verdict is unchanged — 0.05 still misses the registered ±0.02 window
+and the sd clause fails at 0.8837 vs ≤ 0.5 — but *"the fixed confidence did not anchor
+Sonnet" overstates what was measured.* Location moved; spread did not:
+
+| statistic | zero-shot | few-shot | toward 0.9? |
+|---|---|---|---|
+| mode | 0.98 | 0.85 | **yes** (0.080 → 0.050) |
+| median | 0.920 | **0.900** | **yes** (0.020 → 0.000) |
+| mean \|c−0.9\| | 0.1196 | 0.1083 | **yes** |
+| mass within ±0.05 of 0.9 | 202 | **307** | **yes**, +52% |
+| mean | 0.8514 | 0.8443 | no (0.0486 → 0.0557) |
+| mass **exactly** at 0.90 | 52 | 50 | **no — flat** |
+| sd | 0.1598 | 0.1412 | **no compression** (ratio 0.88) |
+
+**Supported statement:** the anchor produced a **measurable pull on location** — the
+median lands exactly on 0.9 and the mass within ±0.05 rises by half — that **fell well
+short of the registered window, with no compression at all.** Pile-up on the *exact*
+demonstrated value did not happen (52 → 50 rows).
+
+**The §3b falsification clause does not cleanly fire, and that is a defect in the rule.**
+It reads: *"sd ratio > 0.5 **and** mode away from 0.9 ⇒ the fixed exemplar confidence did
+not anchor, and verbalized confidence is compressed for reasons intrinsic to the models
+rather than to our prompt."* The first conjunct holds; the second does **not** — the mode
+moved toward 0.9, merely not far enough. **So C2 neither passes its accept rule nor
+satisfies its falsification clause.** The rule is silent on "moved toward but missed",
+which is exactly what happened. My earlier claim that compression is *"intrinsic to the
+model, not induced by our prompt"* invoked a clause that never fired and is **withdrawn**.
+What survives: **compression is untouched by the anchor** (sd ratio 0.88) — that much is
+measured, and it is enough for H2's purposes. Whether *location* is prompt-induced is
+answered "partly, weakly", which the rule was not written to grade.
+
+**B. McNemar tests ACCURACY; the registered statistic is MACRO-F1.** `delta = +0.0063` is
+macro-F1; per-row correct/incorrect is accuracy. Net +12 of 365 **cannot determine a
+macro-F1 sign**, because macro-F1 upweights rare classes and *which* classes those rows
+belong to decides it. **This is §3e instance 2's shape recurring in the adjudicating test
+itself** — the same defect that left `macro_f1` NaN in `build_frontier.py` while accuracy
+was reported. **§3e instance 10.** That it recurred in the test brought in to *settle* the
+question is the aggravating part: the check inherited the flaw it was auditing.
+
+**The correct test, paired bootstrap of macro-F1 restricted to escalated rows:**
+
+| seed | n | classes | Tier 0 | API | delta | 95% CI |
+|---|---|---|---|---|---|---|
+| 1 | 120 | 45 | 0.2646 | 0.3191 | **+0.0545** | [−0.0527, +0.1025] |
+| 2 | 97 | 44 | 0.3094 | 0.3589 | **+0.0495** | [−0.0578, +0.1114] |
+| 3 | 148 | 59 | 0.2668 | 0.3475 | **+0.0807** | [−0.0382, +0.1098] |
+
+**Sign-consistent 3/3 positive**, every interval including 0. **This reverses my
+conclusion.** I wrote *"on the rows the cascade acts, the API is not reliably better than
+the encoder"* — that rested on the wrong statistic. On the **registered** statistic the
+API is better on escalated rows on **all three seeds**, by +0.05 to +0.08, though no
+single interval separates from zero at n ≈ 100–150 over 44–59 classes. The
+macro-F1/accuracy divergence is itself informative: the API's gains on escalated rows are
+concentrated in **rare** classes, which is what macro-F1 is built to see and accuracy is
+built to miss. **Withdrawn.** McNemar is retained **as accuracy evidence, labelled as
+such**: pooled 79/91, net +12 of 365, p = 0.399.
+
+*Caveat that stops this from being over-read:* escalated-row macro-F1 is computed over the
+escalated rows' **own** label space (44–59 classes), a different quantity from the
+contribution to global 100-class macro-F1. **It is not a decomposition of the +0.0063**
+and does not explain why the global delta fails sign-consistency.
+
+**C. The pooled 365 are not independent, and the distinct-row count is a finding.** All
+three seeds run on the same 3,000 rows, so a row escalated by more than one seed is
+counted more than once; the 170 discordant pairs are **not** 170 independent observations.
+**The direction is conservative** — dependence inflates apparent precision, and the test
+was already null at p = 0.399, so the null conclusion is safe. Stated rather than left
+implicit.
+
+**The overlap refutes my own mechanism claim:**
+
+> 365 escalations cover **250 distinct rows**. Escalated by 1 seed: **160**; by 2: 65;
+> by 3: **25 (10.0%)**. Pairwise Jaccard **0.213–0.258**.
+
+I claimed the variance reduction was *"by construction"* — escalated rows getting a
+seed-invariant API prediction. **That mechanism requires the router to select the same
+rows each seed, and it does not: ~75% of escalated rows are non-overlapping between any
+two seeds, and only 10% form an all-three core.** The claim is **withdrawn**. What
+replaces it is the more serious finding the overlap actually shows: **which rows get
+escalated is itself highly seed-unstable.** And on variance, the honest position is that
+**nothing is established at n = 3** — an sd ratio (0.611) and a correlation (−0.965) on
+three points are not testable quantities. I substituted one story for another when the
+supported answer was "not determinable at this seed count".
+
+**D. An artefact number disagreed with the prose, because its label space was unrecorded.**
+`e6_seed_structure.json` gave first1000 − rest2000 as +0.0096 / +0.0204 / +0.0171; the
+prose said +0.0075 / +0.0204 / +0.0151. **Both are correct and they answer different
+questions**, which nothing in the file said:
+
+| basis | classes | per seed | mean |
+|---|---|---|---|
+| each half over its **own** present classes | 97 vs 98 | +0.0096 / +0.0204 / +0.0171 | +0.0157 |
+| **common label space** (held constant) | 95 | +0.0075 / +0.0204 / +0.0151 | **+0.0143** |
+
+**The common-95 figure is the one reported**, because holding the label space constant is
+the entire point of separating row difficulty from label-space effects; the own-class-set
+version is confounded by construction. This is **§3e instance 9's shape with a
+disagreement attached** — a number whose denominator was not recorded. The script now
+writes **both**, each with its `classes_averaged`, and marks which is `reported`.
+
+### 3aq. THE ACTUAL FINDING: routing works; the escalation target has no marginal value (2026-09-09)
+
+Everything above was framed as "the cascade premise is falsified", and **that framing is
+wrong** — it buries the result and makes E5 and E6 look like they conflict. They do not.
+
+**The router is working, and working well.** Base accuracy on `test_3000` is ~0.85. On the
+rows the router selects:
+
+| seed | Tier 0 accuracy on escalated rows | API accuracy on the same rows |
+|---|---|---|
+| 1 | 0.392 | 0.400 |
+| 2 | 0.340 | 0.433 |
+| 3 | 0.338 | 0.351 |
+
+**0.85 → ~0.37.** The margin signal identifies genuinely hard rows, exactly as E5's AUROC
+of 0.86 said it would. **E5 and E6 are one coherent finding, not two conflicting ones.**
+
+**The negative result is therefore not "cascading doesn't work". It is:**
+
+> **Routing works. The escalation target has no marginal value on precisely the rows
+> routing correctly identifies as hard.**
+
+That is the stronger claim and the more interesting one: **a frontier model adds nothing
+on exactly the examples a fine-tuned encoder finds hard.** The cascade is not badly
+engineered and the router is not miscalibrated — there is simply **no accuracy headroom at
+the top of the cascade to route into.** The write-up is built around this, and does not
+apologise for it.
+
+**Supporting it — and this is a stronger statement than the escalation-rate spread.** The
+per-seed dev-calibrated **thresholds** are **0.1154 / 0.1177 / 0.1718**, a **1.49× spread**
+— and *that* is the cause of the 1.53× spread in realized escalation rate, not a separate
+fact about it. **The margin signal is not on a comparable scale across retrainings.** An
+**absolute** dev-calibrated threshold therefore does not transfer between seeds of the
+same model on the same data.
+
+> **Deployment recommendation, which follows directly: calibrate the router at a
+> PERCENTILE of the signal distribution, not at an absolute threshold value.** A
+> percentile is invariant to the monotone rescaling that retraining applies to margin, and
+> would hold the escalation rate — and therefore the API bill — fixed across retrainings.
+> This is the one actionable engineering result the E6 work produces.
+
 ### 3an. E6's aggregate delta hid its per-seed structure — and the structure changes the claim (2026-09-09)
 
 §3al replaced a wrong yardstick with a paired row bootstrap. That was necessary and not
@@ -1141,6 +1286,8 @@ reliably better than Tier 0 alone.** Both tests are reported, neither replaces t
 |---|---|
 | paired row bootstrap (3,000 rows) | +0.0063, 95% CI [−0.0004, +0.0103], p = 0.0756 |
 | seed sign-consistency (3 seeds) | **2/3 — FAILS** |
+
+**2. ⚠ SUPERSEDED BY §3ap(B) AND §3ap(C) — READ THEM WITH THIS.** The McNemar test below is ACCURACY, not the registered macro-F1; on macro-F1 the API is better on escalated rows on 3/3 seeds. The "by construction" mechanism is WITHDRAWN: the escalation sets are only ~24% overlapping across seeds. Retained as written so the correction is legible.
 
 **2. IT IS VARIANCE REDUCTION, NOT A LEVEL GAIN — and the direct test settles it.**
 corr(Tier 0 quality, delta) = **−0.965**: the worst seed gains most and the best seed
@@ -3179,7 +3326,14 @@ experiment id. Never edit a past entry — add a correcting entry instead.
   value, not toward it. Per §3b's falsification clause this means the compression of
   verbalized confidence is **intrinsic to the model, not induced by our prompt**, which
   strengthens rather than weakens H2's case for a continuous margin over verbalized
-  confidence. §3b's recorded Type II limitation still applies in the other direction: at
+  confidence. **⚠ AMENDED — see §3ap(A).** The mode moved **toward** 0.9 (0.080 → 0.050
+  from the anchor), not away; the median lands exactly on 0.9 and the mass within ±0.05
+  rises 202 → 307. The supported statement is a **measurable pull on location that fell
+  well short of the registered window, with no compression** — not "did not anchor". The
+  §3b falsification clause requires "mode away from 0.9" and therefore **does not fire**;
+  the inference that compression is "intrinsic to the model, not induced by our prompt" is
+  **withdrawn** as resting on a clause that never triggered. What stands is that
+  **compression is untouched by the anchor** (sd ratio 0.88), which is what H2 needs. §3b's recorded Type II limitation still applies in the other direction: at
   0.5 the bar rules out a *large* anchoring effect, and a ratio of 0.88 is not evidence of
   *no* effect, only of no large one.
 
