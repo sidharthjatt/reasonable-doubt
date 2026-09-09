@@ -142,8 +142,15 @@ def main() -> int:
     ap.add_argument("--skip-power", action="store_true",
                     help="EXPLICIT opt-out. Result is marked incomplete and cannot "
                          "be used for E6.")
-    ap.add_argument("--out", type=Path, default=Path("results/bench_local.json"))
+    # PER-ARTEFACT FILENAME. A fixed default is the defect that cost E5 two seeds:
+    # benchmarking three trained INT8 artefacts in sequence would overwrite one file
+    # twice and leave only the last, with nothing failing. The default now carries the
+    # artefact's directory name, so seeds cannot collide.
+    ap.add_argument("--out", type=Path, default=None,
+                    help="default: results/bench_<tier>_<artefact dir name>.json")
     args = ap.parse_args()
+    if args.out is None:
+        args.out = Path(f"results/bench_{args.tier}_{Path(args.onnx_dir).name}.json")
 
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
