@@ -1016,6 +1016,69 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3ak. Running E1b on a different host — what it costs (2026-09-09)
+
+E1b may have to run on different hardware or a different account. §3ah exists because one
+host's INT8 *kernel* differed from another's; the same exposure applies to **training**
+and was never instrumented.
+
+**THE BASELINE'S ENVIRONMENT WAS NEVER RECORDED. This is the binding constraint.**
+E1's per-seed JSONs carry `epochs`, `lr`, `max_length`, manifest shas and metrics — and
+nothing about the GPU, CUDA, cuDNN, driver or torch version that produced the weights.
+Only `transformers 4.57.6` was ever *printed*, to a terminal. So the problem is not
+symmetric: instrumenting the new host does not make the comparison sound, because **there
+is nothing on the E1 side to compare the record against.** §3e instance 8's lesson
+(provenance must live in the artefact) in the one place this project had not looked.
+
+`train_env()` now records the training host in every seed's JSON. It cannot retroactively
+record E1's.
+
+**What must be recorded — and the one most likely to bite.**
+
+| field | why it can change macro-F1 |
+|---|---|
+| `gpu_name`, `gpu_capability` | different SM arch ⇒ different kernels; T4 has tensor cores, P100 does not |
+| **`tf32_matmul`, `tf32_cudnn`** | **on Ampere+ TF32 silently reduces matmul precision by default; T4 has no TF32 at all.** Two hosts can run identical code at different arithmetic precision with nothing in the output saying so |
+| `torch`, `cuda_runtime`, `cudnn`, `driver` | kernel and algorithm selection, reduction order |
+| `cudnn_benchmark`, `cudnn_deterministic` | benchmark picks algorithms by *timing*, so even one host can vary under different load |
+| `bf16_supported` | availability differs by arch; `fp16=True` is set, so the fp16 path itself differs across arch |
+| `transformers`, `tokenizers`, `datasets`, `numpy` | tokenisation and data-order effects |
+
+**WHAT CANNOT BE MADE COMPARABLE, stated plainly.** fp16 training numerics and cuDNN
+algorithm selection are hardware-dependent and **cannot be equalised by recording them**.
+Metadata tells you the runs differed; it does not tell you *by how much*. There is no set
+of fields that makes a cross-host training comparison sound, and `seed_sd = 0.0032` does
+not help — it is a **within-host** training-seed spread, and cross-host variance is
+unmeasured with no reason to assume it is smaller.
+
+**What IS host-independent, and it is more than expected.** E1b's accept rule is
+**absolute** — macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds — not a comparison
+to E1. And the INT8 headline is re-scored on the Mac (`scripts/score_int8_local.py`), so
+the *evaluation* is common to both experiments even when the *training* is not. A host
+change therefore does not threaten E1b's accept rule. It threatens E1b's **diagnostic
+purpose** — "does undertraining explain E1's shortfall?" — and the **seed-1 gate**, both
+of which are comparisons to E1.
+
+**REGISTERED PROTOCOL for a host change.** Do not attempt to correct for a host delta.
+**Move the comparison onto the new host:**
+
+1. Run **E1-baseline seed 1** on the new host: `EPOCHS = 3`, everything else identical,
+   `RUN_TAG = "ce_hostB"`. Cost **1.0–2.2 h**.
+2. Run **E1b seed 1** on the same host. Cost **3.3–7.3 h**.
+3. The gate becomes **within-host**: does 10 epochs beat 3 epochs *on this host*? That is
+   the one-variable question E1b was designed to ask, and it is answered without any
+   cross-host term.
+4. Report the new host's E1-baseline against the original 0.7636 as a **measured host
+   effect at n=1**, explicitly labelled as having no variance estimate.
+
+**The cost of the host change is therefore +1.0–2.2 h, roughly +30–45% on E1b's seed-1
+gate.** That is the price of keeping the comparison one-variable, and it is cheaper than
+any analysis that tries to reason across hosts after the fact.
+
+**Rejected:** running E1b alone on a new host and comparing to E1's 0.7570. That is a
+two-variable comparison (epochs AND host) reported as one, and no recorded metadata
+converts it back into one variable.
+
 ### 3aj. Tier 0 throughput replication — the rule, registered BEFORE the runs (2026-09-09)
 
 Three trained INT8 artefacts benchmarked once each gave 29.63 / **27.19** / 30.24 rps,

@@ -122,6 +122,7 @@ assert N_VISIBLE_GPUS == 1, (
     f"with {N_VISIBLE_GPUS} the effective batch is multiplied by {N_VISIBLE_GPUS} and "
     f"Trainer wraps the model in DataParallel, both silently.")
 print("PREFLIGHT PASSED\n")
+TRAIN_ENV = None   # populated after the imports below; recorded in every seed's JSON
 
 WORK = Path("/kaggle/working"); WORK.mkdir(exist_ok=True)
 MODEL = "microsoft/deberta-v3-base"
@@ -304,6 +305,58 @@ def onnx_predict(model_dir, texts, max_length, batch=1):
         if i % 500 == 0: print(f"    onnx {i}/{len(texts)}", flush=True)
     return np.concatenate(out, 0)
 
+def train_env():
+    """Capture the TRAINING host. E1 recorded none of this, and that is the defect.
+
+    §3ah exists because one host's INT8 kernel differed from another's. The same exposure
+    applies to TRAINING and was never instrumented: E1's per-seed JSONs carry the epochs,
+    lr and batch but nothing about the GPU, CUDA, cuDNN, driver or torch version that
+    produced the weights. If E1b runs on different hardware, the cross-host delta cannot
+    be attributed even in principle, because the baseline's environment was never written
+    down.
+
+    TF32 is recorded explicitly and is the field most likely to bite. On Ampere and later
+    it silently reduces matmul precision by default; T4 has no TF32 at all. Two hosts can
+    therefore run identical code at different arithmetic precision with nothing in the
+    output saying so — §3e's class, in the one place this project has not yet looked.
+    """
+    import platform
+    e = {"python": platform.python_version(), "platform": platform.platform(),
+         "torch": _torch.__version__,
+         "cuda_runtime": _torch.version.cuda,
+         "cudnn": _torch.backends.cudnn.version(),
+         "gpu_name": None, "gpu_capability": None, "gpu_count": _torch.cuda.device_count(),
+         "driver": None,
+         "tf32_matmul": bool(_torch.backends.cuda.matmul.allow_tf32),
+         "tf32_cudnn": bool(_torch.backends.cudnn.allow_tf32),
+         "cudnn_benchmark": bool(_torch.backends.cudnn.benchmark),
+         "cudnn_deterministic": bool(_torch.backends.cudnn.deterministic),
+         "bf16_supported": bool(_torch.cuda.is_bf16_supported())
+                           if _torch.cuda.is_available() else None,
+         "transformers": _tf.__version__}
+    if _torch.cuda.is_available():
+        e["gpu_name"] = _torch.cuda.get_device_name(0)
+        e["gpu_capability"] = ".".join(str(x) for x in _torch.cuda.get_device_capability(0))
+    try:
+        import subprocess
+        r = subprocess.run(["nvidia-smi", "--query-gpu=driver_version",
+                            "--format=csv,noheader"], capture_output=True, text=True,
+                           timeout=15)
+        if r.returncode == 0:
+            e["driver"] = r.stdout.strip().splitlines()[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass                      # driver stays None: not measured, never guessed
+    for k in ("numpy", "datasets", "tokenizers", "optimum", "onnxruntime"):
+        try:
+            e[k] = __import__(k).__version__
+        except Exception:
+            e[k] = None
+    print("  TRAIN ENV: " + " | ".join(
+        f"{k}={e[k]}" for k in ("gpu_name", "gpu_capability", "torch", "cuda_runtime",
+                                "cudnn", "driver", "tf32_matmul")))
+    return e
+
+
 def onnx_env():
     """Capture the EXECUTION environment of the INT8 kernel, not just its config.
 
@@ -441,6 +494,10 @@ print(f"completion markers present: "
       f"{sorted(f.name for f in WORK.glob('tier0_*_seed*.json')) or 'none'}")
 print("=== RESTORE OK ===\n")
 
+TRAIN_ENV = train_env()
+# Recorded, not asserted. There is no registered "correct" host, so an assert here would
+# invent one. The obligation is that every seed's JSON carries the environment that made
+# its weights, so a cross-host comparison can be ADJUDICATED rather than assumed.
 _T_START = time.time()
 for seed in SEEDS:
     _t_seed = time.time()
@@ -589,6 +646,7 @@ for seed in SEEDS:
                               "accuracy": float((int8_test3000 == y3).mean())},
            "test_3000_onnx_fp32": {"macro_f1": macro(y3, onnx_fp32_test3000),
                                    "accuracy": float((onnx_fp32_test3000 == y3).mean())},
+           "train_env": TRAIN_ENV,
            "e3_discriminator": {
                "torch_fp32_vs_onnx_fp32_argmax_agree":
                    float((fp32_test3000 == onnx_fp32_test3000).mean()),
