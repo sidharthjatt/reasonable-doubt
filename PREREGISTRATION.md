@@ -645,6 +645,28 @@ treats an unrecognised state as a normal one, belongs here.
 
 | 7 | scaling a wall-clock estimate by **optimizer steps** when the batch size also changes | steps are the natural unit for "how much training happened", and for a fixed batch size the two are proportional | **training time tracks SAMPLES (rows x epochs), not steps.** At batch 8 you get 2x the steps in the same wall clock. Scaling by steps double-counted the batch-size change and inflated a LexGLUE-faithful config from ~6.7x to 14x, producing a confident **"3 seeds — impossible"** verdict on an option that is merely expensive. Nothing failed; a plausible table with a wrong column drove an options recommendation | Block 5, costing the E1b options |
 
+| 8 | shipping a fix into the repo while a run using the OLD code was still in flight | a fix is landed as soon as it is written and tested; the runs are separate | `results/` ended up holding **six bench files from two code versions**, distinguishable only by correlating file mtimes against a terminal scrollback. Nothing in any file recorded which code wrote it. One artefact's first-batch measurement (seed 1, 29.63 rps) was **overwritten twice** and no longer exists, after that number had already been used in a summary | Block 5, the throughput replication |
+
+**Instance 8's defect is not the overwrite — the overwrite is instance 5's shape again.
+It is that the artefacts could not say what produced them.** The collision was fixable
+and was fixed twice; what made this one expensive is that *after* it happened, the only
+way to reconstruct which file came from which code version was a human's terminal
+scrollback. An artefact whose provenance lives outside the artefact is not evidence once
+the session ends, and every rule in this document about re-derivable numbers depends on
+artefacts being evidence.
+
+**Aggravating factor, recorded because it is the reusable part:** the fix that was
+shipped mid-flight was itself a fix for the *previous* round of the same collision. Two
+renames did not end it; the third change added a REFUSAL to overwrite, which does. A
+naming scheme only defends against the collisions its author anticipated.
+
+**Mitigation, now enforced rather than intended.** `src/serve/bench_local.py` records
+`code_commit` and `code_dirty` in every result, and `scripts/bench_aggregate.py`
+**refuses** to aggregate runs spanning more than one code version, or any run carrying no
+version at all — a mean over two code versions describes neither. `code_dirty` is
+recorded alongside the sha because a dirty tree means the commit identifies an ancestor,
+not the exact code, which is the state the six mixed files were produced in.
+
 **Instance 7 is the same class in an ANALYSIS rather than in code**, which is why it is
 recorded here rather than dismissed as arithmetic. It threw no error, produced a
 well-formed table, and its output was *directionally* right — more epochs cost more —
@@ -999,6 +1021,17 @@ attaches to INT8, could not be computed from the notebook's output at all.
 Three trained INT8 artefacts benchmarked once each gave 29.63 / **27.19** / 30.24 rps,
 with seed 2 also showing p95 118.7 ms against 96.2 / 94.8. The graphs are
 architecturally identical, so this cannot be a property of the model.
+
+> **CORRECTION (2026-09-09), and the reason this rule is unchanged by it.** The seed-1
+> figure quoted above, 29.63 rps, **no longer has an artefact on disk**: its file was
+> overwritten twice by a mid-flight code change (§3e instance 8), and it survives only in
+> a terminal scrollback. It is retained in this paragraph as the *motivating observation*
+> that prompted the rule, explicitly labelled unreproducible, and **no number in this
+> paragraph may be carried into `costs.yaml`, §3aa or any reported figure.** The rule
+> below was registered on the *structure* of the problem — n=1 per artefact cannot
+> separate a slow graph from a slow run — and that reasoning does not depend on the
+> particular values, so the rule stands as registered. The 9 fresh runs supply every
+> number that gets used.
 
 **Three estimators were offered and all three are rejected, for one reason.** At n=1 per
 artefact, "this graph is slower" and "this *run* was slower" are not separable — and only

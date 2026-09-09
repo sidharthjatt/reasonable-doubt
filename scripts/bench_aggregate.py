@@ -64,6 +64,30 @@ def main() -> int:
                 f"It cannot contribute to an E6 figure; re-run it with power sampling.")
         by_artefact.setdefault(d["artefact"], []).append(d)
 
+    # PROVENANCE GATE — PREREGISTRATION 3e instance 8. A set of bench files once existed
+    # here from two code versions, separable only by correlating mtimes with a terminal
+    # scrollback. Mixed provenance is refused rather than averaged: a mean over two code
+    # versions describes neither.
+    versions = {(d.get("code_commit"), d.get("code_dirty")) for v in by_artefact.values()
+                for d in v}
+    unversioned = [d for v in by_artefact.values() for d in v if d.get("code_commit") is None]
+    if unversioned:
+        raise SystemExit(
+            f"{len(unversioned)} run(s) carry NO code_commit — written before artefacts "
+            f"recorded their code version. They cannot be distinguished from any other "
+            f"version except by file mtime, which is not provenance. Re-run them.")
+    if len(versions) > 1:
+        raise SystemExit(
+            f"runs span {len(versions)} code versions: "
+            + "; ".join(f"{(c or 'none')[:8]}{'-dirty' if d else ''}" for c, d in sorted(
+                versions, key=lambda x: (x[0] or "", bool(x[1]))))
+            + ". A mean over two code versions describes neither. Re-run the whole set "
+              "under one version.")
+    commit, dirty = versions.pop()
+    if dirty:
+        print(f"  NOTE: all runs produced by {commit[:8]} with a DIRTY working tree — "
+              f"the commit identifies an ancestor, not the exact code.")
+
     n_art, runs = len(by_artefact), {k: len(v) for k, v in by_artefact.items()}
     print(f"{len(files)} runs over {n_art} artefacts: "
           + ", ".join(f"{Path(k).name}x{v}" for k, v in runs.items()))
@@ -115,6 +139,7 @@ def main() -> int:
               "until this is explained.")
 
     payload = {"tier": a.tier, "n_runs": len(files), "n_artefacts": n_art,
+               "code_commit": commit, "code_dirty": dirty,
                "runs_per_artefact": {Path(k).name: v for k, v in runs.items()},
                "excluded": a.exclude, "exclude_reason": a.exclude_reason,
                "rule": "PREREGISTRATION 3aj: mean over ALL runs; no outlier exclusion",

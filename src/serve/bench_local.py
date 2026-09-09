@@ -45,9 +45,57 @@ class BenchResult:
     marginal_soc_watts: float | None
     joules_per_request: float | None
     power_scope: str = "soc_package_cpu_gpu_ane_excludes_ram_ssd_psu_fans"
+    # CODE VERSION — PREREGISTRATION 3e instance 8. Six bench files once existed in this
+    # repo from two different code versions, distinguishable only by correlating mtimes
+    # against a terminal scrollback, because a fix was shipped while a run using the old
+    # code was still in flight. An artefact that does not record the code that produced
+    # it cannot be audited after the scrollback is gone.
+    code_commit: str | None = None
+    code_dirty: bool | None = None
+    run_index: int | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def code_version() -> tuple[str | None, bool | None]:
+    """(commit sha, working-tree-dirty). Both None if git is unavailable.
+
+    `dirty` matters as much as the sha: a clean sha identifies the code exactly, while a
+    dirty one says only "descended from this commit", which is the state the six mixed
+    files were produced in.
+    """
+    import subprocess
+    root = Path(__file__).resolve().parents[2]
+    try:
+        sha = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+        st = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
+                            capture_output=True, text=True, timeout=10)
+        if sha.returncode != 0 or st.returncode != 0:
+            return None, None
+        return sha.stdout.strip(), bool(st.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+
+
+def chown_back(path: Path) -> None:
+    """Give the file to the invoking user when this ran under sudo.
+
+    bench_local needs root only for `powermetrics`. Running the WHOLE command under sudo
+    makes every artefact root-owned, which is how results/ ended up with root-owned bench
+    files. Ownership is corrected here rather than left for the operator, because a
+    root-owned result is a footgun for every later tool that wants to rewrite it.
+    """
+    import os
+    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if uid is None or gid is None or os.geteuid() != 0:
+        return
+    try:
+        os.chown(path, int(uid), int(gid))
+        print(f"  chowned {path} back to uid {uid}:{gid} (ran under sudo)")
+    except OSError as e:
+        print(f"  WARNING: could not chown {path} back to the invoking user: {e}")
 
 
 def measure_power(seconds: int = 20) -> float:
@@ -161,6 +209,9 @@ def main() -> int:
     if args.out is None:
         args.out = Path(
             f"results/bench_{args.tier}_{Path(args.onnx_dir).name}_run{args.run}.json")
+    _sha, _dirty = code_version()
+    if _dirty:
+        print("  NOTE: working tree is DIRTY; code_dirty=true is recorded in the result.")
     if args.out.exists() and not args.force:
         raise SystemExit(
             f"refusing to overwrite {args.out}. A benchmark result already exists for "
@@ -217,6 +268,7 @@ def main() -> int:
         p99_latency_ms=lat[int(0.99 * len(lat))],
         idle_soc_watts=idle, load_soc_watts=load_w, marginal_soc_watts=marginal,
         joules_per_request=joules,
+        code_commit=_sha, code_dirty=_dirty, run_index=args.run,
     )
     print("\n" + "=" * 60)
     print(f"  throughput      : {rps:.2f} req/s")
@@ -240,7 +292,9 @@ def main() -> int:
     payload = res.as_dict()
     payload["complete_for_e6"] = joules is not None
     args.out.write_text(json.dumps(payload, indent=2))
-    print(f"wrote {args.out}")
+    chown_back(args.out)
+    print(f"wrote {args.out}  [commit {(_sha or 'unknown')[:8]}"
+          f"{'-dirty' if _dirty else ''}, run {args.run}]")
     return 0
 
 
