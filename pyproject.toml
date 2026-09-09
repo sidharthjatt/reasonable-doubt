@@ -22,6 +22,7 @@ dependencies = [
   "python-dotenv>=1.0",
   "fastapi>=0.111",
   "uvicorn>=0.30",
+  "matplotlib>=3.8",   # scripts/build_frontier.py — E6 figure generation
   "onnxruntime>=1.18",
   "transformers>=4.44",
   "sentencepiece>=0.2",

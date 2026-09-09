@@ -37,6 +37,10 @@ def main() -> int:
     ap.add_argument("--max-length", type=int, default=512)
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--out", type=Path, default=None)
+    # The frontier needs the LOGITS, not just the summary metrics. Saved on request
+    # rather than always, so a scoring run does not silently write a second artefact.
+    ap.add_argument("--save-logits", type=Path, default=None,
+                    help="npz path for the raw logits + row indices (for E6/E5 joins)")
     args = ap.parse_args()
 
     import onnxruntime as ort
@@ -73,6 +77,20 @@ def main() -> int:
     print(f"INT8 on THIS machine (arm64) — {args.manifest}")
     print("=" * 62)
     print(rep.render())
+
+    if args.save_logits:
+        args.save_logits.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            args.save_logits,
+            test_3000_logits=logits,
+            test_3000_indices=np.array(man.indices),
+            test_3000_labels=np.array([int(x) for x in
+                                       split.select(man.indices)["label"]]),
+            provenance=np.array(json.dumps({
+                "precision": "int8", "isa": "arm64_local",
+                "artefact": str(args.int8_dir), "seed": args.seed,
+                "manifest": man.name, "manifest_sha256": man.text_sha256})))
+        print(f"wrote logits -> {args.save_logits}  [precision=int8, isa=arm64_local]")
 
     payload = {"seed": args.seed, "artefact": str(args.int8_dir),
                "manifest": man.name, "manifest_sha256": man.text_sha256,

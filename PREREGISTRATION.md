@@ -215,6 +215,31 @@ this does not change any conclusion, but the number must be what it says it is.
     training setup, not the task.
 - **Training configuration:** registered in §3t (effective batch 16, 1 visible GPU,
   3 epochs, lr 2e-5, max_length 512, seeds 1/2/3).
+- **STATED LIMITATION — E1's training environment is unrecorded, permanently.** E1's
+  per-seed JSONs (`results/tier0_ce_seed*.json`) carry the manifests, hyperparameters and
+  metrics, and **nothing identifying the machine that produced the weights**: no GPU
+  model, no CUDA or cuDNN version, no driver, no torch version, no TF32 state. The only
+  environment fact ever emitted was `transformers 4.57.6`, and it was *printed* rather
+  than persisted. **This cannot be filled retroactively — the runs are finished and the
+  session is closed.**
+
+  Two consequences a reader of E1 needs, independent of anything E1b does:
+
+  1. **E1 is not reproducible to the precision this project claims elsewhere.** Its
+     numbers are 0.7636 / 0.7597 / 0.7478 on `test_3000` FP32, and a reproduction attempt
+     that lands outside that spread cannot be attributed between "different training
+     setup" and "different hardware", because one of the two was never written down.
+     `seed_sd = 0.0032` is a **within-host** spread and does not bound the cross-host
+     term.
+  2. **The GPU model is a reconstruction, not a record.** It is inferred from the
+     notebook's `GPU T4 x2` comments and a terminal scrollback. Anywhere E1's hardware is
+     described, it must be marked as inferred.
+
+  What *is* solid: the manifests are sha-verified, the effective batch and single-GPU pin
+  were asserted in-run rather than assumed, and E1's INT8 headline is re-scored on the Mac
+  (`scripts/score_int8_local.py`), so the **evaluation** is fully specified even though
+  the **training** is not. `train_env()` records all of the above from 2026-09-09 onward;
+  see §3ak for how a host change is handled going forward.
 - **Falsification:** mean macro-F1 **< 0.80** across 3 seeds ⇒ Tier 0 as specified does
   not reproduce the published DeBERTa baseline on LEDGAR; report it and investigate the
   training setup before changing the encoder or dropping the tier. **Negative result
@@ -646,6 +671,25 @@ treats an unrecognised state as a normal one, belongs here.
 | 7 | scaling a wall-clock estimate by **optimizer steps** when the batch size also changes | steps are the natural unit for "how much training happened", and for a fixed batch size the two are proportional | **training time tracks SAMPLES (rows x epochs), not steps.** At batch 8 you get 2x the steps in the same wall clock. Scaling by steps double-counted the batch-size change and inflated a LexGLUE-faithful config from ~6.7x to 14x, producing a confident **"3 seeds — impossible"** verdict on an option that is merely expensive. Nothing failed; a plausible table with a wrong column drove an options recommendation | Block 5, costing the E1b options |
 
 | 8 | shipping a fix into the repo while a run using the OLD code was still in flight | a fix is landed as soon as it is written and tested; the runs are separate | `results/` ended up holding **six bench files from two code versions**, distinguishable only by correlating file mtimes against a terminal scrollback. Nothing in any file recorded which code wrote it. One artefact's first-batch measurement (seed 1, 29.63 rps) was **overwritten twice** and no longer exists, after that number had already been used in a summary | Block 5, the throughput replication |
+
+| 9 | an experiment's environment **printed** to the console instead of persisted to its artefact | printing versions at the top of a run is standard practice and looks like diligence; the operator sees it and moves on | E1's per-seed JSONs record hyperparameters and metrics but **no GPU, CUDA, cuDNN, driver, torch version or TF32 state**. `transformers 4.57.6` was printed and never written. The runs are complete and the session closed, so **the loss is permanent** — E1 can never be attributed between a training-setup difference and a hardware difference | Block 5, planning E1b's host |
+
+**Instance 9 is instance 8's shape with the repair removed.** Instance 8's bench files
+could not say which code wrote them; that was fixable by re-running ten minutes of
+benchmarks. Here the runs cost GPU-hours, are finished, and the terminal that held the
+only copy is closed — **so the mitigation is prospective only and the gap is a permanent
+property of E1.** Recorded in E1's own entry as a limitation, not merely as a constraint
+on E1b, because a reader of E1 must learn it from E1.
+
+**The deceptive part is that printing looks like recording.** A run that prints its
+versions appears instrumented; the operator watching the log sees exactly the information
+they would want. The defect is invisible until someone asks the question *after* the
+session ends — which is precisely when provenance is needed and precisely when it is
+gone. §3e's other instances degrade a value; this one degrades a value's *lifetime*.
+
+**Mitigation, now enforced:** `train_env()` writes the training host into every seed's
+JSON, and unavailable fields are `null` rather than guessed. Standing rule: **if a fact
+would be needed to interpret a result later, printing it is not recording it.**
 
 **Instance 8's defect is not the overwrite — the overwrite is instance 5's shape again.
 It is that the artefacts could not say what produced them.** The collision was fixable
