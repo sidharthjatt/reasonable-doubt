@@ -146,6 +146,7 @@ this does not change any conclusion, but the number must be what it says it is.
 |----|-------------|-------------|--------|
 | C3 | Measure seed-variance and paired-bootstrap floors | descriptive — no accept rule; **gates E2, E3, E7** | planned |
 | E1 | Tier 0: DeBERTa-v3-base, CE baseline, 3 seeds | **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8 artefact**, FP32 reported alongside. Anchored to LexGLUE Table 3 (DeBERTa m-F1 83.1) | planned |
+| E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **registered — see E1b below** |
 | E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
 | E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | planned **[C3-gated]** |
 | E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04**; else Tier 1 not justified → E4b | planned |
@@ -218,6 +219,54 @@ this does not change any conclusion, but the number must be what it says it is.
   not reproduce the published DeBERTa baseline on LEDGAR; report it and investigate the
   training setup before changing the encoder or dropping the tier. **Negative result
   stays in the report (hard rule 7).**
+
+### E1b — Tier 0 at 10 epochs *(registered 2026-09-09, BEFORE the run)*
+
+- **Hypothesis:** E1's shortfall is caused by **undertraining**, not by the encoder or
+  the task. E1 ran 3 epochs / 10,686 optimizer steps; LexGLUE's published DeBERTa result
+  came from up to 20 epochs at batch 8 — **2.8×–14× more steps**, at lr 3e-5 rather than
+  2e-5.
+- **Change from E1: EXACTLY ONE VARIABLE.** `EPOCHS` 3 → 10. Batch 16, lr 2e-5,
+  max_length 512, fp16, seeds, splits, manifests, selection metric and checkpoint
+  selection are all unchanged and byte-identical. **This is deliberate.** A
+  LexGLUE-faithful configuration would move epochs, batch size and learning rate
+  together; if it cleared 0.80 we would learn that the bundle works and not which part
+  mattered, and if it did not we would have spent up to 18 GPU-hours and still hold
+  three hypotheses. One variable buys an attributable result.
+- **Metric / split:** macro-F1 on `test_3000`, **INT8 headline, FP32 reported alongside**
+  — identical to E1, including E1's reason for attaching to INT8.
+- **Accept rule:** **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8 artefact,
+  mean over seeds 1/2/3.** This is **the same bar as E1, deliberately not a bar chosen to
+  match what 10 epochs is expected to reach.** If undertraining is the cause, 0.80
+  remains the right target and E1b clears it; if E1b lands at, say, 0.79, that is a
+  near-miss to be reported as a near-miss, not a rule to be relaxed afterwards.
+- **E1b DOES NOT REPLACE E1.** E1 stays in the report **as falsified** (hard rule 7). Its
+  0.80 was anchored to LexGLUE Table 3 before any run and the rule did its job; a rule
+  that fails is evidence, not an error. E1b answers a **different question** — *does this
+  encoder reach the published baseline when trained closer to the way that baseline was
+  trained?* — and both results appear, with this distinction stated wherever either is
+  quoted.
+- **Staged execution, and the stopping rule is registered now.** **Seed 1 runs alone
+  first** (~3.3–7.3 h). Seeds 2 and 3 are scheduled **only if seed 1 moves macro-F1
+  materially toward 0.80**. If it does not, **undertraining is not the cause**, E1b is
+  reported as not-accepted on one seed with that reasoning, and no further quota is spent
+  on this hypothesis. Reporting a 1-seed E1b as a *result* would violate hard rule 2 —
+  it is a **gate**, and is labelled as one.
+- **`EarlyStoppingCallback` is deliberately NOT added.** `load_best_model_at_end=True`
+  with per-epoch eval already gives best-checkpoint selection, so early stopping would
+  only save wall clock while adding a registered config change — and E1b's whole design
+  is one variable. Declining it is recorded here so the omission is known to be a
+  decision rather than an oversight.
+- **Falsification:** mean macro-F1 < 0.80 across 3 seeds (or a seed-1 gate that does not
+  move the number) ⇒ **undertraining does not account for E1's shortfall**, and the
+  investigation moves to the encoder, the fine-tuning recipe, or the task setup. Negative
+  result stays in the report (hard rule 7).
+- **Artefact collision — the trap this run would otherwise walk into.** E1's outputs are
+  named `tier0_ce_seed*.json`, `logits_ce_seed*.npz`, `fp32_ce_*`. Re-running with
+  `LOSS_ARM = "ce"` would find E1's completion markers and **skip every seed**, or worse,
+  overwrite E1's artefacts with E1b's. E1b therefore runs under a distinct arm tag
+  (`ce10ep`), so the two experiments cannot collide in `/kaggle/working` and E1's
+  artefacts remain exactly as measured.
 
 ### E2 — Tier 0 class-imbalance arms
 
@@ -397,10 +446,35 @@ this does not change any conclusion, but the number must be what it says it is.
 - **Metric / split:** macro-F1 on `test_3000` (paired, same rows) and measured p50/p95
   latency locally.
 - **Accept rule:** 256 loses **< 0.02 macro-F1 paired** AND is **≥ 1.5× faster** at p50.
-- **Reasoning for the numbers:** only **1.2–1.6%** of clauses exceed 512 tokens
+- **Reasoning for the numbers — AMENDED 2026-09-09, number unchanged.** This paragraph
+  previously justified 0.02 with *"only **1.2–1.6%** of clauses exceed **512** tokens
   (measured, `results/data_report.md`), and the p50 clause is ~100 tokens, so most rows
-  are unaffected either way; 0.02 allows for the long-clause tail being systematically
-  hurt. 1.5× is the smallest speedup that would change a deployment decision.
+  are unaffected either way"*. **That is the wrong threshold's number.** E7 is about
+  **256**, and `data_report.md` has only an `over 512` column — no over-256 figure was
+  ever measured when this rule was written. Measured now, on the full splits:
+
+  | threshold | train rows truncated | test rows truncated |
+  |---|---|---|
+  | 512 | 1.487% | 1.420% |
+  | **256** | **12.075%** | **11.140%** |
+
+  (The over-512 figures cross-validate `data_report.md`'s 2,000-row sample, 1.2% / 1.6%.)
+
+  So **"most rows are unaffected either way" is true at 512 and false at 256** — roughly
+  **8× more rows** are truncated than the cited figure implied. The p50 clause at ~100
+  tokens is still unaffected, but the claim that the tail is negligible does not hold.
+
+  **0.02 is retained**, because it was never derived from that percentage: it is the
+  point at which the deployed system's accuracy would need reporting as a materially
+  different number, the same standard E3's 0.01 is set by. What changes is that 0.02 is
+  now understood as a **real risk of being exceeded** rather than a formality — the
+  argument for it is a decision threshold, not "the tail is small". 1.5× is the smallest
+  speedup that would change a deployment decision, unchanged.
+- **The per-class note is now load-bearing, not a caveat.** At 512, `Capitalization`
+  (n=434) already truncates at **29.49%** — the worst of any class, and 20× the corpus
+  rate. At 256 the concentration is worse. A uniform-looking aggregate delta under 0.02
+  can therefore hide one class collapsing, which is exactly what macro-F1 is supposed to
+  catch. **Report per-class deltas; an aggregate-only E7 result is not a result.**
 - **Falsification:** loss ≥ 0.02 or speedup < 1.5× ⇒ keep 512.
 - **Note:** truncation at 256 will hit long clauses, which may concentrate in particular
   classes. **Report per-class deltas, not just the aggregate** — a uniform-looking 0.02
@@ -564,6 +638,27 @@ treats an unrecognised state as a normal one, belongs here.
 | 5 | `str.replace(old, new)` in an editing script, with no check that `old` matched | a replace that finds nothing is normally harmless | it silently did nothing, so **C4's accept rule was left holding C2's text** — a preregistered rule for the wrong experiment, which would have been signed off as correct. Found only by reading the diff | Block 4, drafting this file |
 
 | 6 | `AutoQuantizationConfig.arm64(...)` chosen "because the artefact is deployed on the Apple Silicon Mac Mini" | naming a target ISA when quantising is ordinary practice, and the factory is literally named for the ISA | **the rationale was never true.** `.arm64`, `.avx512` and `.avx512_vnni` are identical in every parameter (QInt8 weights, QUInt8 activations, `reduce_range=False`, `per_channel=True`); the factory emits the same bytes. A choice that changed nothing was recorded, in a code comment and in RUNNING.md, as a deliberate deployment-driven decision — so the real question (which *kernel* executes the graph) was never asked | Block 5, diagnosing the INT8 collapse |
+
+| 7 | scaling a wall-clock estimate by **optimizer steps** when the batch size also changes | steps are the natural unit for "how much training happened", and for a fixed batch size the two are proportional | **training time tracks SAMPLES (rows x epochs), not steps.** At batch 8 you get 2x the steps in the same wall clock. Scaling by steps double-counted the batch-size change and inflated a LexGLUE-faithful config from ~6.7x to 14x, producing a confident **"3 seeds — impossible"** verdict on an option that is merely expensive. Nothing failed; a plausible table with a wrong column drove an options recommendation | Block 5, costing the E1b options |
+
+**Instance 7 is the same class in an ANALYSIS rather than in code**, which is why it is
+recorded here rather than dismissed as arithmetic. It threw no error, produced a
+well-formed table, and its output was *directionally* right — more epochs cost more —
+which is what made it survive a first reading. What it did was **remove an option from
+consideration**: "impossible" is a verdict, and a verdict reached from a miscomputed
+number is indistinguishable, at the point of decision, from one reached correctly.
+
+It was caught only because the same table was rebuilt from a different starting point a
+turn later and the two disagreed. That is not a repeatable mitigation. The transferable
+one is narrower: **a derived quantity must be scaled by the unit it is actually
+proportional to, and the proportionality must be stated when the scaling is written** —
+"time is proportional to samples" would not have survived being written next to a column
+scaled by steps. This is instance 3's shape (`zero_division=0` deflating in proportion to
+absent classes) moved from a library default into our own arithmetic: **a quantity
+silently scaled by the wrong denominator.**
+
+Recorded at Sid's instruction, about my own analysis, on the same standing as the C4/C2
+entry that records his.
 
 **Instance 6 is a new sub-class: a false rationale attached to a harmless choice.**
 Instances 1–5 are all *actions* that silently did the wrong thing. Instance 6 is an

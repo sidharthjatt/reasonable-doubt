@@ -129,6 +129,27 @@ SEEDS = [1, 2, 3]
 LOSS_ARM = "ce"            # E1 baseline. E2 arms: sqrt_inv_freq | effective_number | inv_freq
 MAX_LENGTH = 512
 EPOCHS, LR, BS = 3, 2e-5, 16
+
+# ---- E1b (PREREGISTRATION, experiment E1b): 10 epochs, ONE VARIABLE changed from E1 --
+# Set E1B = True to run it. Everything except EPOCHS stays byte-identical to E1 — that is
+# the whole design, so that a result is attributable to the epoch count and nothing else.
+#
+# RUN_TAG, not LOSS_ARM, names the artefacts. Two reasons, both load-bearing:
+#   1. COLLISION. E1's outputs are tier0_ce_seed*.json / logits_ce_seed*.npz / fp32_ce_*.
+#      Re-running with the same tag would hit E1's completion markers and SKIP every
+#      seed, or overwrite E1's artefacts with E1b's. E1's measurements must survive
+#      exactly as taken.
+#   2. `weights()` dispatches on the LOSS ARM and raises KeyError on anything that is not
+#      ce / inv_freq / sqrt_inv_freq / effective_number. Overloading LOSS_ARM with a run
+#      label would either crash there or, worse, silently select a different loss.
+# E1b's loss is unchanged CE; only the artefact namespace differs.
+E1B = False
+RUN_TAG = LOSS_ARM
+if E1B:
+    EPOCHS, RUN_TAG, SEEDS = 10, f"{LOSS_ARM}10ep", [1]   # seed 1 GATES seeds 2-3 (E1b)
+    print(f"E1b MODE: EPOCHS={EPOCHS}, RUN_TAG={RUN_TAG!r}, SEEDS={SEEDS} — "
+          f"seed 1 is a GATE, not a result (hard rule 2 needs >=3 seeds)")
+assert (RUN_TAG == LOSS_ARM) or E1B, "RUN_TAG may only diverge from LOSS_ARM under E1B"
 # gradient_accumulation_steps is not set below, so it is the library default of 1 and
 # the effective train batch is BS * 1 * n_gpu. PREREGISTRATION 3t registers E1/E2/E3 at
 # an effective batch of 16 on ONE visible GPU; both halves are asserted, because either
@@ -423,7 +444,7 @@ print("=== RESTORE OK ===\n")
 _T_START = time.time()
 for seed in SEEDS:
     _t_seed = time.time()
-    done = WORK / f"tier0_{LOSS_ARM}_seed{seed}.json"
+    done = WORK / f"tier0_{RUN_TAG}_seed{seed}.json"
     if done.exists():
         # A completion marker written BEFORE the E3 discriminator existed describes a
         # seed that is trained but not diagnosed. Skipping on the marker alone would
@@ -436,8 +457,8 @@ for seed in SEEDS:
         print(f"seed {seed}: complete but PRE-DISCRIMINATOR — re-entering to score the "
               f"three E3 arms. Training is skipped (fp32 exists); nothing is retrained.")
         done.unlink()
-    ckpt_dir = WORK / f"ck_{LOSS_ARM}_{seed}"
-    fp32 = WORK / f"fp32_{LOSS_ARM}_{seed}"
+    ckpt_dir = WORK / f"ck_{RUN_TAG}_{seed}"
+    fp32 = WORK / f"fp32_{RUN_TAG}_{seed}"
     # RESUME GAP FIX: ONNX export, INT8 quantisation and two evaluations run AFTER
     # training. If the session dies in there, fp32 already exists and retraining the
     # whole seed would waste an hour.
@@ -487,7 +508,7 @@ for seed in SEEDS:
     # dev_ arrays are what E5 calibrates router thresholds on (hard rule 1). They ride in
     # the same npz as sel_ and test_ so one file carries every split E5 needs and cannot
     # be paired with logits from a different seed or arm.
-    np.savez_compressed(WORK / f"logits_{LOSS_ARM}_seed{seed}.npz",
+    np.savez_compressed(WORK / f"logits_{RUN_TAG}_seed{seed}.npz",
                         sel_logits=sel.predictions, sel_labels=sel.label_ids,
                         test_logits=tst.predictions, test_labels=tst.label_ids,
                         test_3000_indices=np.array(TEST_IDX),
@@ -497,7 +518,7 @@ for seed in SEEDS:
     del tr, model; gc.collect(); torch.cuda.empty_cache()
 
     # --- ONNX + INT8. INT8 is the DEPLOYED precision; E1 attaches to it, E3 is the delta.
-    onnx_dir, int8_dir = WORK / f"onnx_{LOSS_ARM}_{seed}", WORK / f"int8_{LOSS_ARM}_{seed}"
+    onnx_dir, int8_dir = WORK / f"onnx_{RUN_TAG}_{seed}", WORK / f"int8_{RUN_TAG}_{seed}"
     from optimum.onnxruntime import ORTModelForSequenceClassification, ORTQuantizer
     from optimum.onnxruntime.configuration import AutoQuantizationConfig
     if not onnx_dir.exists():
@@ -550,14 +571,15 @@ for seed in SEEDS:
                                    [ds["validation"][i]["text"] for i in DEV_IDX], MAX_LENGTH)
     int8_test3000 = int8_logits.argmax(-1)
     shutil.rmtree(onnx_dir, ignore_errors=True)   # ~740MB, and now MEASURED, not assumed
-    np.savez_compressed(WORK / f"int8_logits_{LOSS_ARM}_seed{seed}.npz",
+    np.savez_compressed(WORK / f"int8_logits_{RUN_TAG}_seed{seed}.npz",
                         test_3000_logits=int8_logits, test_3000_indices=np.array(TEST_IDX),
                         onnx_fp32_test_3000_logits=onnx_fp32_logits,
                         dev_2000_logits=dev_int8_logits,
                         dev_2000_indices=np.array(DEV_IDX),
                         dev_absent_classes=np.array(DEV_ABSENT))
 
-    out = {"model": MODEL, "loss_arm": LOSS_ARM, "seed": seed, "max_length": MAX_LENGTH,
+    out = {"model": MODEL, "loss_arm": LOSS_ARM, "run_tag": RUN_TAG, "experiment": "E1b" if E1B else "E1",
+           "seed": seed, "max_length": MAX_LENGTH,
            "epochs": EPOCHS, "lr": LR, "selection_split": "train_holdout_3000",
            "test_manifest": "test_3000", "test_manifest_sha256": _tsha,
            "selection": metrics(sel),
