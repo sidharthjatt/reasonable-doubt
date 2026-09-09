@@ -32,6 +32,63 @@ FIELDS = ("throughput_rps", "p50_latency_ms", "p95_latency_ms",
           "marginal_soc_watts", "joules_per_request")
 
 
+def _two_way(by_artefact: dict[str, list[dict]], field: str) -> dict:
+    """Decompose into artefact + RUN-BLOCK + residual, on a balanced artefact x run grid.
+
+    WHY RUN ORDER IS A COVARIATE AND NOT NOISE. The replication loop interleaves
+    artefacts within each run block, so the block index is a time axis. Any drift over
+    the session — thermal, or another process arriving — lands inside each artefact's
+    across-run spread, i.e. inside the naive `within_artefact_sd_pooled`. That inflates
+    the denominator of `between_over_within` and makes the weight-independence check look
+    BETTER than the data support. The concern is real and the fix is to model the block.
+
+    What the correction actually does here is worth stating, because it is not what the
+    concern predicts: removing the block effect ALSO applies a degrees-of-freedom
+    correction (df = (a-1)(r-1) rather than dividing by r), and that dominates, so the
+    corrected ratio comes out lower rather than higher. The reported F(artefact) is the
+    test that does not depend on which of those two effects wins.
+    """
+    import statistics as st
+
+    arts = sorted(by_artefact)
+    runs = sorted({d.get("run_index") for v in by_artefact.values() for d in v})
+    if None in runs or len(arts) < 2 or len(runs) < 2:
+        return {"two_way": None}
+    cells = {}
+    for a in arts:
+        for d in by_artefact[a]:
+            if d.get(field) is not None:
+                cells.setdefault((a, d["run_index"]), []).append(d[field])
+    if len(cells) != len(arts) * len(runs) or any(len(v) != 1 for v in cells.values()):
+        return {"two_way": None, "two_way_note": "grid not balanced 1-per-cell"}
+
+    val = {k: v[0] for k, v in cells.items()}
+    grand = st.mean(val.values())
+    na, nr = len(arts), len(runs)
+    am = {a: st.mean([val[(a, r)] for r in runs]) for a in arts}
+    rm = {r: st.mean([val[(a, r)] for a in arts]) for r in runs}
+    ss_a = nr * sum((am[a] - grand) ** 2 for a in arts)
+    ss_r = na * sum((rm[r] - grand) ** 2 for r in runs)
+    ss_tot = sum((v - grand) ** 2 for v in val.values())
+    ss_res = ss_tot - ss_a - ss_r
+    df_res = (na - 1) * (nr - 1)
+    ms_a, ms_r, ms_res = ss_a / (na - 1), ss_r / (nr - 1), ss_res / df_res
+    return {"two_way": {
+        "run_block_share_of_variance": ss_r / ss_tot if ss_tot else None,
+        "artefact_share_of_variance": ss_a / ss_tot if ss_tot else None,
+        "residual_sd": ms_res ** 0.5,
+        "f_artefact": ms_a / ms_res if ms_res > 0 else None,
+        "f_run_block": ms_r / ms_res if ms_res > 0 else None,
+        "df_num": na - 1, "df_den": df_res,
+        "between_over_residual": (ss_a / (na - 1)) ** 0.5 / (ms_res ** 0.5) if ms_res > 0 else None,
+        "run_block_means": {str(r): rm[r] for r in runs},
+        "per_artefact_monotonic_in_run": {
+            Path(a).name: (all(val[(a, runs[i])] > val[(a, runs[i + 1])] for i in range(nr - 1))
+                           or all(val[(a, runs[i])] < val[(a, runs[i + 1])] for i in range(nr - 1)))
+            for a in arts},
+    }}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tier", default="tier0_encoder_onnx_int8")
@@ -116,6 +173,7 @@ def main() -> int:
                 and s["within_artefact_sd_pooled"] is not None):
             w = s["within_artefact_sd_pooled"]
             s["between_over_within"] = (s["between_artefact_sd"] / w) if w > 0 else None
+        s.update(_two_way(by_artefact, f))
         summary[f] = s
 
     print(f"\n{'field':22s} {'mean':>10s} {'sd(all)':>9s} {'between':>9s} {'within':>9s} {'b/w':>6s}")
@@ -128,6 +186,23 @@ def main() -> int:
               f"{(s['between_artefact_sd'] or float('nan')):9.4f} "
               f"{(s['within_artefact_sd_pooled'] or float('nan')):9.4f} "
               f"{(bw if bw is not None else float('nan')):6.2f}")
+
+    tw = summary.get("throughput_rps", {}).get("two_way")
+    if tw:
+        print(f"\nRUN-ORDER (covariate, not noise): block means "
+              + " ".join(f"{k}={v:.2f}" for k, v in tw["run_block_means"].items()))
+        # F is None when residual variance is exactly zero — perfectly reproducible
+        # measurements, a legitimate outcome that must not crash the report.
+        def _f(x): return "undefined (zero residual)" if x is None else f"{x:.2f}"
+        print(f"  run-block explains {tw['run_block_share_of_variance']:.1%} of variance; "
+              f"F(run)={_f(tw['f_run_block'])}")
+        mono = tw["per_artefact_monotonic_in_run"]
+        print(f"  monotonic in run order per artefact: {mono}")
+        if not all(mono.values()):
+            print("  -> NOT monotonic for every artefact, so a single session-wide "
+                  "thermal trend does not explain the block means on its own.")
+        print(f"  F(artefact)={_f(tw['f_artefact'])} on df=({tw['df_num']},{tw['df_den']}); "
+              f"between/residual = {_f(tw['between_over_residual'])}")
 
     bw = summary.get("throughput_rps", {}).get("between_over_within")
     if bw is not None:

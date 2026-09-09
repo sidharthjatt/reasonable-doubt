@@ -104,21 +104,34 @@ local_hardware:
   # Any INR-derived number in the report must be stated alongside the FX rate and its date.
   device_lifetime_years: 3
   duty_cycle: 0.25                 # fraction of wall-clock the box actually serves
-  # MEASURED 2026-09-07 on the Mac Mini, ONNX INT8, DeBERTa-v3-base architecture,
-  # max_length 512, batch size 1 (the fastest of 1/8/16/32 — see results/bench_*).
-  # NOTE: measured on an UNTRAINED checkpoint of identical architecture. Throughput is
-  # weight-independent (same ops, same shapes), so it transfers; re-verify on the
-  # trained INT8 artefact when it exists.
-  # 28.97 +/- 0.24 req/s over 4 runs (0.8% relative sd), after fixing the harness to
-  # load the tokenizer and ORT session ONCE. The earlier single-point 30.16 was within
-  # this spread; loading was already outside the timer, so throughput was never
-  # inflated by it.
-  assumed_lifetime_requests: 714999960   # = 30.23 * 3600*24*365 * 3y * 0.25 duty
-  measured_throughput_rps: 30.23
-  # sd is NULL, not 0.24. That figure was the spread of the 28.97 measurement and does
-  # not describe this one; pairing an old spread with a new mean would misreport the
-  # precision of a number the E6 curve depends on.
-  measured_throughput_rps_sd: null
+  # MEASURED 2026-09-09 on the THREE TRAINED INT8 artefacts, 3 runs each (9 runs),
+  # commit 8c5a5ed4, clean tree. Mac Mini, ONNX INT8, DeBERTa-v3-base, max_length 512,
+  # batch size 1 (fastest of 1/8/16/32). Rule: PREREGISTRATION 3aj — mean over ALL runs,
+  # no outlier excluded. Aggregate: results/bench_tier0_encoder_onnx_int8_aggregate.json
+  #
+  # This REPLACES the untrained-probe figure of 30.23 and discharges 3aa's standing
+  # caveat. The probe over-estimated by 6.6% and sits 1.58 sd from the trained mean —
+  # inside noise, but less comfortably than the earlier n=3 comparison suggested (that
+  # comparison said 0.75 sd and was computed on a contaminated set; see 3e instance 8).
+  #
+  # RUN-ORDER DRIFT IS PRESENT AND IS A STATED LIMITATION, not a correction applied here.
+  # Run-block means declined 29.06 -> 28.23 -> 27.79 over ~10 minutes (4.4%), and the
+  # block term is 22.3% of total variance. It is NOT a clean thermal story: only 2 of 3
+  # artefacts are monotonic in run order, and F(run) = 0.87 on df=(2,4) does not reach
+  # significance. The mean over all 9 runs is used because the true operating regime is
+  # unmeasured — at duty_cycle 0.25 the device has idle time to cool, so a duty-cycled
+  # box plausibly runs at or above this rate, while sustained serving plausibly runs
+  # below it. Picking run 1 or run 3 would be selecting an operating regime we have not
+  # measured. A 30+ minute plateau run is what would settle it; until then this number
+  # is the mean over a 10-minute window that had not demonstrably plateaued.
+  assumed_lifetime_requests: 670805531   # = 28.3615 * 3600*24*365 * 3y * 0.25 duty
+  measured_throughput_rps: 28.3615
+  # sd is now MEASURED and no longer null. 1.1839 is the spread of THESE 9 runs (4.2%
+  # relative). The previous null was correct at the time: the only available figure was
+  # the spread of a different measurement, and pairing an old spread with a new mean
+  # would have misreported the precision of a number the E6 curve depends on.
+  measured_throughput_rps_sd: 1.1839
+  measured_throughput_rps_n_runs: 9
   # Energy term — MEASURED 2026-09-08, no longer null. See energy_note below for the
   # SoC-vs-wall limitation, which is the reason the fields are named _soc_watts.
   #
@@ -126,17 +139,20 @@ local_hardware:
   # interchangeable. A single `power_draw_soc_watts` field invited exactly that confusion
   # once already — see PREREGISTRATION 3ab, where load power was divided by throughput
   # and the resulting mismatch was recorded as a defect in a measurement that was sound.
-  power_draw_soc_watts_idle: 0.32        # baseline, incurred whether or not Tier 0 serves
-  power_draw_soc_watts_load: 18.20       # total under sustained load
-  power_draw_soc_watts_marginal: 17.88   # load - idle; THIS is the one E6 uses
+  power_draw_soc_watts_idle: 0.7562      # sd 0.4441; incurred whether or not Tier 0 serves
+  power_draw_soc_watts_load: 18.5108     # sd 0.2921; total under sustained load
+  power_draw_soc_watts_marginal: 17.7546 # sd 0.5449; load - idle; THIS is the one E6 uses
   power_draw_wall_watts: null            # not obtainable from powermetrics; needs a meter
-  # DERIVED FROM THE MARGINAL FIGURE: 17.88 W / 30.23 req/s = 0.59147 J/req.
+  # DERIVED FROM THE MARGINAL FIGURE: 17.7546 W / 28.3615 req/s = 0.62601 J/req. The
+  # value below is 0.6269, the mean of the nine per-run quotients; mean-of-ratios and
+  # ratio-of-means differ by 0.0009, inside the identity test's tolerance.
   # Marginal, not load, is the correct baseline for E6: idle draw is incurred whether or
   # not Tier 0 serves a single clause, so charging it to per-clause cost would
   # double-count baseline machine cost that the capital term already carries.
   # The identity is asserted in tests/test_local_hardware.py, so this comment cannot
   # drift away from the numbers it describes.
-  energy_joules_per_request: 0.591
+  energy_joules_per_request: 0.6269
+  energy_joules_per_request_sd: 0.0311
   # TARIFF — ASSUMED, NOT MEASURED. Split so the basis cannot be misread, for the same
   # reason the power field was split (PREREGISTRATION 3ab): a value whose basis is not
   # stated invites a confident wrong reading. This one is worse than ambiguous — it is a
@@ -154,51 +170,93 @@ local_hardware:
   electricity_cost_usd_per_kwh_assumed: 0.0847
   per_tier_throughput:
     tier0_encoder_onnx_int8:
-      requests_per_second: 30.23
-      requests_per_second_sd: null    # see measured_throughput_rps_sd above
-      p50_latency_ms: 25.3
-      p95_latency_ms: 98.1
+      requests_per_second: 28.3615
+      requests_per_second_sd: 1.1839
+      p50_latency_ms: 25.3969
+      p50_latency_ms_sd: 0.8824
+      p95_latency_ms: 99.7950
+      p95_latency_ms_sd: 3.5058      # 3.5% relative; p95 is the noisiest field measured
+      n_runs: 9
       batch_size: 1
       max_length: 512
       # batch-size sweep (throughput req/s): bs1 30.16 | bs8 10.96 | bs16 9.38 | bs32 8.13
       # max_length 256 at bs8: 17.03 rps, p50 63.8ms  (E7 latency input)
-      measured_on: "untrained checkpoint, identical architecture; weight-independent"
+      # NOTE: that sweep is still from the untrained probe. Only the bs1 row above has
+      # been re-measured on the trained artefacts; E7 should re-measure its own row.
+      measured_on: "3 trained INT8 artefacts x 3 runs, commit 8c5a5ed4, clean tree"
+      # WEIGHT-INDEPENDENCE: MEASURED, not argued (3aa discharged). Within-artefact
+      # variance exceeds between-artefact variance on every field: b/w = 0.74 throughput,
+      # 0.87 p50, 0.72 p95, 0.51 watts, 0.37 J/req. F(artefact) = 1.04 on df=(2,4)
+      # against a 95% critical value of 6.94 — artefact explains nothing beyond noise.
+      # Per-artefact means: ce_1 28.50, ce_2 27.60, ce_3 28.98.
+      weight_independence_f_artefact: 1.04
+      weight_independence_f_crit_95: 6.94
+      run_order_block_share_of_variance: 0.223
+      run_order_block_means: [29.06, 28.23, 27.79]   # see the drift limitation above
       # SoC PACKAGE power only (powermetrics "Combined Power" = CPU+GPU+ANE).
       # EXCLUDES RAM, SSD, PSU losses, networking, fans — it is NOT wall power.
       # First measurement (idle 0.2 / load 16.0 W) came from the pre-fix harness whose
       # load loop re-initialised a 245 MB ORT session each pass, so it measured model
       # loading as well as inference. Re-measure with the fixed harness.
-      power_draw_soc_watts_idle: 0.32
-      power_draw_soc_watts_load: 18.20      # MEASURED 2026-09-08 with the fixed harness
-      power_draw_soc_watts_marginal: 17.88  # load - idle; E6 uses this one
+      power_draw_soc_watts_idle: 0.7562        # sd 0.4441 over 9 runs
+      power_draw_soc_watts_load: 18.5108       # sd 0.2921
+      power_draw_soc_watts_marginal: 17.7546   # sd 0.5449; load - idle; E6 uses this one
       power_draw_wall_watts: null     # NOT obtainable from powermetrics; needs a meter
-      energy_joules_per_request: 0.591      # = marginal / requests_per_second
+      energy_joules_per_request: 0.6269        # sd 0.0311; = marginal / requests_per_second
+      energy_joules_per_request_sd: 0.0311
       energy_note: >
-        MEASURED, not assumed. 0.591 J/request is the MARGINAL figure
-        (17.88 W / 30.23 req/s = 0.59147), which is the right baseline for E6 because
+        MEASURED, not assumed. 0.6269 J/request is the MARGINAL figure
+        (17.7546 W / 28.3615 req/s), which is the right baseline for E6 because
         idle draw is incurred regardless of whether Tier 0 serves anything.
-        At $0.0847/kWh that is $1.390e-5 per 1000
-        clauses, which is 1/32,240 of Sonnet 5's $0.4483 per 1000. Including it moves
-        E6's greenfield crossover from V* = 1,413,925 to 1,413,969 — UP by 44 clauses,
+        At $0.0847/kWh that is $1.475e-5 per 1000
+        clauses, which is 1/30,395 of Sonnet 5's $0.4483 per 1000. Including it moves
+        E6's greenfield crossover from V* = 1,413,925 to 1,413,971 — UP by 46 clauses,
         because a positive per-clause cost makes local break even LATER, not earlier.
         The conclusion is unchanged; what changed is that 1,413,925 was an optimistic
-        LOWER bound and 1,413,969 is not.
+        LOWER bound and 1,413,971 is not.
         SoC PACKAGE ONLY. Wall power is unmeasured and cannot be obtained from
-        powermetrics. A 3x wall correction gives V* = 1,414,056, i.e. +0.009% against
-        the no-energy figure; even 10x gives +0.031%. The SoC-only limitation therefore
+        powermetrics. A 3x wall correction gives V* = 1,414,064, i.e. +0.0099% against
+        the no-energy figure; even 10x gives +0.033%. The SoC-only limitation therefore
         cannot change E6's answer, which is why the measurement is usable despite it.
-        Measured on the UNTRAINED architecture probe — re-verify on the trained INT8
-        artefact when it exists.
+        RE-VERIFIED 2026-09-09 on the three TRAINED INT8 artefacts, 9 runs (3aa
+        discharged). The untrained probe reported 0.591 J/req against the trained mean
+        of 0.6269 +/- 0.0311 — a 0.036 J/req difference, 1.2 sd. Throughput
+        weight-independence is now a MEASUREMENT rather than an argument: within-artefact
+        variance exceeds between-artefact variance on every field, and F(artefact) = 1.04
+        against F_crit(2,4) = 6.94. The probe-based E6 numbers are therefore
+        RETROSPECTIVELY VALIDATED rather than merely assumed — with the correction that
+        the probe over-estimated throughput by 6.6% (1.58 sd), so every probe-derived
+        figure was optimistic by that margin.
     tier1_qwen2_5_1_5b_instruct:
+      # UNMEASURED — a real gap, not a decision. Filling it needs the trained adapter
+      # served locally (mlx_lm.server or llama.cpp GGUF) and benchmarked the way Tier 0
+      # is. No GPU required; src/serve/bench_local.py is ONNX-only and needs a generation
+      # backend first. Blocks the LATENCY axis of E6, not the cost axis.
+      status: unmeasured
       requests_per_second: null
       p50_latency_ms: null
       p95_latency_ms: null
       batch_size: null
     tier1_llama_3_2_3b_instruct:
+      # NOT ATTEMPTED — this model was never trained. The null is a decision, not a gap:
+      # nothing is pending, and it must not be read as work outstanding.
+      status: not_attempted
       requests_per_second: null
       p50_latency_ms: null
       p95_latency_ms: null
       batch_size: null
+    tier2_claude_api:
+      # NOT APPLICABLE — deliberately null, and this is a decision rather than an
+      # omission. Claude's "throughput" is a property of the Batch API queue, not of
+      # hardware we own. stage1_results.json has real end-to-end batch latency, but a
+      # batch returning in 40 minutes says nothing about per-request service rate, and
+      # every other entry here is an rps in the amortised-hardware sense. A number in
+      # this field would be multiplied against a device cost that does not exist.
+      # Tier 2's cost axis is already fully measured in DOLLARS, from the usage blocks
+      # in results/spend_ledger.jsonl, which is the quantity E6 actually needs.
+      status: not_applicable
+      requests_per_second: null
+      reason: "queue latency, not hardware throughput; cost axis is measured in USD"
 
 # Budget accounting. Enforced by every spending script; see hard rules 8 and 9.
 budget:

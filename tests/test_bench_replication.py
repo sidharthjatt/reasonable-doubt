@@ -133,3 +133,53 @@ def test_aggregate_accepts_one_consistent_version(tmp_path):
     assert r.returncode == 0, r.stderr
     out = json.loads((d / "bench_tier0_encoder_onnx_int8_aggregate.json").read_text())
     assert out["code_commit"] == "c" * 40 and out["code_dirty"] is False
+
+
+def test_two_way_recovers_a_planted_run_block_effect(tmp_path):
+    """Negative control for the covariate: a run-order drift that IS present must be
+    recovered, so a low F(run) on real data means 'no drift' not 'no test'."""
+    (tmp_path / "results").mkdir()
+    d = tmp_path / "results"
+    drift = {1: 0.0, 2: -2.0, 3: -4.0}          # large, unambiguous
+    jitter = {"int8_ce_1": 0.05, "int8_ce_2": -0.03, "int8_ce_3": 0.01}
+    for a in ("int8_ce_1", "int8_ce_2", "int8_ce_3"):
+        for r in (1, 2, 3):
+            _bench(d, a, r, 29.0 + drift[r] + jitter[a] * r)
+    r = _run("--results-dir", str(d), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((d / "bench_tier0_encoder_onnx_int8_aggregate.json").read_text())
+    tw = out["fields"]["throughput_rps"]["two_way"]
+    assert tw["run_block_share_of_variance"] > 0.95
+    assert all(tw["per_artefact_monotonic_in_run"].values())
+    assert "run-block explains" in r.stdout
+
+
+def test_two_way_separates_artefact_effect_from_run_drift(tmp_path):
+    """Both effects present at once: the decomposition must attribute each correctly."""
+    (tmp_path / "results").mkdir()
+    d = tmp_path / "results"
+    drift = {1: 0.0, 2: -1.0, 3: -2.0}
+    base = {"int8_ce_1": 30.0, "int8_ce_2": 24.0, "int8_ce_3": 30.0}   # ce_2 truly slower
+    jitter = {"int8_ce_1": 0.05, "int8_ce_2": -0.03, "int8_ce_3": 0.01}
+    for a, b in base.items():
+        for r in (1, 2, 3):
+            _bench(d, a, r, b + drift[r] + jitter[a] * r)
+    r = _run("--results-dir", str(d), cwd=tmp_path)
+    out = json.loads((d / "bench_tier0_encoder_onnx_int8_aggregate.json").read_text())
+    tw = out["fields"]["throughput_rps"]["two_way"]
+    assert tw["artefact_share_of_variance"] > tw["run_block_share_of_variance"]
+    assert tw["f_artefact"] > 100          # a real artefact effect, cleanly separated
+    assert "weight-independence claim is contradicted" in r.stdout
+
+
+def test_two_way_is_none_when_grid_is_unbalanced(tmp_path):
+    """Refuse to compute a two-way split on a grid that is not 1-per-cell, rather than
+    returning a number derived from an unbalanced design."""
+    (tmp_path / "results").mkdir()
+    d = tmp_path / "results"
+    _bench(d, "int8_ce_1", 1, 29.0); _bench(d, "int8_ce_1", 2, 29.5)
+    _bench(d, "int8_ce_2", 1, 29.2)
+    r = _run("--results-dir", str(d), cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    out = json.loads((d / "bench_tier0_encoder_onnx_int8_aggregate.json").read_text())
+    assert out["fields"]["throughput_rps"]["two_way"] is None

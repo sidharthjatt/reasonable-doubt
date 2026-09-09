@@ -157,7 +157,10 @@ def test_tariff_sensitivity_matches_the_published_table(hw: dict) -> None:
     """Pin PREREGISTRATION 3ac's numbers so the doc cannot drift from the code."""
     ref = breakeven(SONNET_USD_PER_1K, hw=hw, allow_assumed_tariff=True,
                     tariff_multiplier=0.0).v_star          # energy-free reference
-    expected = {0.5: 1413947, 1.0: 1413969, 2.0: 1414012, 10.0: 1414363}
+    # UPDATED 2026-09-09 with the trained-artefact energy figure (0.6269 J/req, was
+    # 0.591). The shifts are 1-27 clauses on a V* of ~1.41M; 3ac's conclusion that the
+    # tariff is not load-bearing is unaffected, and the test still asserts that.
+    expected = {0.5: 1413948, 1.0: 1413971, 2.0: 1414018, 10.0: 1414390}
     for mult, v in expected.items():
         got = breakeven(SONNET_USD_PER_1K, hw=hw, allow_assumed_tariff=True,
                         tariff_multiplier=mult).v_star

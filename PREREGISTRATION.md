@@ -94,7 +94,7 @@ amortisation window would have introduced:
 
 | case | assumption | local cost/1k | result |
 |------|-----------|---------------|--------|
-| **Greenfield** | hardware bought for this workload; capital attributable | $633,862.43 / V + $1.390e-5 per 1k | **V\* = 1,413,969 clauses** for Tier 0 alone (energy-inclusive, §3aa), higher for the cascade by 1/(1 − escalation_rate) |
+| **Greenfield** | hardware bought for this workload; capital attributable | $633,862.43 / V + $1.475e-5 per 1k | **V\* = 1,413,971 clauses** for Tier 0 alone (energy-inclusive, §3aa, trained artefacts), higher for the cascade by 1/(1 − escalation_rate) |
 | **Sunk capital** | the Mac Mini already exists (it does) | ~$0.000013 per 1k | **local wins from the first clause** |
 
 **Both are correct under their own assumption, and the honest report gives both.** The
@@ -1048,6 +1048,15 @@ picking an estimator to solve a measurement problem.
   *(Offered by Sid and withdrawn by him on this reasoning; recorded because the withdrawn
   option is the instructive one.)*
 
+  **DEMONSTRATED, not argued (2026-09-09).** Under replication artefact 2's mean is 27.60
+  against 28.50 / 28.98, and `F(artefact) = 1.04` on df=(2,4) — the 27.19 that started
+  this was a run, not a graph. Had seed 2 been re-run alone it would almost certainly
+  have returned ~27.6-28.5, and **that number would have been uninterpretable**: it could
+  not distinguish "the contention is gone" from "the second draw landed higher", because
+  a single artefact measured twice still has no estimate of run-to-run variance to
+  compare against. The replication supplies exactly that estimate, which is the whole
+  difference between the two designs.
+
 **REGISTERED RULE — replication, not selection.** Each of the three artefacts is
 benchmarked **3 times (9 runs)**, and:
 
@@ -1375,6 +1384,16 @@ billing path, because nothing in that path reads `local_hardware`.
 **Sensitivity, in the same form as §3aa's wall-power table.** Reference is V\* with the
 energy term excluded entirely (1,413,925):
 
+> **SUPERSEDED 2026-09-09, conclusion unchanged.** The table below was computed with the
+> UNTRAINED probe's energy figure (0.591 J/req). The trained artefacts measure
+> **0.6269 ± 0.0311 J/req** (§3aa discharge), so the energy term is ~6% larger and every
+> V\* shifts by 1–27 clauses on a base of ~1.41M: x0.5 → 1,413,948, **x1 → 1,413,971**,
+> x2 → 1,414,018, x10 → **1,414,390 (+0.0329%)**. The table is left as the historical
+> record rather than rewritten; the live figures are in `configs/costs.yaml` and are
+> pinned by `tests/test_local_hardware.py`. **§3ac's conclusion — that the assumed tariff
+> is not load-bearing — is unaffected**, and is if anything better supported: a 10x
+> tariff still moves V\* by 0.033%, far inside the 0.05% threshold §3ac set.
+
 | tariff | USD/kWh | energy $/1k | V\* | vs no-energy |
 |---|---|---|---|---|
 | 0.5x | 0.0423 | $6.952e-6 | 1,413,947 | +0.0016% |
@@ -1526,12 +1545,66 @@ inconsistency between the power, throughput and energy figures. **That flag was 
 has been removed** — it compared LOAD power against a MARGINAL-power derivation. The
 three numbers agree exactly. See §3ab.)*
 
-**Carried forward, unchanged and still binding:** every one of these numbers was measured
-on the **UNTRAINED architecture probe**, not the trained Tier 0 artefact. Throughput is
-weight-independent — identical ops on identical shapes — so it transfers; power and
-energy follow throughput for the same reason. **This must still be re-verified on the
-real INT8 artefact when it exists**, and E1's accept rule attaches to that artefact, not
-to this probe.
+**DISCHARGED 2026-09-09 — weight-independence is now a MEASUREMENT, not an argument.**
+This paragraph previously read: *"every one of these numbers was measured on the UNTRAINED
+architecture probe... Throughput is weight-independent — identical ops on identical shapes
+— so it transfers... This must still be re-verified on the real INT8 artefact when it
+exists."* That was an argument from architecture. It has now been tested.
+
+Nine runs — three trained INT8 artefacts x 3 runs, commit `8c5a5ed4`, clean tree, under
+§3aj's registered rule (mean over all runs, no outlier excluded):
+
+| field | mean | sd | between/within |
+|---|---|---|---|
+| throughput_rps | **28.3615** | 1.1839 | **0.74** |
+| p50_latency_ms | 25.3969 | 0.8824 | 0.87 |
+| p95_latency_ms | 99.7950 | 3.5058 | 0.72 |
+| marginal_soc_watts | 17.7546 | 0.5449 | 0.51 |
+| joules_per_request | 0.6269 | 0.0311 | 0.37 |
+
+**It passes the strong way: within-artefact variance exceeds between-artefact variance on
+every field.** The formal test is `F(artefact) = 1.04` on df=(2,4) against a 95% critical
+value of **6.94** — the artefact explains nothing beyond run-to-run noise. Per-artefact
+means 28.50 / 27.60 / 28.98.
+
+**The probe is retrospectively validated, with a correction to how comfortably.** It
+reported 30.23 rps against the trained mean of 28.3615 — **1.58 sd, over-estimating by
+6.6%**. Energy: 0.591 vs 0.6269 ± 0.0311 J/req, 1.2 sd. So every probe-derived E6 figure
+was optimistic by ~6.6% on throughput, and `assumed_lifetime_requests` falls 6.18% from
+714,999,960 to 670,805,531. **The conclusions are unchanged** — V* is capital-dominated —
+but "validated" here means "within noise", not "correct".
+
+> **A retracted figure.** An earlier comparison put the probe at **0.75 sd** from the
+> trained mean. That was computed on the contaminated n=3 set of §3e instance 8, one of
+> whose values (29.63 rps) has no artefact on disk. **0.75 sd is withdrawn and must not
+> be carried anywhere; 1.58 sd is the figure.** The direction of the error matters: the
+> retracted number made the probe look more accurate than it is.
+
+**The seed-2 "outlier" was a run, not a graph — and this is now demonstrated.** The
+single-measurement set showed 27.19 rps for artefact 2 against 29.63 / 30.24. Under
+replication its mean is 27.60 against 28.50 / 28.98, and `F(artefact) = 1.04` says that
+spread is noise. See §3aj: re-running seed 2 alone would have produced a number that
+could not be interpreted, because at n=1 per artefact "slow graph" and "slow run" are not
+separable.
+
+**Run-order drift is present and is carried as a stated limitation.** Block means declined
+29.06 → 28.23 → 27.79 over ~10 minutes (4.4%), 22.3% of total variance. It is not a clean
+thermal story: **only 2 of 3 artefacts are monotonic in run order**, and `F(run) = 0.87`
+does not reach significance. Because the loop interleaved artefacts, drift lands inside
+the *within* term, which would flatter the weight-independence ratio — the concern is
+real, and modelling the block as a covariate moves the ratio to **0.59**, i.e. *more*
+favourable, because the degrees-of-freedom correction dominates. `F(artefact)` is reported
+because it does not depend on which of those effects wins.
+
+**What is still not known:** whether 28.3615 describes sustained serving. The measured
+window is 10 minutes and had not demonstrably plateaued. At `duty_cycle` 0.25 the device
+has idle time to cool, so a duty-cycled box plausibly runs at or above this rate while
+sustained serving plausibly runs below it. The mean over all 9 runs is used because the
+true operating regime is unmeasured; selecting run 1 or run 3 would be choosing a regime
+we have not measured. **A 30+ minute plateau run is what would settle it**, and until then
+`assumed_lifetime_requests` inherits this uncertainty.
+
+E1's accept rule attaches to the trained artefact, not to the probe — unchanged.
 
 **Still blocking the full E6 curve:** Tier 1 and Tier 2 `per_tier_throughput` entries
 remain null, so only **Tier 0's** curve is computable. The *cascade* curve — which is
