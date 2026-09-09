@@ -142,15 +142,30 @@ def main() -> int:
     ap.add_argument("--skip-power", action="store_true",
                     help="EXPLICIT opt-out. Result is marked incomplete and cannot "
                          "be used for E6.")
-    # PER-ARTEFACT FILENAME. A fixed default is the defect that cost E5 two seeds:
-    # benchmarking three trained INT8 artefacts in sequence would overwrite one file
-    # twice and leave only the last, with nothing failing. The default now carries the
-    # artefact's directory name, so seeds cannot collide.
+    # PER-RUN FILENAME, AND REFUSAL TO OVERWRITE. Two rounds of the same defect got
+    # this far: a fixed path (cost E5 two seeds), then a per-ARTEFACT path, which still
+    # collides the moment the same artefact is measured more than once -- which is
+    # exactly what the 9-run replication does. Naming is now per (artefact, run), and
+    # the write REFUSES an existing file rather than replacing it.
+    #
+    # The refusal is the part that generalises. A naming scheme only defends against
+    # the collisions its author thought of; refusing to overwrite defends against the
+    # ones they did not, and turns a silent discard into a stop.
+    ap.add_argument("--run", type=int, default=1,
+                    help="replicate index; part of the default filename")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite an existing result file (default: refuse)")
     ap.add_argument("--out", type=Path, default=None,
-                    help="default: results/bench_<tier>_<artefact dir name>.json")
+                    help="default: results/bench_<tier>_<artefact>_run<run>.json")
     args = ap.parse_args()
     if args.out is None:
-        args.out = Path(f"results/bench_{args.tier}_{Path(args.onnx_dir).name}.json")
+        args.out = Path(
+            f"results/bench_{args.tier}_{Path(args.onnx_dir).name}_run{args.run}.json")
+    if args.out.exists() and not args.force:
+        raise SystemExit(
+            f"refusing to overwrite {args.out}. A benchmark result already exists for "
+            f"this (artefact, run) pair. Use --run with a fresh index, or --force if "
+            f"you genuinely mean to discard the earlier measurement.")
 
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))

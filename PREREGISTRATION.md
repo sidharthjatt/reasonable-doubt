@@ -994,6 +994,98 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3aj. Tier 0 throughput replication — the rule, registered BEFORE the runs (2026-09-09)
+
+Three trained INT8 artefacts benchmarked once each gave 29.63 / **27.19** / 30.24 rps,
+with seed 2 also showing p95 118.7 ms against 96.2 / 94.8. The graphs are
+architecturally identical, so this cannot be a property of the model.
+
+**Three estimators were offered and all three are rejected, for one reason.** At n=1 per
+artefact, "this graph is slower" and "this *run* was slower" are not separable — and only
+the second is possible. Choosing between mean, median, and re-running the low sample is
+picking an estimator to solve a measurement problem.
+
+- **Mean of 3** carries a contaminated sample into the headline and reports an sd
+  inflated by contamination rather than by the device.
+- **Median of 3** discards information, has no estimable uncertainty at n=3, and drops
+  the outlier without ever stating that it did.
+- **Re-running seed 2 alone is outlier-hunting**, even though the outlier is probably
+  spurious. Re-running only the sample one dislikes and keeping the preferred result
+  cannot distinguish "contention fixed" from "drew again from a wide distribution".
+  *(Offered by Sid and withdrawn by him on this reasoning; recorded because the withdrawn
+  option is the instructive one.)*
+
+**REGISTERED RULE — replication, not selection.** Each of the three artefacts is
+benchmarked **3 times (9 runs)**, and:
+
+1. **E6 uses the mean over ALL 9 runs, with the sd over all 9.** No run is excluded for
+   being an outlier.
+2. **Exclusion requires an identifiable, stated cause** (a logged thermal throttle, a
+   known contending process), is recorded with that reason, and **applies symmetrically
+   to fast and slow runs**. `scripts/bench_aggregate.py` enforces this: `--exclude`
+   without `--exclude-reason` is refused.
+3. **The between-artefact / within-artefact variance split is reported every time.** It
+   is a TEST, not a summary: §3aa's weight-independence claim predicts the between term
+   is indistinguishable from run-to-run noise. A ratio > 2 contradicts a claim E6's
+   provenance now rests on, and `costs.yaml` is not updated until it is explained.
+4. `costs.yaml` is updated in **one edit** after the 9 runs, including the recomputed
+   `assumed_lifetime_requests`, so no derived field lags its input.
+
+**Scale check, stated in advance so the rule is not mistaken for a claim that this
+matters.** Across every candidate estimator `assumed_lifetime_requests` moves 1–4%, and
+V* is capital-dominated (§3aa: a 5× throughput loss moves it 0.012%). **No E6 conclusion
+turns on this choice.** The replication is run because the provenance should be clean,
+not because the frontier is at risk.
+
+### 3ai. E5 RESULT — rank instability at BOTH precisions is the finding (2026-09-09)
+
+**Lead with this, because the tempting summary is the wrong one.** The four signals are
+not merely close; **their ordering is not reproducible across seeds**, and the single
+piece of evidence that could have argued for abandoning the registered signal existed
+only at the precision that is not deployed.
+
+| signal | INT8 (deployed) | ranks | FP32 | ranks |
+|---|---|---|---|---|
+| max_softmax | 0.8636 ± 0.0048 | **[1, 2, 1]** | 0.8646 ± 0.0033 | **[1, 1, 1]** |
+| neg_entropy | 0.8621 ± 0.0068 | [3, 1, 2] | 0.8624 ± 0.0041 | [3, 3, 2] |
+| margin | 0.8602 ± 0.0042 | [2, 3, 3] | 0.8622 ± 0.0035 | [2, 2, 4] |
+| trained_difficulty | 0.8564 ± 0.0027 | [4, 4, 4] | 0.8597 ± 0.0023 | [4, 4, 3] |
+
+**On FP32, `max_softmax` held rank 1 on all three seeds — the only basis on which a
+switch away from `margin` could have been argued. On the deployed INT8 artefact that
+disappears: `[1, 2, 1]`, and NO signal holds rank 1 on every seed.** Had E5 been reported
+on FP32 alone, a post-hoc case for `max_softmax` would have looked considerably stronger
+than the evidence supports.
+
+**The registered clause fires identically on both precisions:**
+
+> Spread < 0.05 ⇒ signal choice does not matter; report that and use margin for its
+> temperature-invariance property alone.
+
+Spread of means: **0.0072 (INT8)**, 0.0050 (FP32) — both far below 0.05. Best AUROC
+≥ 0.75 is met at both. So the clause's *premise* is confirmed twice, and its instruction
+is unchanged.
+
+**Decision-irrelevance, measured on the decision variable rather than on AUROC.** The
+largest difference in retained Tier 0 accuracy between any two signals, at any escalation
+rate from 5% to 50%, is **0.0035** — inside seed noise and invisible on the frontier.
+
+**Reported, and labelled as such:** `max_softmax` is *reliably* higher than `margin` on
+FP32 (paired +0.00227 / +0.00211 / +0.00295, sign-consistent 3/3) and *negligibly* higher
+— 4.9% of the spread the rule requires before calling it a finding. Both are true. It is
+recorded as a post-hoc descriptive observation, **not** a selection.
+
+**`trained_difficulty` is stably last ([4,4,4] on INT8), and the cause is identified.**
+Cross-fitting is correct — `StandardScaler` is fit inside each fold, so there is no leak.
+The diagnostic is that its **in-sample** AUROC is *below* `max_softmax` on 2 of 3 seeds,
+even though `max_softmax` is one of its own input features and coefficients (1,0,0,0,0,0)
+would reproduce it exactly. That is not overfitting: `LogisticRegression` maximises
+log-likelihood while E5 scores **AUROC**, so nothing forces a likelihood-optimal
+combination to out-rank its best input. The supportable claim is therefore narrower than
+"a learned combination does not help": **a log-loss-fitted linear combination of these six
+features does not out-rank max-softmax.** A rank-based objective is a new experiment, not
+a fix.
+
 ### 3ah. E3 discriminator — registered BEFORE the arms are scored (2026-09-08)
 
 INT8 measured at chance on Kaggle (macro-F1 0.0037 / 0.0030 vs FP32 0.7636), while the
