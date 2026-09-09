@@ -388,9 +388,26 @@ live there.
 
 ## After Tier 0: re-score INT8 on the Mac
 
-Kaggle quantises for **arm64** but evaluates on its own **x86** CPU. INT8 kernels are
-ISA-specific and numerics can differ, so Kaggle's INT8 accuracy is measured on hardware
-that never serves the model. **E1's accept rule attaches to the number measured here.**
+> **CORRECTED 2026-09-08.** This section previously said "Kaggle quantises for **arm64**
+> but evaluates on its own **x86** CPU", framing the re-score as fixing an *ISA-targeting*
+> mismatch. **That rationale was never true.** `AutoQuantizationConfig.arm64`, `.avx512`
+> and `.avx512_vnni` are identical in every parameter — QInt8 weights, QUInt8
+> activations, `reduce_range=False`, `per_channel=True` — so the factory does not
+> produce an arm-specific graph and choosing `avx512` would have emitted the same bytes.
+> (`.avx2` does differ: QUInt8 weights.) See PREREGISTRATION §3e instance 6.
+>
+> **The conclusion survives the correction, for a different reason.** Quantised INT8
+> kernels are selected and executed per host, so the same graph can still produce
+> different numerics on different CPUs — which is a property of the *runtime*, not of
+> the export. This is not hypothetical here: Kaggle measured INT8 at macro-F1 **0.0037**
+> against FP32 **0.7636**, while the identical export reproduced locally on arm64 agreed
+> with FP32 at r=+0.9982. So the re-score below is still required, and is now the only
+> way to obtain an INT8 number for the hardware that actually serves.
+
+Kaggle quantises on an **x86** host and evaluates there; the model is served on **arm64**
+(Apple Silicon Mac Mini). The graph is the same, the kernel that runs it is not, so
+Kaggle's INT8 accuracy is measured on hardware that never serves the model. **E1's accept
+rule attaches to the number measured here.**
 
 Download `int8_ce_<seed>/` and `tier0_ce_seed<seed>.json`, then:
 

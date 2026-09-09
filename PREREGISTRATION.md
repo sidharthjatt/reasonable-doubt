@@ -563,6 +563,33 @@ treats an unrecognised state as a normal one, belongs here.
 
 | 5 | `str.replace(old, new)` in an editing script, with no check that `old` matched | a replace that finds nothing is normally harmless | it silently did nothing, so **C4's accept rule was left holding C2's text** — a preregistered rule for the wrong experiment, which would have been signed off as correct. Found only by reading the diff | Block 4, drafting this file |
 
+| 6 | `AutoQuantizationConfig.arm64(...)` chosen "because the artefact is deployed on the Apple Silicon Mac Mini" | naming a target ISA when quantising is ordinary practice, and the factory is literally named for the ISA | **the rationale was never true.** `.arm64`, `.avx512` and `.avx512_vnni` are identical in every parameter (QInt8 weights, QUInt8 activations, `reduce_range=False`, `per_channel=True`); the factory emits the same bytes. A choice that changed nothing was recorded, in a code comment and in RUNNING.md, as a deliberate deployment-driven decision — so the real question (which *kernel* executes the graph) was never asked | Block 5, diagnosing the INT8 collapse |
+
+**Instance 6 is a new sub-class: a false rationale attached to a harmless choice.**
+Instances 1–5 are all *actions* that silently did the wrong thing. Instance 6 is an
+action that did nothing at all, wearing an explanation that made it look load-bearing.
+That is worse than an unexplained choice, because a documented rationale is not
+re-examined: the comment answered "why arm64?" convincingly enough that nobody asked
+"does this flag do anything?" — and the answer, across all **15** dataclass fields,
+was no. Verified here rather than asserted: `arm64`, `avx512` and `avx512_vnni` compare
+equal on 15/15 fields; `avx2` differs on exactly one, `weights_dtype` (QUInt8 vs QInt8).
+
+**It also cost a diagnosis.** Believing the export was arm-specific made "we quantised
+for the wrong ISA" the natural first hypothesis for the INT8 collapse, and it is false.
+The graph is not arm-specific; what differs between Kaggle and the Mac Mini is the
+*runtime kernel*, and the environment that would have shown this — `onnxruntime`
+version, CPU model, `avx512_vnni` — was recorded nowhere. The false rationale did not
+merely fail to help; it pointed at the wrong layer, which is the same failure as
+instance 3 in §3p ("a check that validated the wrong layer").
+
+**Mitigation, and it is not "comment more carefully".** A rationale asserting that two
+options differ must be accompanied by the comparison that shows they differ — the same
+standard §3ab imposed after a confident comparison between quantities never put side by
+side, and the same one that retracted the `Indemnity`/`Indemnifications` collision claim
+in §3ag. Three retractions now share this shape: **a difference asserted without the two
+things ever being placed next to each other.** Where the comparison is cheap — and
+printing two dataclasses is cheap — it is now required before the rationale is written.
+
 Instance 5 is the same defect as instance 4 in a different costume, and was committed
 *while writing the section that describes the class*: an operation with a success path
 and no failure path. The mitigation is identical — `assert old in s` before every
@@ -867,6 +894,47 @@ reported, per-row `row_indices` are saved alongside predictions so the offline j
 cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
+
+### 3ah. E3 discriminator — registered BEFORE the arms are scored (2026-09-08)
+
+INT8 measured at chance on Kaggle (macro-F1 0.0037 / 0.0030 vs FP32 0.7636), while the
+identical export reproduced locally on arm64 agreed with FP32 at r=+0.9982, 8/8 argmax.
+Three candidates survived and none could be separated from the saved artefacts, because
+the FP32 ONNX graph was deleted immediately after quantising — leaving only torch-FP32
+and INT8, which differ in **two** steps at once (export *and* quantisation).
+
+**The discriminator is diagnostic. It does not rescue E3.** E3's falsification clause
+has already fired at a delta of −0.7599 against a 0.01 tolerance; the INT8 number is the
+headline and reporting 0.7636 as the system's accuracy stays prohibited. What the
+discriminator decides is *what re-verification means*, not whether E3 passed.
+
+Three arms, identical rows (`test_3000`), one code path (`onnx_predict`):
+
+| arms compared | isolates | outcome registered in advance |
+|---|---|---|
+| torch-FP32 vs ONNX-FP32 | the **export** | disagree ⇒ the export is the locus; the quantiser is exonerated |
+| ONNX-FP32 vs ONNX-INT8 | the **quantised kernel** | disagree ⇒ the kernel is the locus |
+| both agree | neither | the collapse is in the harness or the scoring join, not the artefact |
+
+Recorded with them: `onnxruntime` version, `get_available_providers()`, CPU model, and
+`avx512_vnni` / `avx512f` / `avx2` from `/proc/cpuinfo`. **The environment was recorded
+nowhere before now**, which is why the first failure was un-diagnosable from its own
+output. Unmeasurable fields are written as `null`, never `False` (hard rule 11).
+
+**Deployment is arm64, and that is the point.** The local arm64 reproduction of this
+exact export preserved the function. So if the locus is the quantised kernel on a
+non-VNNI x86 host, **the broken thing is the Kaggle measurement environment, not the
+serving path** — Tier 0 may deploy INT8 correctly on the Mac Mini while every INT8
+number this project has recorded is garbage. That is not a lesser finding: it means
+E1's INT8 headline, E3's delta and E5's INT8 dev logits must all be re-scored on arm64
+via `scripts/score_int8_local.py` before any of them is believed **in either direction**.
+A confirmatory arm64 re-score is required even if the discriminator points at x86.
+
+**Registered as the reaction, before the arms are run:** if ONNX-FP32 matches torch-FP32
+and only INT8 diverges, the finding is recorded as an *environment* defect and E3 is
+re-run on arm64. If ONNX-FP32 *also* diverges, the export is implicated and the arm64
+local result becomes the anomaly to explain, not the reference. Neither outcome permits
+E3 to be scored as met.
 
 ### 3af. The offline scorer is authoritative; the notebook's macro-F1 is a convenience number (2026-09-08)
 

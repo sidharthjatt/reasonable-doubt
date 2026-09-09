@@ -263,10 +263,15 @@ def metrics(p):
 
 def macro(y, pred): return f1_score(y, pred, average="macro", zero_division=0)
 
-def onnx_predict(int8_dir, texts, max_length, batch=1):
-    """Run the INT8 artefact. E1's accept rule attaches to THIS, not to FP32."""
+def onnx_predict(model_dir, texts, max_length, batch=1):
+    """Run an ONNX graph. E1's accept rule attaches to the INT8 one, not to FP32.
+
+    Takes any directory holding one *.onnx, because the E3 discriminator (below) needs
+    to run the FP32 ONNX graph through this SAME code path. If FP32-ONNX and INT8 are
+    scored by different code, a disagreement between them does not isolate the
+    quantised kernel — it could be the harness."""
     import onnxruntime as ort
-    sess = ort.InferenceSession(str(next(Path(int8_dir).glob("*.onnx"))),
+    sess = ort.InferenceSession(str(next(Path(model_dir).glob("*.onnx"))),
                                 providers=["CPUExecutionProvider"])
     names_in = {i.name for i in sess.get_inputs()}
     out = []
@@ -275,8 +280,41 @@ def onnx_predict(int8_dir, texts, max_length, batch=1):
                   padding=True, return_tensors="np")
         feed = {k: v.astype(np.int64) for k, v in enc.items() if k in names_in}
         out.append(sess.run(None, feed)[0])
-        if i % 500 == 0: print(f"    int8 {i}/{len(texts)}", flush=True)
+        if i % 500 == 0: print(f"    onnx {i}/{len(texts)}", flush=True)
     return np.concatenate(out, 0)
+
+def onnx_env():
+    """Capture the EXECUTION environment of the INT8 kernel, not just its config.
+
+    E3 measured INT8 at chance (macro-F1 0.0037 vs FP32 0.7636) while the identical
+    export, reproduced locally on arm64, agreed with FP32 to r=+0.9982. The surviving
+    candidate is that `reduce_range=False` saturates on a NON-VNNI x86 kernel — a
+    property of THIS HOST, which nothing in the run currently records. Unrecorded, the
+    next run reproduces the failure and is equally unable to explain it."""
+    import onnxruntime as ort
+    flags = ""
+    try:
+        flags = Path("/proc/cpuinfo").read_text()
+    except OSError as e:                       # not Linux; the field must say so, not lie
+        flags = f"__unreadable__ {e}"
+    if flags.startswith("__unreadable__"):
+        fset, model = None, None            # None = not measured. NEVER False.
+    else:
+        fline = next((l for l in flags.splitlines() if l.startswith("flags")), "")
+        fset = set(fline.split(":", 1)[-1].split())
+        model = next((l.split(":", 1)[1].strip() for l in flags.splitlines()
+                      if l.startswith("model name")), None)
+    def has(f):
+        return None if fset is None else (f in fset)
+    env = {"onnxruntime_version": ort.__version__,
+           "available_providers": ort.get_available_providers(),
+           "avx512_vnni": has("avx512_vnni"), "avx512f": has("avx512f"),
+           "avx2": has("avx2"), "cpuinfo_readable": fset is not None,
+           "model_name": model}
+    print(f"  ONNX ENV: ort {env['onnxruntime_version']} providers={env['available_providers']}")
+    print(f"  ONNX ENV: cpu={env['model_name']!r} avx512_vnni={env['avx512_vnni']} "
+          f"avx512f={env['avx512f']} avx2={env['avx2']}")
+    return env
 
 # ======================== LIVENESS INSTRUMENTATION ===========================
 # Ported from kaggle_tier1.py after commit 1 there ran 2h22m with no output and a hang
@@ -387,7 +425,17 @@ for seed in SEEDS:
     _t_seed = time.time()
     done = WORK / f"tier0_{LOSS_ARM}_seed{seed}.json"
     if done.exists():
-        print(f"seed {seed}: already complete, skipping"); continue
+        # A completion marker written BEFORE the E3 discriminator existed describes a
+        # seed that is trained but not diagnosed. Skipping on the marker alone would
+        # silently produce a run in which the discriminator never executes for the very
+        # seeds that motivated it — 3e's class exactly: normal-looking output, nothing
+        # measured. Re-enter instead; fp32 exists, so training is skipped and only the
+        # ~16k prediction rows and the export are redone.
+        if "e3_discriminator" in json.loads(done.read_text()):
+            print(f"seed {seed}: complete WITH discriminator, skipping"); continue
+        print(f"seed {seed}: complete but PRE-DISCRIMINATOR — re-entering to score the "
+              f"three E3 arms. Training is skipped (fp32 exists); nothing is retrained.")
+        done.unlink()
     ckpt_dir = WORK / f"ck_{LOSS_ARM}_{seed}"
     fp32 = WORK / f"fp32_{LOSS_ARM}_{seed}"
     # RESUME GAP FIX: ONNX export, INT8 quantisation and two evaluations run AFTER
@@ -450,23 +498,49 @@ for seed in SEEDS:
 
     # --- ONNX + INT8. INT8 is the DEPLOYED precision; E1 attaches to it, E3 is the delta.
     onnx_dir, int8_dir = WORK / f"onnx_{LOSS_ARM}_{seed}", WORK / f"int8_{LOSS_ARM}_{seed}"
-    if not int8_dir.exists():
-        print("  exporting ONNX + quantising INT8 (arm64 target)…")
-        from optimum.onnxruntime import ORTModelForSequenceClassification, ORTQuantizer
-        from optimum.onnxruntime.configuration import AutoQuantizationConfig
+    from optimum.onnxruntime import ORTModelForSequenceClassification, ORTQuantizer
+    from optimum.onnxruntime.configuration import AutoQuantizationConfig
+    if not onnx_dir.exists():
+        # The FP32 ONNX export is REQUIRED, not incidental: it is the middle arm of the
+        # E3 discriminator. Previously it was deleted immediately after quantising, which
+        # is why the first INT8 failure could not be localised from the saved artefacts —
+        # only torch-FP32 and INT8 survived, and those differ in TWO steps (export AND
+        # quantisation), so their disagreement isolated neither.
+        print("  exporting ONNX FP32…")
         ORTModelForSequenceClassification.from_pretrained(str(fp32), export=True
             ).save_pretrained(str(onnx_dir))
         tok.save_pretrained(str(onnx_dir))
-        # arm64, NOT avx512_vnni: the artefact is DEPLOYED on the Apple Silicon Mac
-        # Mini, not on this x86 Kaggle host.
+    if not int8_dir.exists():
+        # `arm64` is NOT an ISA-targeting choice. AutoQuantizationConfig.arm64,
+        # .avx512 and .avx512_vnni are IDENTICAL in every parameter (QInt8 weights,
+        # QUInt8 activations, reduce_range=False, per_channel=True) — verified by
+        # comparing the dataclasses, see PREREGISTRATION 3e instance 6. The earlier
+        # comment here claimed this factory produced an arm-specific graph for the Mac
+        # Mini. It does not; the bytes are the same as avx512's.
+        print("  quantising INT8…")
         ORTQuantizer.from_pretrained(str(onnx_dir)).quantize(save_dir=str(int8_dir),
             quantization_config=AutoQuantizationConfig.arm64(is_static=False, per_channel=True))
         tok.save_pretrained(str(int8_dir))
-        shutil.rmtree(onnx_dir, ignore_errors=True)   # ~740MB; INT8 is what we keep
 
     # --- score both precisions on test_3000, which is what E1's rule names ---
     y3 = np.array([int(ds["test"][i]["label"]) for i in TEST_IDX])
     fp32_test3000 = tst.predictions[TEST_IDX].argmax(-1)
+
+    # ---- E3 DISCRIMINATOR (PREREGISTRATION 3ah) -------------------------------------
+    # Three arms on IDENTICAL rows, so a disagreement localises to ONE step:
+    #   torch-FP32 -> ONNX-FP32   isolates the EXPORT
+    #   ONNX-FP32  -> ONNX-INT8   isolates the QUANTISED KERNEL
+    # Diagnostic only. It does NOT rescue E3, whose falsification clause already fired;
+    # it decides what re-verification means. DEPLOYMENT IS arm64 (Mac Mini), where this
+    # exact export was reproduced locally at r=+0.9982 against FP32. So if the locus is
+    # a non-VNNI x86 kernel, the broken thing is THIS MEASUREMENT ENVIRONMENT, not the
+    # serving path — and E3 must be re-scored on the trained INT8 artefact on arm64
+    # (scripts/score_int8_local.py) before any INT8 number is believed either way.
+    env = onnx_env()
+    print("  evaluating ONNX-FP32 on test_3000 (discriminator arm 2 of 3)…")
+    onnx_fp32_logits = onnx_predict(onnx_dir, [ds["test"][i]["text"] for i in TEST_IDX],
+                                    MAX_LENGTH)
+    onnx_fp32_test3000 = onnx_fp32_logits.argmax(-1)
     print("  evaluating INT8 on test_3000…")
     int8_logits = onnx_predict(int8_dir, [ds["test"][i]["text"] for i in TEST_IDX], MAX_LENGTH)
     # INT8 dev logits too: INT8 is the DEPLOYED precision (E1, E3), so a threshold
@@ -475,8 +549,10 @@ for seed in SEEDS:
     dev_int8_logits = onnx_predict(int8_dir,
                                    [ds["validation"][i]["text"] for i in DEV_IDX], MAX_LENGTH)
     int8_test3000 = int8_logits.argmax(-1)
+    shutil.rmtree(onnx_dir, ignore_errors=True)   # ~740MB, and now MEASURED, not assumed
     np.savez_compressed(WORK / f"int8_logits_{LOSS_ARM}_seed{seed}.npz",
                         test_3000_logits=int8_logits, test_3000_indices=np.array(TEST_IDX),
+                        onnx_fp32_test_3000_logits=onnx_fp32_logits,
                         dev_2000_logits=dev_int8_logits,
                         dev_2000_indices=np.array(DEV_IDX),
                         dev_absent_classes=np.array(DEV_ABSENT))
@@ -489,6 +565,14 @@ for seed in SEEDS:
                               "accuracy": float((fp32_test3000 == y3).mean())},
            "test_3000_int8": {"macro_f1": macro(y3, int8_test3000),
                               "accuracy": float((int8_test3000 == y3).mean())},
+           "test_3000_onnx_fp32": {"macro_f1": macro(y3, onnx_fp32_test3000),
+                                   "accuracy": float((onnx_fp32_test3000 == y3).mean())},
+           "e3_discriminator": {
+               "torch_fp32_vs_onnx_fp32_argmax_agree":
+                   float((fp32_test3000 == onnx_fp32_test3000).mean()),
+               "onnx_fp32_vs_int8_argmax_agree":
+                   float((onnx_fp32_test3000 == int8_test3000).mean()),
+               "onnx_env": env},
            "test_full10k_fp32": metrics(tst),
            "int8_dir": int8_dir.name}
     out["e3_int8_minus_fp32_macro_f1"] = (out["test_3000_int8"]["macro_f1"]
