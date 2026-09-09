@@ -23,15 +23,116 @@ from src.router.calibrate import compare_signals, sweep_thresholds
 LABEL = "FP32-calibrated, INT8 deployment pending E3 resolution"
 
 
+SEEDS = (1, 2, 3)
+
+
+def aggregate(out_path: Path) -> int:
+    """Mean +/- sd across seeds, and E5's rule adjudicated on the AGGREGATE.
+
+    This lives in the script rather than in a person's terminal because hard rule 2
+    makes the aggregate the reportable quantity and the per-seed numbers intermediate.
+    Hand-aggregation is what left seeds 1 and 2 in scrollback.
+
+    It REFUSES on fewer than 3 seeds rather than averaging what it finds: a mean over 2
+    seeds is not the quantity hard rule 2 names, and silently reporting one would be the
+    same defect as the seedless filename — a plausible number standing in for the
+    registered one.
+    """
+    import statistics as stats
+
+    per = {}
+    for s in SEEDS:
+        p = Path(f"results/e5_sweep_fp32_seed{s}.json")
+        if not p.exists():
+            raise SystemExit(
+                f"missing {p}. E5's aggregate needs all {len(SEEDS)} seeds — hard rule 2 "
+                f"requires mean +/- std over >=3 seeds, and a mean over fewer is not that "
+                f"quantity. Run the per-seed sweeps first.")
+        per[s] = json.loads(p.read_text())
+        if per[s].get("precision") != "fp32":
+            raise SystemExit(f"{p} has precision={per[s].get('precision')!r}, expected 'fp32'")
+
+    signals = sorted(per[SEEDS[0]]["aurocs"])
+    ranks = {s: {sig: i + 1 for i, sig in
+                 enumerate(sorted(signals, key=lambda x: -per[s]["aurocs"][x]))}
+             for s in SEEDS}
+    agg = {}
+    for sig in signals:
+        v = [per[s]["aurocs"][sig] for s in SEEDS]
+        agg[sig] = {"mean": stats.mean(v), "sd": stats.stdev(v), "per_seed": v,
+                    "per_seed_rank": [ranks[s][sig] for s in SEEDS]}
+
+    means = {k: v["mean"] for k, v in agg.items()}
+    best, worst = max(means, key=means.get), min(means, key=means.get)
+    spread = means[best] - means[worst]
+    # RANK STABILITY is reported because the means alone cannot show it: four signals
+    # within 0.005 can still reorder between seeds, and a "best signal" that is not the
+    # best on every seed is not a selection, it is a coin flip with error bars.
+    stable = {sig: len(set(agg[sig]["per_seed_rank"])) == 1 for sig in signals}
+    rank1_every_seed = [sig for sig in signals if agg[sig]["per_seed_rank"] == [1] * len(SEEDS)]
+
+    print(f"\n=== E5 aggregate over {len(SEEDS)} seeds — {LABEL} ===")
+    print(f"{'signal':22s} {'mean':>8s} {'sd':>8s}   ranks")
+    for sig in sorted(signals, key=lambda x: -means[x]):
+        print(f"  {sig:20s} {means[sig]:8.4f} {agg[sig]['sd']:8.4f}   "
+              f"{agg[sig]['per_seed_rank']}{'' if stable[sig] else '  <- UNSTABLE'}")
+    print(f"\nbest mean AUROC {means[best]:.4f} ({best}) vs required >= 0.75: "
+          f"{'MET' if means[best] >= 0.75 else 'NOT MET'}")
+    print(f"spread of means {spread:.4f} vs required >= 0.05: "
+          f"{'MET' if spread >= 0.05 else 'NOT MET'}")
+    print(f"holds rank 1 on every seed: {rank1_every_seed or 'NONE'}")
+
+    sweeps = {}
+    for sig in ("margin", "max_softmax", "neg_entropy"):
+        by_target = {}
+        for i, t in enumerate(per[SEEDS[0]]["sweeps"][sig]):
+            v = [per[s]["sweeps"][sig][i]["retained_accuracy"] for s in SEEDS]
+            e = [per[s]["sweeps"][sig][i]["escalation_rate"] for s in SEEDS]
+            by_target[f"{t['target_escalation']:.2f}"] = {
+                "escalation_mean": stats.mean(e),
+                "retained_accuracy_mean": stats.mean(v),
+                "retained_accuracy_sd": stats.stdev(v)}
+        sweeps[sig] = by_target
+
+    out = {"experiment": "E5 (exploratory, AGGREGATE)", "status": "NOT the router result",
+           "precision": "fp32", "precision_label": LABEL,
+           "blocked_by": "E3 falsified (3ah); INT8 dev logits at chance",
+           "n_seeds": len(SEEDS), "seeds": list(SEEDS),
+           "aurocs": agg,
+           "best_signal_by_mean": best, "spread_of_means": spread,
+           "rule_auroc_ge_0.75": means[best] >= 0.75,
+           "rule_spread_ge_0.05": spread >= 0.05,
+           "rank_stable": stable, "holds_rank_1_every_seed": rank1_every_seed,
+           "sweeps_mean_over_seeds": sweeps}
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, indent=2))
+    print(f"\nwrote {out_path}  [{LABEL}]")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--npz", required=True, type=Path,
-                    help="logits_<arm>_seed<n>.npz — the FP32 file, NOT int8_logits_*")
-    ap.add_argument("--seed", required=True, type=int)
-    ap.add_argument("--out", type=Path, default=Path("results/e5_sweep_fp32.json"))
+    ap.add_argument("--npz", type=Path,
+                    help="dev_logits_<arm>_seed<n>.npz — the FP32 file, NOT *int8*")
+    ap.add_argument("--seed", type=int)
+    # PER-SEED FILENAME. The previous default was one seedless path, so running seeds
+    # 1..3 in sequence overwrote it twice and left only the last on disk — seeds 1 and 2
+    # survived nowhere but terminal scrollback. Same class as the custom_id collision
+    # caught before Stage 1: a key that is not unique per unit of work, silently
+    # discarding results instead of failing.
+    ap.add_argument("--out", type=Path, default=None,
+                    help="default: results/e5_sweep_fp32_seed<seed>.json")
+    ap.add_argument("--aggregate", action="store_true",
+                    help="read the per-seed files and write mean +/- sd across seeds")
     ap.add_argument("--targets", type=float, nargs="+",
                     default=[0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50])
     a = ap.parse_args()
+
+    if a.aggregate:
+        return aggregate(a.out or Path("results/e5_sweep_fp32_aggregate.json"))
+    if a.npz is None or a.seed is None:
+        raise SystemExit("--npz and --seed are required unless --aggregate is passed")
+    out_path = a.out or Path(f"results/e5_sweep_fp32_seed{a.seed}.json")
 
     # Substring, not prefix: the dev-inference commit writes dev_logits_int8_*.npz, which
     # a prefix check would wave through — and it uses the SAME `dev_logits` key as the
@@ -83,9 +184,9 @@ def main() -> int:
            "dev_absent_classes": d.absent_classes.tolist(),
            "aurocs": cmp_.aurocs, "random_null": cmp_.random_null,
            "random_null_ci95": list(cmp_.random_null_ci95), "sweeps": sweeps}
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {a.out}  [{LABEL}]")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, indent=2))
+    print(f"\nwrote {out_path}  [{LABEL}]")
     return 0
 
 

@@ -273,9 +273,13 @@ this does not change any conclusion, but the number must be what it says it is.
 - **Hypothesis (H3):** Class weighting raises macro-F1 over unweighted CE.
 - **Metric / split:** macro-F1 on `test_3000`, 3 seeds per arm. Arm *selection* happens
   on `train_holdout_3000`; only the selected arm is reported on test.
-- **Accept rule: NOT YET SETTABLE. [C3-gated — blocking]** The margin is
-  **√2 × 1.96 × seed_sd**, where `seed_sd` is the across-seed macro-F1 std measured by
-  C3. It will be filled in once C3 reports, and before E2 runs.
+- **Accept rule (SUBSTITUTED from C3, 3 seeds, 2026-09-09):** the arm beats E1 by **≥ 0.0089 macro-F1** on `test_3000`, paired on identical rows.
+  - Derived mechanically by `scripts/c3_substitute.py` from the preregistered formula `√2 × 1.96 × seed_sd`, with the C3-measured `seed_sd = 0.003195` — the across-seed macro-F1 std on `train_holdout_3000`, which is C3's registered metric. **No E1, E2 or E3 value was read to produce this number**, and none appears in the script's output.
+  - **Uncertainty the rule inherits:** at 3 seeds the true sd lies in roughly [0.0017, 0.0201] (95%, chi-square), so the margin implied by that interval spans [0.0046, 0.0557] — a 12× band. The point estimate is what the formula registers and is what is used; the band is stated because the conclusion is not robust to it.
+  - **Regime, per §3ae, written before this number existed:**
+    - REGIME A — E2 is comfortably testable. The margin is at or below the 0.03 gain E2 itself calls plausible at 137.7x imbalance, so a real class-weighting effect of that size would be detected.
+    - UNCERTAINTY ON THE MARGIN ITSELF: with 3 seeds the true sd lies in roughly [0.0017, 0.0201] at 95%, so the margin implied by that interval spans [0.0046, 0.0557]. A 12x band. The point estimate is what the formula registers, and it is used, but the regime above is not robust to this interval.
+  - *Formerly: "NOT YET SETTABLE. [C3-gated — blocking]", registered as the formula above.*
 - **Reasoning — corrected.** An earlier draft set 0.04, the *unpaired* floor. **That was
   the wrong variance component.** E1 and E2 are evaluated on the **same `test_3000`
   rows**, so row-draw variance is common to both and cancels — the same paired-vs-

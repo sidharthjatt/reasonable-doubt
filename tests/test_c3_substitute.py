@@ -138,10 +138,45 @@ def test_substitution_is_not_idempotent_it_refuses_a_second_run(tmp_path):
         c3.rewrite_preregistration(prereg, 0.005, c3.margin(0.005), 3)
 
 
-def test_the_live_preregistration_still_contains_the_target_block():
-    """If E2's paragraph drifts, the script fails on the day it is needed. Catch it now."""
+SUBSTITUTED_MARKER = "**Accept rule (SUBSTITUTED from C3,"
+
+
+def test_e2_rule_is_in_exactly_one_of_its_two_valid_states():
+    """E2's accept rule has exactly two legitimate states, and this test guards BOTH.
+
+    BEFORE substitution: the registered C3-gated paragraph is present verbatim, so
+    `c3_substitute.py` will find it on the day it is needed. That was this test's
+    original job.
+
+    AFTER substitution: that paragraph is legitimately gone, replaced by the numeric
+    rule. Asserting the old state here would then fail forever and the natural fix --
+    deleting the test -- would remove drift detection entirely at the exact moment the
+    rule became load-bearing. So the post-substitution state is checked instead: the
+    rule carries its margin, the mandatory 3ae band, and the regime.
+
+    Anything else -- neither state, or both -- means the rule was hand-edited.
+    """
     src = (ROOT / "PREREGISTRATION.md").read_text()
-    assert src.count(c3.REG_BLOCK) == 1, (
-        "E2's C3-gated paragraph no longer matches scripts/c3_substitute.py's REG_BLOCK. "
-        "Fix one or the other BEFORE Tier 0's results land."
-    )
+    pre = src.count(c3.REG_BLOCK)
+    post = src.count(SUBSTITUTED_MARKER)
+    assert (pre, post) in {(1, 0), (0, 1)}, (
+        f"E2's accept rule is in neither valid state (registered block x{pre}, "
+        f"substituted block x{post}). It was edited by hand, or the substitution ran "
+        f"twice. Fix before any E1/E2/E3 number is opened.")
+
+    if post == 1:
+        # substituted: the number and its band must both be there (3ae is mandatory)
+        assert "√2 × 1.96 × seed_sd" in src, "the derivation was dropped"
+        assert "seed_sd = " in src, "the measured seed_sd was dropped"
+        assert "95%, chi-square" in src, "the 3ae uncertainty band was dropped"
+        assert "REGIME" in src, "the preregistered regime interpretation was dropped"
+
+
+def test_substitution_refuses_to_run_twice():
+    """Idempotence guard: once substituted, the script must refuse rather than
+    re-substitute or guess where the number goes."""
+    src = (ROOT / "PREREGISTRATION.md").read_text()
+    if src.count(c3.REG_BLOCK) == 0:
+        import pytest
+        with pytest.raises(SystemExit, match="already run|not found exactly once"):
+            c3.rewrite_preregistration(ROOT / "PREREGISTRATION.md", 0.0032, 0.0089, 3)
