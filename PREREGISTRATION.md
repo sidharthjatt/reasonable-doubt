@@ -1117,6 +1117,33 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3am. C4's rate-fallback switch, recorded BEFORE any few-shot prediction is scored (2026-09-09)
+
+C4's registered procedure requires the *form* of its rule to be fixed from the
+**zero-shot** rate alone, before the few-shot number is opened. Discharging that now.
+
+- **The 3× class in `exemplars_8` is `Governing Laws`** (counts: `Governing Laws` 3;
+  `Compliance With Laws`, `Organizations`, `Remedies`, `Solvency`, `Waivers` 1 each —
+  six distinct classes over eight exemplars, as §3d records).
+- **Zero-shot prediction rate of `Governing Laws`, on the 1,000 rows both runs share:
+  58/1000 = 5.80%.**
+- **5.80% is above the 1% trigger, so the RATIO form applies.** The bar is
+  **≥ 2× = ≥ 11.60%** few-shot prediction rate, AND the shift must exceed that of every
+  1× class. **The +2pp absolute fallback does NOT apply and is not used.**
+- Single-exemplar zero-shot rates, for the second clause: `Compliance With Laws` 2.30%,
+  `Solvency` 0.70%, `Remedies` 0.50%, `Organizations` 0.30%, `Waivers` 0.30%.
+
+**Disclosure, because the procedure's whole point is that the order is auditable.** E8 was
+scored first, so few-shot *aggregate* numbers (macro-F1, accuracy, count of distinct
+classes predicted) were already open when this switch was recorded. Those aggregates do
+not contain `Governing Laws`' few-shot rate, which is the only quantity the rule tests, so
+the switch is uncontaminated **in substance** — but the ideal order would have fixed the
+form before E8 ran, and it did not. Recorded rather than glossed.
+
+**"89 vs 91 distinct classes predicted" is NOT C4** and must not be reported as if it
+were. That was a descriptive aggregate noted alongside E8. C4 is the specific test above,
+and it is what decides the question.
+
 ### 3al. I quoted the wrong yardstick, and the conservative direction is not a defence (2026-09-09)
 
 Reporting E6's frontier I said the best Pareto point's **+0.0063 macro-F1 over Tier 0
