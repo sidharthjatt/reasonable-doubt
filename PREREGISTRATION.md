@@ -1117,6 +1117,49 @@ cannot be silently misaligned, and tier0 now evaluates the **INT8** artefact on
 `test_3000` and reports the E3 delta directly — without which E1's accept rule, which
 attaches to INT8, could not be computed from the notebook's output at all.
 
+### 3al. I quoted the wrong yardstick, and the conservative direction is not a defence (2026-09-09)
+
+Reporting E6's frontier I said the best Pareto point's **+0.0063 macro-F1 over Tier 0
+alone** is *"inside one seed sd (0.0034-0.0056)"*. **Two things are wrong with that
+sentence, and they are different in kind.**
+
+**The arithmetic.** 0.0063 is not inside 0.0034-0.0056. It is **1.1x to 1.9x** it. The
+claim was stated as though the reader could check it, and it does not check.
+
+**The yardstick, which matters more.** Even with the arithmetic fixed, the across-seed sd
+is **the wrong quantity for this comparison.** Tier 0 alone and Tier 0-plus-escalation are
+scored on **the same 3,000 rows with the same 3 seeds**, differing only in whether a row
+was escalated. An across-seed sd measures how much **retraining** moves the score; the
+question being asked is how much **escalating these rows** moves it. Those are different
+sources of variance, and the shared row-draw noise that dominates both arms **cancels in
+the difference** — which a paired test exploits and an unpaired sd throws away.
+
+**Being conservative did not make it safe.** The wrong test happened to point at the
+cautious conclusion, so the error produced no visibly bad claim, which is exactly why it
+would have survived. A number that is right by luck cannot be relied on the next time the
+luck runs the other way — and here it very nearly did.
+
+**The paired test, run** (`scripts/cascade_paired_bootstrap.py`, 10,000 resamples over
+rows, seed 20260909, dev-calibrated threshold **held fixed** while test rows are
+resampled so hard rule 1's dev/test separation cannot leak through the resampler):
+
+| quantity | value |
+|---|---|
+| cascade − Tier 0, paired | **+0.0063**, 95% CI **[−0.0004, +0.0103]**, p = 0.0756 |
+| across-seed sd of Tier 0 (the wrong yardstick) | 0.0056 |
+
+**The conclusion survives, and the reason for it changes completely.** The interval
+includes zero, so the cascade's gain is not distinguishable from zero — but only just, at
+p = 0.076, with the lower bound at **−0.0004**. The paired interval is far **tighter**
+than the unpaired spread implied: the correct test is more powerful, and it puts this
+result at *borderline*, not at *comfortably null*. Reporting it as "well inside the noise"
+would have been a second wrong claim in the opposite direction.
+
+**Standing rule.** When two arms are evaluated on the same rows, the reported interval is
+a **paired** one. An across-seed sd may be quoted only for a question about seeds. The
+error-in-the-safe-direction is recorded here rather than quietly fixed, because hard rule
+7 covers my own mistaken statements and not only failed experiments.
+
 ### 3ak. Running E1b on a different host — what it costs (2026-09-09)
 
 E1b may have to run on different hardware or a different account. §3ah exists because one
@@ -2908,6 +2951,70 @@ reading the file; **`match` is filled in by a human, not asserted here.**
 
 Append-only. One entry per executed run, written after the run, referencing its
 experiment id. Never edit a past entry — add a correcting entry instead.
+
+### E8 — few-shot vs zero-shot Sonnet-5, paired *(2026-09-09)*
+
+- **Experiment id:** E8 (registered `b26d686`, before the numbers were opened)
+- **Date:** 2026-09-09
+- **Config / command:** `python scripts/score_fewshot.py` — `results/fewshot_results.json`
+  (batch `msgbatch_01QbUfqihLGmwG3wkYJVZuMU`) vs `results/stage1_results.json`, both
+  `claude-sonnet-5`, restricted to the same **1,000 rows**; 97 of 100 classes present, and
+  **both arms averaged over exactly those 97**. Parsed with
+  `src.data.schema.parse_response`; **0 format failures in either arm.**
+- **Seeds:** n/a for the API arms (one batch each). Tier 0 comparator is mean over seeds 1-3.
+- **Result:**
+
+  | arm | macro-F1 | accuracy | classes predicted |
+  |---|---|---|---|
+  | Sonnet-5 **zero-shot** | 0.6258 | 0.7490 | 91 / 97 |
+  | Sonnet-5 **few-shot (8)** | **0.6276** | 0.7570 | 89 / 97 |
+  | Tier 0 INT8, same rows | **0.7782** ± 0.0053 | — | — |
+
+  - `delta_fs` = **+0.0018** macro-F1 (accuracy +0.0080)
+  - paired bootstrap, 10,000 resamples, seed 20260909: **95% CI [-0.0180, +0.0213]**,
+    p = 0.869 — **includes 0**
+  - `gap` (Tier 0 − zero-shot, same rows) = **+0.1524**, 95% CI [+0.1076, +0.1757],
+    p = 0.0000 — excludes 0
+  - `fraction_closed` = **+0.0119** (1.2% of the gap)
+- **Cost:** **$0.00.** Responses were already on disk; no API call, nothing appended to
+  `results/spend_ledger.jsonl`.
+- **Manifest:** `test_3000` (`text_sha256 e719c110…`), restricted to the 1,000 few-shot
+  ids, verified a strict subset of both `stage1`'s 3,000 and the manifest's indices.
+  Exemplars: `exemplars_8` (`text_sha256 ac7e7be8…`).
+- **Accept rule met?** The registered band resolves to **CAPABILITY, NOT PROMPTING** — the
+  CI includes 0, which the band routes to the ≤ 0.20 disposition, and the point estimate
+  closes 1.2% of the gap. **Restatement of H1/E4/E4b/E6 proceeds.**
+- **Notes.** Few-shot moved Sonnet-5 by an amount indistinguishable from zero, while Tier 0
+  beats it by 0.1524 on the same rows with an interval nowhere near zero. **The deficit is
+  in the task, not the prompt.**
+  **The bound registered in advance holds and must be carried into the write-up:**
+  `exemplars_8` covers **6 distinct classes of 100** — 94 classes are never shown, so eight
+  examples cannot teach the taxonomy. E8 therefore falsifies "prompting closes the gap"
+  **only for the 8-exemplar prompt actually run**; a class-covering prompt (≥100 exemplars)
+  is untested and unbudgeted, and no sentence may generalise past that.
+  Few-shot predicted **fewer** distinct classes than zero-shot (89 vs 91), consistent with
+  the §3d/C4 expectation that exemplars bias prediction toward their own classes.
+
+### E6 best-Pareto-point — paired test *(2026-09-09)*
+
+- **Experiment id:** E6 (supporting test; supersedes a wrong yardstick — see §3al)
+- **Date:** 2026-09-09
+- **Config / command:** `python scripts/cascade_paired_bootstrap.py` — Tier 0 alone vs
+  Tier 0 + Sonnet-5 escalation at the best Pareto point, **same 3,000 rows, same 3 seeds**,
+  margin signal, threshold calibrated on `dev_2000` and **held fixed while test rows are
+  resampled**. Averaged over all 100 classes (`test_3000` covers 100).
+- **Seeds:** 1, 2, 3
+- **Result:** Tier 0 **0.7523 ± 0.0056**; cascade **0.7585 ± 0.0034**; paired delta
+  **+0.0063**, 95% CI **[-0.0004, +0.0103]**, p = **0.0756** — includes 0. The dev-quantile
+  threshold at target 0.0406 applies as 0.0400 / 0.0323 / 0.0493 per seed.
+- **Cost:** $0.00.
+- **Accept rule met?** n/a — instrumentation under C3's remit (paired-bootstrap floors),
+  not an arm with its own rule.
+- **Notes.** The conclusion ("would not claim the cascade beats Tier 0 alone") stands, but
+  **not for the reason first given.** See §3al: the across-seed sd was the wrong yardstick,
+  and 0.0063 was 1.1-1.9× it rather than inside it. The correct paired interval is
+  **tighter**, and puts the result at **borderline** (p = 0.076, lower bound -0.0004),
+  not comfortably null.
 
 ### _(template — copy per run)_
 
