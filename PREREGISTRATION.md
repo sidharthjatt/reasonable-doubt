@@ -1080,7 +1080,7 @@ cache on it. Projected over Stage 1's 3,000 rows at the measured behaviour:
 | | cost | per 1,000 clauses |
 |---|------|-------------------|
 | Haiku 4.5, caching impossible | $1.5879 | **$0.5293** |
-| Sonnet 5, caching active | $1.3449 | **$0.4483** |
+| Sonnet 5, caching active | $1.3449 | **$0.4483** *(PROJECTED — Stage 1 later measured **$0.43610**; §3ax item 6)* |
 
 **The cheaper model costs 1.18x MORE per clause than the dearer one — and is also less
 accurate** (Rung 1: 0.70 vs 0.75 on 20 rows). Headline rates of $1/$5 versus $2/$10
@@ -1315,6 +1315,68 @@ unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
 
+### 3ay. THIRD SWEEP — the registered scorer is bypassed everywhere the numbers were actually produced (2026-09-10)
+
+The 1-ULP discrepancy in `tier1_seed1.json` was **not a precision artefact — it was a
+provenance signal**, and following it found that the bypass is **systemic, not isolated**.
+
+**Every macro-F1 in the record that was produced by a training run came from
+`sklearn.f1_score` directly, never from `src.eval.metrics.score`:**
+
+| site | what it produced |
+|---|---|
+| `notebooks/kaggle_tier0.py:307,310` | E1's `tier0_ce_seed*.json` — selection, `test_3000_fp32`, `test_3000_int8`, `test_full10k` |
+| `notebooks/kaggle_tier0_dev.py:123` | `tier0_dev_ce_seed*.json` |
+| `notebooks/kaggle_tier1.py:816` | `tier1_seed1.json` — **where the 1 ULP surfaced** |
+| `src/train/tier0_encoder.py:306,338` | the local training path's metrics |
+
+The registered scorer is imported only by the **analysis** scripts written afterwards
+(`score_fewshot`, `score_int8_local`, `build_frontier`, `cascade_paired_bootstrap`,
+`score_cached`, `rung0_freetier`). **The measurement path and the reporting path use
+different scorers**, and nothing compared them until a 1-ULP mismatch forced it.
+
+**MEASURED DIVERGENCE, on every committed number recomputable from logits on disk:**
+
+| number | committed (sklearn) | registered scorer | divergence |
+|---|---|---|---|
+| E1 seed 1 `test_3000` FP32 | 0.7635909027071933 | 0.7635909027071929 | **4 ULP** |
+| E1 seed 2 `test_3000` FP32 | 0.7597399679922866 | 0.7597399679922866 | **exact** |
+| E1 seed 3 `test_3000` FP32 | 0.7478116906220197 | 0.7478116906220192 | **4 ULP** |
+| dev_2000 INT8 seed 1 / 2 / 3 | — | — | **1 / 1 / 3 ULP** |
+| Tier 1 seed 1 `test_3000` | 0.7254043543132834 | 0.7254043543132833 | **1 ULP** |
+
+**Cause identified, not assumed:** `sum(per_class)/len(per_class)` versus numpy's pairwise
+`mean()`. Summation order, nothing else.
+
+**THE CONSEQUENCE SO FAR IS NIL; THE UNGUARDED RISK IS NOT.** `classes_averaged` matched in
+every case (100 on `test_3000`, 99 on `dev_2000`), so the two calls happened to average over
+the **same label set** — which is why the divergence stayed at ULP scale. **That was luck,
+not design.** `src.eval.metrics.score` exists precisely to refuse the case that would have
+diverged materially: it **raises** unless `allow_absent_classes=True` when the label set
+contains classes with no gold examples, because sklearn scores each such class 0.0 and
+deflates macro-F1 in proportion to how many there are. **That guard was never in the path
+that produced any committed number.** A future arm evaluated on a subset covering fewer
+classes — exactly E8's 97-of-100 situation — would have diverged by far more than 4 ULP, and
+**nothing would have announced it.**
+
+**`tier1_seed1.json` is left with its sklearn-derived `macro_f1` UNCHANGED**, and a
+`macro_f1_provenance` field recording that it is sklearn-derived and differs from the
+registered scorer by exactly 1 ULP with the cause named. **Loosening the bit-exact guard to
+absorb it would have destroyed the only evidence of the bypass** — the guard earned its
+keep by refusing to write. `per_class_f1` was added *from the registered scorer* (a new
+field, moving nothing committed): 100 classes averaged, **4 at F1 = 0.0** (`Assigns`,
+`Books`, `Powers`, `Qualifications`), worst non-zero `Applicable Laws` 0.111.
+
+**This is a THIRD defect class, distinct from §3aw and §3ax:** *the measurement path and the
+reporting path use different implementations of the same registered metric, and nothing
+compares them.* §3aw is a missing table, §3ax is a stale value; this is **two live
+implementations of one definition**, where the guard the project wrote to protect the metric
+sits in the path that never produces the numbers.
+
+**Mitigation — NOT yet implemented, recorded as the next fix:** the Kaggle notebooks should
+call `src.eval.metrics.score`, or a test should assert the two agree on the committed
+artefacts. Until one of those exists, the bypass is documented but not closed.
+
 ### 3ax. SECOND DEFECT CLASS — "superseded figure still presented as current" (2026-09-10)
 
 §3ax's sweep found the 28.97 throughput defect **incidentally**, while looking for something
@@ -1340,7 +1402,7 @@ the narrative drifted apart with nothing comparing them.
 | **3** | *"E6's numbers are unchanged — 0.591 J/req, $1.390e-5 per 1k, V\* = 1,413,969"* | energy 0.6269; V\* 1,413,971 per §3ac | §3ab close (~L2431) | asserted as live in a sentence whose point is that nothing changed |
 | **4** | `measured_throughput_rps` **(30.23)**, `power_draw_soc_watts` **(18.20)**, `energy_joules_per_request` **(0.591)** described as *"now measured and in `configs/costs.yaml`"* | costs.yaml holds 28.3615 / 17.7546 / 0.6269 | E6 entry L479–482 | **the cited file disagrees with the citation.** `power_draw_soc_watts` is not even a field any more — §3ab split it into `_idle`/`_load`/`_marginal` |
 | **5** | **`V_max` = 714,999,960 clauses at 30.23 rps** | **670,806,198** at 28.3615 rps (**−6.2%**) | §1b L139 | conclusion unchanged (still 506× → 474× V\*), number stale |
-| **6** | **Sonnet 5 $0.4483 per 1,000**, used live in `V* = 633,862.43 / (0.4483 − e)` | **$0.43610** — `e6_frontier.json`'s `api_usd_per_1k`, from actual Stage 1 usage | §1 L114, §3aa L2450, §3ac L2454 | **0.4483 was a PROJECTION made before Stage 1 ran**; the measured figure is 2.8% lower, so **V\* moves 1,413,925 → 1,453,465 (+39,540 clauses, +2.80%)** |
+| **6** | **Sonnet 5 $0.4483 per 1,000**, used live in `V* = 633,862.43 / (0.4483 − e)` | **$0.43610** — `e6_frontier.json`'s `api_usd_per_1k`, from actual Stage 1 usage | §1 L114, §3aa, §3ac | **FIXED 2026-09-10.** 0.4483 was a PROJECTION made before Stage 1 ran — a stale **input to a live formula**, not merely a stale value. **V\* moves 1,413,925 → 1,453,465 (+2.80%)**; no conclusion changes (still ~18× the corpus) |
 
 **Item 6 is the one that matters most, and it is the subtlest.** Every other entry is a
 measurement superseded by a better measurement of the same thing. Item 6 is a **projection
@@ -1356,8 +1418,10 @@ they survived: **nothing that depended on them broke.**
 **MITIGATION, registered:** when a figure is superseded, the supersession is recorded **at
 every site that states it**, not only at the site that discovered it — and the live value is
 carried with the strike-through so the two are legible together. A `grep` for the old value
-is the check, and it is cheap. **Items 2–6 are REPORTED here and NOT yet fixed**, per the
-sweep-then-fix order.
+is the check, and it is cheap. **Items 1 and 6 are FIXED; items 2–5 are REPORTED and not yet fixed.** Item 6 was
+promoted out of the report-only set because it is a stale *input to a live formula* rather
+than a stale value — the formula was still dividing by a forecast whose outcome had already
+been measured.
 
 ### 3aw. DEFECT CLASS — "aggregate hides structure", with a registered mitigation (2026-09-10)
 
@@ -2491,11 +2555,30 @@ measured per-clause floor rather than without one.**
 | energy | **0.591 J/request** | = 17.88 / 30.23 = 0.59147 |
 | electricity | **$0.0847/kWh** | **ASSUMED, not measured — see §3ac** |
 | **energy cost** | **$1.390e-5 per 1,000 clauses** | derived |
-| Sonnet 5 (batch, cached) | $0.4483 per 1,000 | §1 |
+| Sonnet 5 (batch, cached) | ~~$0.4483~~ → **$0.43610 measured** | §1; **projection superseded by Stage 1's own usage — §3ax item 6** |
 | **ratio** | **1 / 32,240** | derived |
 
 **The crossover, recomputed.** `cost_local(V) = 633,862.43/V + 1.390e-5` per 1,000
 clauses, against Sonnet 5's flat $0.4483:
+
+> **⚠ ITEM 6 FIXED 2026-09-10 (§3ax). The $0.4483 above was a PROJECTION, and it is a stale
+> INPUT TO A LIVE FORMULA — not merely a stale value.** It was forecast from Rung-2 caching
+> behaviour *before Stage 1 ran*. Stage 1 has since completed, and the **measured** Sonnet-5
+> batch+cached cost is **$0.43610 per 1,000** (`e6_frontier.json` `api_usd_per_1k`, derived
+> from that run's own `usage` blocks per hard rule 10). Recomputed on the measured input:
+>
+> | | V\* (energy excluded) | V\* (energy included) |
+> |---|---|---|
+> | projected $0.4483 | 1,413,925 | 1,413,969 |
+> | **measured $0.43610** | **1,453,465** | **1,453,511** |
+> | shift | **+39,540 (+2.80%)** | **+39,542 (+2.80%)** |
+>
+> **No conclusion changes.** V\* remains ~1.45M clauses — **~18× the entire 80,000-clause
+> LEDGAR corpus** — so the local device still does not break even on any realistic volume,
+> which is E6's finding either way. What changes is that the break-even number is now
+> computed from a **measurement of the run that happened** rather than from a forecast of it,
+> and the input is no longer labelled "measured" when it was projected.
+
 
 | | V\* |
 |---|---|
@@ -3781,11 +3864,21 @@ experiment id. Never edit a past entry — add a correcting entry instead.
   | Sonnet-5 **few-shot (8)** | **0.6276** | 0.7570 | 89 / 97 |
   | Tier 0 INT8, same rows | **0.7782** ± 0.0053 | — | — |
 
+  **Per-seed, required by §3aw** (the mean above summarises these; all three are on
+  the same side of both Sonnet arms, so the sign is not in question):
+
+  | seed | Tier 0 macro-F1 | `gap` vs zero-shot 0.6258 |
+  |---|---|---|
+  | 1 | 0.7813 | +0.1555 |
+  | 2 | 0.7813 | +0.1555 |
+  | 3 | 0.7720 | +0.1462 |
+  | **mean** | **0.7782 ± 0.0053** | **+0.1524** |
+
   - `delta_fs` = **+0.0018** macro-F1 (accuracy +0.0080)
   - paired bootstrap, 10,000 resamples, seed 20260909: **95% CI [-0.0180, +0.0213]**,
     p = 0.869 — **includes 0**
-  - `gap` (Tier 0 − zero-shot, same rows) = **+0.1524**, 95% CI [+0.1076, +0.1757],
-    p = 0.0000 — excludes 0
+  - `gap` (Tier 0 − zero-shot, same rows) = **+0.1524** (per-seed +0.1555 / +0.1555 /
+    +0.1462 — **3/3 same sign**), 95% CI [+0.1076, +0.1757], p = 0.0000 — excludes 0
   - `fraction_closed` = **+0.0119** (1.2% of the gap)
 - **Cost:** **$0.00.** Responses were already on disk; no API call, nothing appended to
   `results/spend_ledger.jsonl`.
