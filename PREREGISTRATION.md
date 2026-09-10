@@ -1284,6 +1284,52 @@ unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
 
+### 3at. HOST BASELINE — interpretation rule, registered BEFORE the 1.0–2.2 h is spent (2026-09-10)
+
+The host-baseline run (§3ak step 1: E1's config, `EPOCHS = 3`, `RUN_TAG = "ce_hostB"`,
+seed 1, new host) had **no registered interpretation rule** — the same hard-rule-6 gap that
+was blocking E1b, in the run scheduled to go first. Registered now.
+
+**WHICH COMPARISON IS THE SCIENTIFIC ONE — and it is not the one the name suggests.**
+
+| comparison | status | why |
+|---|---|---|
+| **E1b (10 ep) vs host baseline (3 ep), both on THIS host** | **THE SCIENTIFIC COMPARISON** | one variable (epochs), **both environments persisted** via `train_env()`. This is what step 1 exists to make possible |
+| host baseline vs **E1 seed 1** (0.7582) | **descriptive only — detectable, not attributable** | E1's training environment is **permanently unrecorded** (§3e instance 9). A difference can be *measured* but cannot be decomposed into hardware / driver / TF32 / library / setup |
+| seed-1 **gate** vs E1 = 0.7523 (§3ar) | **unchanged, and NOT scientific** | the gate is a **spending decision** about whether to buy two more seeds. It is not an epochs finding and must never be reported as one |
+
+**Those three must not be conflated later.** The gate keeps its registered anchor
+(E1 = 0.7523, §3ar) even though the scientific epochs comparison uses the host baseline —
+because the gate answers *"is 0.80 still reachable, so is more quota worth spending?"*,
+which is a question about the accept target, not about epochs.
+
+**Interpretation rule for `d = hostB_seed1 − E1_seed1`**, both `test_3000` INT8 arm64,
+same seed, same config, different host. E1 seed 1 = **0.7582**.
+
+| outcome | reading |
+|---|---|
+| **\|d\| < 0.0112** (2σ) | **UNINTERPRETABLE AT n = 1.** No host effect detected *at the only scale available*. This does **NOT** establish the hosts are equivalent |
+| **\|d\| ≥ 0.0112** | **A host difference is DETECTED and CANNOT BE ATTRIBUTED.** Report the magnitude and sign; refuse the cause. E1's side has no environment record to compare against |
+
+**Why the scale is a proxy, stated so it is not mistaken for a test.** σ = 0.0056 is the
+**within-host across-SEED** sd of `test_3000` INT8. The question here is **cross-host at
+fixed seed**, whose variance is **unmeasured**, with no reason to assume it is smaller
+(§3ak says exactly this). 2σ is therefore a **borrowed yardstick**, used because it is the
+only measured scale on this quantity — the same borrowing §3an refused for C1's 3pp, and it
+is permitted here **only because the conclusion in every branch is "not attributable"**, so
+the yardstick cannot change a causal claim. It bounds *noticing*, not *concluding*.
+
+**In BOTH branches, E1b proceeds unaffected.** The epochs comparison lives entirely on the
+recorded host, so nothing about `d` gates it. A large `d` makes E1's original numbers less
+transferable; it does not make E1b's question harder.
+
+**The epochs comparison itself is n=1 vs n=1 at first, and is NOT the answer.** A delta
+between host baseline (1 seed) and E1b seed 1 (1 seed) below 2σ is uninterpretable for the
+same reason `d` is. It becomes interpretable only when E1b has its 3 seeds — and E1b's
+**accept rule is absolute** (≥ 0.80 on the 3-seed mean) and never became a comparison.
+
+**Cost of being wrong about this rule: 1.0–2.2 h.** Registered before spending it.
+
 ### 3as. E1b's execution loop: Kaggle trains FP32, arm64 scores INT8 (2026-09-10)
 
 **The gate is stated on INT8 and Kaggle cannot produce an INT8 number.** Measured, not
@@ -1583,13 +1629,22 @@ of which are comparisons to E1.
 **Move the comparison onto the new host:**
 
 1. Run **E1-baseline seed 1** on the new host: `EPOCHS = 3`, everything else identical,
-   `RUN_TAG = "ce_hostB"`. Cost **1.0–2.2 h**.
+   `RUN_TAG = "ce_hostB"`. Cost **1.0–2.2 h**. **ITS PURPOSE, WHICH IS EASY TO LOSE:** it
+   supplies a **3-epoch number on a RECORDED host**, so that E1b (10 ep) vs host baseline
+   (3 ep) is a **clean one-variable epochs comparison with both environments persisted**.
+   That — not the comparison back to E1 — is the scientific reason to spend the 1.0–2.2 h.
+   Its interpretation rule is registered in **§3at**.
 2. Run **E1b seed 1** on the same host. Cost **3.3–7.3 h**.
 3. The gate becomes **within-host**: does 10 epochs beat 3 epochs *on this host*? That is
    the one-variable question E1b was designed to ask, and it is answered without any
    cross-host term.
-4. Report the new host's E1-baseline against the original 0.7636 as a **measured host
-   effect at n=1**, explicitly labelled as having no variance estimate.
+4. Report the new host's E1-baseline against E1 seed 1's **INT8** figure of **0.7582** as
+   a **measured host effect at n=1**, explicitly labelled as having no variance estimate.
+   (This step previously named **0.7636**, which is E1 seed 1's **FP32** number quoted
+   against an INT8 rule — the same substitution §3ar corrected for 0.7570. The comparison
+   is INT8-to-INT8 or it is not a comparison.) **This reading is DESCRIPTIVE ONLY: a
+   difference here is detectable but NOT attributable**, because E1's environment was never
+   recorded — see §3at.
 
 **The cost of the host change is therefore +1.0–2.2 h, roughly +30–45% on E1b's seed-1
 gate.** That is the price of keeping the comparison one-variable, and it is cheaper than

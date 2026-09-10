@@ -153,7 +153,7 @@ E1B = False
 # else byte-identical), then E1b on the same host, and ask the epochs question WITHIN host.
 # Its result is reported against E1's original as a measured host effect at n=1, explicitly
 # with no variance estimate.
-HOST_BASELINE = False
+HOST_BASELINE = True
 
 assert not (E1B and HOST_BASELINE), (
     "E1B and HOST_BASELINE are different experiments and must not run in the same commit: "
