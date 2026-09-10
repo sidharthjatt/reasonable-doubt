@@ -191,9 +191,36 @@ def test_notebook_port_matches_registered_scorer(notebook):
         "is not actually closed")
 
 
+# kaggle_tier1.py is EXCLUDED, deliberately and with a reason recorded rather than left as
+# a silent gap. It still calls sklearn's f1_score directly (line ~816), which is 3ay's
+# bypass. It is not fixed because NO TIER 1 RUN REMAINS: E4-A reports Tier 1 as not accepted
+# at n=1, and E4b-A is superseded by E6's existing measurement, so nothing will execute this
+# notebook again. Editing it would be a change no run verifies -- and an unverified edit to a
+# scoring path is the defect class this file exists to guard, not a fix for it. If a Tier 1
+# run is ever revived, this exclusion must be removed BEFORE it is launched.
+SKLEARN_BYPASS_EXCLUDED = {
+    "kaggle_tier1.py": "no Tier 1 run remains (E4-A, E4b-A); an unrunnable edit is "
+                       "change without verification. Remove this entry before any "
+                       "future Tier 1 run.",
+}
+
+
+def test_sklearn_bypass_exclusions_are_named_and_still_exist():
+    """An exclusion must point at a real file and carry a reason."""
+    for name, reason in SKLEARN_BYPASS_EXCLUDED.items():
+        assert (ROOT / "notebooks" / name).exists(), (
+            f"{name} is excluded from the sklearn-bypass check but no longer exists; "
+            "remove the exclusion so it measures real debt")
+        assert len(reason) > 40, f"{name}'s exclusion needs a substantive reason"
+
+
 def test_notebooks_no_longer_call_sklearn_directly_for_reported_metrics():
-    """The reported-metric helpers must route through the port, not f1_score."""
+    """The reported-metric helpers must route through the port, not f1_score.
+
+    kaggle_tier1.py is excluded — see SKLEARN_BYPASS_EXCLUDED above for the reason.
+    """
     for name in ("kaggle_tier0.py", "kaggle_tier0_dev.py"):
+        assert name not in SKLEARN_BYPASS_EXCLUDED
         src = (ROOT / "notebooks" / name).read_text()
         assert 'def macro(y, pred): return f1_score(' not in src, (
             f"{name} still defines macro() directly on sklearn — 3ay's bypass")

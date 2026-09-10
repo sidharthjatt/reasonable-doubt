@@ -1315,6 +1315,113 @@ unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
 
+### 3az. HOST BASELINE RESULT — §3at applied; this is NOT the gate (2026-09-10)
+
+**Stated first, because conflating them would be the §3av error:** this is the **host
+baseline** (§3ak step 1, `ce_hostB`, `EPOCHS = 3`, seed 1). **The §3ar gate has NOT been
+reached** — it applies to **E1b seed 1**, which has not run. Nothing below is a gate outcome.
+
+**Steps 4–6 executed.** `train_env()` **was persisted** into both the seed JSON and the npz —
+§3e instance 9's mitigation working on its first real run: Tesla T4, capability 7.5, CUDA
+12.8, cuDNN 91002, driver 580.159.04, torch 2.10.0+cu128, `tf32_matmul: false`,
+`tf32_cudnn: true`, transformers 4.57.6.
+
+**A CORRECTION TO §3as STEP 4, MADE BEFORE RUNNING IT.** §3as step 4 said *"local arm64
+export + quantise"*. **Following that literally would have introduced a second variable into
+`d`.** E1's anchor was produced by scoring **Kaggle-quantised** INT8 bytes on arm64 —
+verified: `models/int8_ce_1/model_quantized.onnx` is byte-identical (sha256
+`a964075d…`) to the Kaggle download, and `scripts/score_int8_local.py` only *scores*, it
+never exports or quantises. So the host baseline was scored the **same way**: Kaggle's
+`int8_ce_hostB_1`, scored on arm64. **`d` is then a one-variable comparison (host), which is
+what §3at requires.** A local re-quantise would have made it host + quantisation-run.
+
+**RESULT.**
+
+| quantity | value |
+|---|---|
+| hostB seed 1, `test_3000` **INT8 arm64** | **0.7588558562** |
+| E1 seed 1, `test_3000` **INT8 arm64** | **0.7582129450** |
+| **`d = hostB − E1`** | **+0.0006429112** |
+| \|d\| vs the 2σ threshold | **0.000643 < 0.0112** |
+| in σ units | **0.11 σ** |
+
+**§3at BRANCH 1 FIRES: \|d\| < 0.0112 → UNINTERPRETABLE AT n = 1.** No host effect is
+detected *at the only scale available*. **This does NOT establish that the hosts are
+equivalent** — n = 1, no variance estimate, and 2σ is a within-host across-**seed** spread
+borrowed for a cross-host question whose variance is unmeasured. **Both §3at branches
+conclude "not attributable", and that line holds here:** E1's training environment was never
+recorded, so even a large `d` could not have been decomposed. What this result licenses is
+"no host effect was detected", nothing stronger.
+
+**The FP32 figure is NOT the registered quantity.** Kaggle reported `test_3000_fp32`
+0.7638615 against E1 seed 1's 0.7636. **`d` is not computed from it and no FP32 comparison
+is made** — §3at is stated on INT8 arm64, which is the deployed precision (E3's falsification
+clause prohibits reporting FP32 as the system's accuracy). The number is recorded here only
+so its omission is visible as a decision.
+
+**Kaggle's INT8 collapse reproduced exactly as expected: 0.000777** against arm64's 0.7589,
+a gap of **+0.7581**. That is E3's discriminator on a non-VNNI Xeon (§3as), an input to
+nothing.
+
+**THE GUARD FIRED FOR REAL, AND ON THIS RUN RATHER THAN E1b.**
+`tier0_ce_hostB_seed1.json` was produced by the **pre-port** notebook, so it carried a
+`macro_f1` with no `classes_averaged` and
+`test_committed_artefacts_record_classes_averaged` **failed**. It was **not** grandfathered:
+the registered scorer was re-run over the logits already on disk, and every Kaggle value
+reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
+`test_3000_onnx_fp32` 4 ULP, `selection` exact) — the §3ay summation-order signature.
+Kaggle's own values are **untouched**; `classes_averaged: 100` and a
+`registered_scorer_backfill` block were added beside them. **The list did not grow.**
+
+### 3ba. E1b RE-COST from measured rate — the registered estimate was too optimistic (2026-09-10)
+
+**The wall clock was 2.38 h against a registered 1.0–2.2 h**, with throughput degrading
+**1.575 → 1.255 it/s** across the run. **Effective rate = 10,689 steps / 2.38 h = 1.248
+it/s.**
+
+**The wall clock was NOT persisted by the notebook** — `tier0_ce_hostB_seed1.json` has no
+timing field, which is §3e instance 9 recurring in the run whose whole purpose was to record
+its environment. It is recorded here from the operator's observation, and **the notebook must
+persist `seed_wall_clock_s` before E1b runs** (`kaggle_tier0_dev.py` already does; the main
+notebook does not).
+
+**E1b is 10 epochs = 35,630 steps.** Re-costed:
+
+| basis | h / seed | 3 seeds |
+|---|---|---|
+| start-of-run 1.575 it/s | 6.28 | 18.85 |
+| **effective measured 1.248 it/s** | **7.93** | **23.80** |
+| end-of-run 1.255 it/s | 7.89 | 23.66 |
+
+**The registered range was 3.3–7.3 h/seed. The measured basis gives 7.93 — OUTSIDE it.**
+§3ak's estimate is superseded (§3ax's class: do not leave 3.3–7.3 standing as current).
+
+**Against the constraints:** Kaggle's session cap is **9 h**; quota remaining **27.6 h**.
+
+- **Seed 1 fits, but the margin is ~1 h and that is before overhead.** The 7.93 h is
+  training steps only. E1b runs `eval_strategy="epoch"` — **10 evaluations of `sel_ds`
+  instead of 3** — plus the constant tail (full-10k predict, ONNX export, INT8 quantise,
+  three ONNX inference passes over ~16k rows). Realistic seed 1: **~8.1–8.6 h against a 9 h
+  cap.**
+- **3 seeds at 23.8 h against 27.6 h remaining leaves 3.8 h** — and would consume the quota
+  E7 would need, which §3as already declined to schedule.
+
+**IS A TIMEOUT RECOVERABLE? YES, with one real caveat.** `tr.train(resume_from_checkpoint=
+resume)` exists, `_RESTORE_GLOBS` includes `ck_*`, and `save_strategy="epoch"` with
+`save_total_limit=2` keeps the last two checkpoints. So a second commit resumes.
+**The caveats, both load-bearing:**
+
+1. **Checkpoints are per EPOCH, not per step** — at 3,563 steps/epoch (~47 min) a timeout
+   loses back to the last epoch boundary, up to ~47 min.
+2. **Resume depends on `/kaggle/working` surviving into the next session** (§3s already
+   records this). If it does not, seed 1 restarts from step 0 and the 8+ h is spent again.
+
+**RECOMMENDATION, given §3ar's gate is a spending decision:** run E1b seed 1 alone and let
+the gate decide, which is what §3ar was designed for. At ~8.1–8.6 h it is the single largest
+run in the project and it consumes ~30% of the remaining quota — but the gate's whole
+function is to stop the other two seeds if seed 1 does not move. **Do not schedule 3 seeds up
+front.**
+
 ### 3ay. THIRD SWEEP — the registered scorer is bypassed everywhere the numbers were actually produced (2026-09-10)
 
 The 1-ULP discrepancy in `tier1_seed1.json` was **not a precision artefact — it was a
@@ -2159,7 +2266,8 @@ of which are comparisons to E1.
 **Move the comparison onto the new host:**
 
 1. Run **E1-baseline seed 1** on the new host: `EPOCHS = 3`, everything else identical,
-   `RUN_TAG = "ce_hostB"`. Cost **1.0–2.2 h**. **ITS PURPOSE, WHICH IS EASY TO LOSE:** it
+   `RUN_TAG = "ce_hostB"`. ~~Cost **1.0–2.2 h**~~ — **MEASURED 2.38 h (§3ba)**; the
+   estimate was low and E1b's is re-costed from the measured rate. **ITS PURPOSE, WHICH IS EASY TO LOSE:** it
    supplies a **3-epoch number on a RECORDED host**, so that E1b (10 ep) vs host baseline
    (3 ep) is a **clean one-variable epochs comparison with both environments persisted**.
    That — not the comparison back to E1 — is the scientific reason to spend the 1.0–2.2 h.

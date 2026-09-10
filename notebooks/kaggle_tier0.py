@@ -706,7 +706,13 @@ for seed in SEEDS:
                         dev_2000_indices=np.array(DEV_IDX),
                         dev_absent_classes=np.array(DEV_ABSENT))
 
+    # WALL CLOCK IS PERSISTED, not printed. The host baseline ran 2.38 h against a
+    # registered 1.0-2.2 h estimate and the number existed only in the operator's
+    # scrollback -- 3e instance 9 recurring in the run whose purpose was provenance.
+    # E1b's re-cost (3ba) depends on this, so it goes in the artefact.
     out = {"model": MODEL, "loss_arm": LOSS_ARM, "run_tag": RUN_TAG, "experiment": "E1b" if E1B else "E1",
+           "seed_wall_clock_s": round(time.time() - _t_seed, 1),
+           "run_wall_clock_s": round(time.time() - _T_START, 1),
            "seed": seed, "max_length": MAX_LENGTH,
            "epochs": EPOCHS, "lr": LR, "selection_split": "train_holdout_3000",
            "test_manifest": "test_3000", "test_manifest_sha256": _tsha,
