@@ -1284,6 +1284,55 @@ unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
 
+### 3aw. DEFECT CLASS — "aggregate hides structure", with a registered mitigation (2026-09-10)
+
+Three occurrences, and **every one was caught by review, not by the code.** That is what
+makes it a class rather than three mistakes: the failure has a stable shape, it survives
+scrutiny of the numbers themselves (each aggregate was *arithmetically correct*), and
+nothing in the pipeline objects.
+
+| # | where | the aggregate | the structure it hid |
+|---|---|---|---|
+| 1 | §3an | E6 delta **+0.0063**, one interval | per-seed **−0.0015 / +0.0049 / +0.0153** — opposite signs, sd 0.0085 **exceeding the mean** |
+| 2 | §3ap(D) | first-1000 vs rest **+0.0157** | scored over **different label spaces** (97 vs 98) — a different estimand, not a different number |
+| 3 | §3au | Jaccard moved **+0.005** | per-pair **+0.058 / −0.050 / +0.007** — opposite signs, **10× the aggregate's size** |
+
+**THE CLASS.** *A mean, pooled statistic or single interval reported without the per-unit
+structure underneath it, where that structure carries opposite signs, unequal magnitudes,
+or differing estimands.*
+
+Why it evades the existing rules: hard rule 2 requires **mean ± std over ≥ 3 seeds**, and
+**all three defects satisfied it.** A standard deviation is itself an aggregate — it reports
+*spread* but not *sign*, so `+0.0063 ± 0.0085` is fully rule-2-compliant and still conceals
+that one seed went the other way. Hard rule 11 forbids silent degradation of a *measurement*;
+this degrades a *report* of a correct measurement. The gap was real.
+
+**THE MITIGATION, REGISTERED:**
+
+> **Any reported aggregate over seeds, pairs, splits or arms must be accompanied by the
+> per-unit table it summarises — in the same artefact AND the same prose.** If the per-unit
+> values differ in sign, the aggregate **may not be stated without that fact adjacent to
+> it.**
+
+**Scope, so it is enforceable rather than aspirational.**
+
+- **"Same artefact"** means the JSON/npz carries the per-unit values, not only the summary.
+  A per-unit table that exists solely in terminal scrollback is §3e instance 9 (printing is
+  not recording); one that exists solely in the artefact is §3au's chance-floor error
+  (computing is not reporting). **Both places, or it does not count.**
+- **"Sign" includes the null.** A per-unit set spanning zero must say so even when every
+  value is nominally positive — §3ap(B)'s escalated-row macro-F1 is 3/3 positive with all
+  three CIs including zero, and is reported that way.
+- **Bootstrap intervals are aggregates too.** A single CI over pooled units hides per-unit
+  structure exactly as a mean does; §3an's row-level p = 0.0756 carried no seed-level
+  information and was reported alongside the 2/3 sign count, not instead of it.
+- **Where n = 1 there is no per-unit table**, and the mitigation is satisfied by saying
+  n = 1 explicitly (E4-A, §3at's host baseline).
+
+**This rule is retroactive as a REPORTING obligation, not as a re-measurement obligation.**
+No number below changes; what changes is whether it may be stated alone. The sweep against
+this rule is §3ax.
+
 ### 3av. RESTATEMENTS adopted for H1, E4, E4b and E6 (2026-09-10)
 
 Adopted after E8 (few-shot does not close the gap), §3an/§3ap (E6's per-seed structure) and
