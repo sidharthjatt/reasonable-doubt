@@ -1389,6 +1389,20 @@ captured.
 | onnxruntime | **1.29.0** | **1.30.0** |
 | code | pre-pin | **pre-pin** |
 
+**CORROBORATION — WHAT IS OBSERVED AND WHAT IS ONLY DECLARED.** Commit 2's arm was set on
+the Kaggle copy, so none of it is attested by this repository. The run log attests part of
+it:
+
+| value | status | evidence |
+|---|---|---|
+| `RESUME_FROM_STEP_AT_LEAST = 17815` | **corroborated** | `restored 1: ['ck_ce10ep_1']`, `=== seed 1 (RESUMING) ===`, `[train] begin at step 17815 of 35630` |
+| resume actually advanced | **corroborated** | same three lines — the chain did not restart from zero |
+| `RUN_STEP_BUDGET = None` | **NOT corroborated** | confirmed only by the run **ending without** `COMMIT STEP BUDGET EXHAUSTED`; the end of the log has not been read |
+
+Until that last line is checked, `budget = None` is the **declared** value, not an observed
+one. It matters: a budget that silently fired would have stopped commit 2 early and left a
+partially trained seed that reports as complete.
+
 **COMMIT 2'S ARM NEVER REACHED THE REPOSITORY.** It was set on the Kaggle copy, so the
 committed file continued to hold commit 1's values. The two disagreed with nothing saying
 so, and a blind re-upload would have retrained **epochs 1–5 again** — ~4 h of quota
@@ -1399,14 +1413,41 @@ before a GPU slot is spent, and `RUN_STEP_BUDGET` / `RESUME_FROM_STEP_AT_LEAST` 
 currently **UNARMED**; seeds 2–3 are armed only after the seed-1 gate (§3ar) is read,
 because arming them earlier pre-commits the spend the gate exists to decide.
 
-**THE QUANTISER MOVED MID-EXPERIMENT.** The install cell pinned only `transformers`, so
-onnxruntime drifted **1.29.0 → 1.30.0 between two halves of one seed.** Training is
-torch-only, so the drift touches only commit 2's **ONNX-export + INT8-quantise tail** —
-but that tail is precisely what the gate reads. §3ar's gate compares **E1b INT8 against
-the host baseline INT8**, and the host baseline was quantised under **1.29.0**
-(`results/tier0_ce_hostB_seed1.json` → `train_env.onnxruntime`). A quantiser version
-change is therefore **a second variable inside a difference registered to isolate
-epochs**.
+**THE QUANTISER MOVED MID-EXPERIMENT, AND IT IS THE ONLY THING THAT DID.** The install
+cell pinned only `transformers`, so onnxruntime drifted **1.29.0 → 1.30.0 between two
+halves of one seed.** Training is torch-only, so the drift touches only commit 2's
+**ONNX-export + INT8-quantise tail** — but that tail is precisely what the gate reads.
+§3ar's gate compares **E1b INT8 against the host baseline INT8**, so a quantiser version
+change is **a second variable inside a difference registered to isolate epochs**.
+
+**Scope of the change, from the Kaggle pip logs — NOT from `train_env`.** This distinction
+is load-bearing: `train_env` recorded `optimum: null` in every run (the reason is below),
+so it could not have established this and is not the evidence here.
+
+| component | host baseline (`rd-tier0-hostb`) | E1b commit 2 | |
+|---|---|---|---|
+| `onnxruntime` | **1.29.0** | **1.30.0** | **MOVED** |
+| `optimum` | 2.1.0 | 2.1.0 | same |
+| `optimum-onnx` | 0.1.0 | 0.1.0 | same |
+| `onnx` | 1.22.0 *(already satisfied)* | 1.22.0 *(already satisfied)* | same |
+| `transformers` | 4.57.6 | 4.57.6 | same |
+| `huggingface-hub` | 0.36.2 | 0.36.2 | same |
+
+> **`onnxruntime` is the only pip-visible change between the two runs.** The host
+> baseline's `ONNX ENV: ort 1.29.0` line, printed at quantise time, confirms the installed
+> version is also the one that ran the quantiser rather than merely the one resolved at
+> install.
+
+"Pip-visible" is the honest bound on that claim. It covers what the install cell reports;
+it does not cover a base-image change beneath those packages, and no run recorded enough
+to rule that out. The whole toolchain is now pinned (`onnxruntime==1.29.0`,
+`optimum==2.1.0`, `optimum-onnx==0.1.0`, `onnx==1.22.0`, `transformers==4.57.6`) and
+asserted in PREFLIGHT from `importlib.metadata`, so the next run's parity is a check
+rather than a reconstruction.
+
+**THE CONFOUND STAYS OPEN.** Same versions everywhere else narrows it to onnxruntime; it
+does **not** establish that 1.29.0 and 1.30.0 produce the same tensors. That is what the
+control/candidate check below decides, and until it runs the gate carries the confound.
 
 **Status: OPEN, and testable rather than argued.** `scripts/verify_quantiser_repro.py`
 re-quantises the retained FP32 ONNX (`onnx_ce10ep_1`, kept as E3's middle arm) and
@@ -1431,8 +1472,9 @@ The bare `except` wrote `null` for optimum every time while the field looked pop
 the quantiser's front end is **unversioned in every artefact on disk**. Version capture now
 goes through `importlib.metadata`, adds `onnx`, and records
 `quantiser_versions_complete`. onnxruntime is pinned to **1.29.0** and asserted in
-PREFLIGHT. **optimum remains unpinned pending recovery of the host baseline's version from
-the Kaggle pip log**; pinning it without that would mean inventing the value.
+PREFLIGHT. **optimum is now pinned at 2.1.0** with `optimum-onnx` at 0.1.0 and `onnx` at 1.22.0,
+recovered from the `rd-tier0-hostb` pip log — the versions were always in the log, just
+never in an artefact. `quantiser_versions_complete` now covers all four.
 
 ### 3bc. DEPLOYMENT CONFIG — canary floor and router operating point (2026-09-11)
 

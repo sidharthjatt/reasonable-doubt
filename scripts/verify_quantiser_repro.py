@@ -2,6 +2,17 @@
 
 TWO PHASES, AND THE FIRST IS A POSITIVE CONTROL. Run them in this order:
 
+THE TWO ENVIRONMENTS. Everything except onnxruntime is IDENTICAL in both, and identical
+to the host baseline's, read off the rd-tier0-hostb Kaggle pip log:
+
+    transformers==4.57.6  optimum==2.1.0  optimum-onnx==0.1.0  onnx==1.22.0
+
+    control env  : onnxruntime==1.30.0   (the version that MADE int8_ce10ep_1)
+    candidate env: onnxruntime==1.29.0   (the host baseline's, and the new pin)
+
+Both are asserted at start-up, so an env that was not actually built to spec refuses
+instead of quietly measuring the wrong pair.
+
     # PHASE 1 — CONTROL. Env pinned to the SAME toolchain that made the reference.
     python scripts/verify_quantiser_repro.py --role control \
         --onnx-fp32 onnx_ce10ep_1 --reference-int8 int8_ce10ep_1 --reference-ort 1.30.0
@@ -104,6 +115,13 @@ def can_load(path: Path) -> tuple[bool, str | None]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
+# Held FIXED in both roles, at the host baseline's versions (rd-tier0-hostb pip log).
+# Only onnxruntime varies by role — that is the whole experiment. Asserting the rest is
+# what makes a difference attributable: if optimum or onnx also moved, a NOT-IDENTICAL
+# would be uninterpretable and the control would (correctly) have failed anyway.
+NON_ORT_PINS = {"optimum": "2.1.0", "optimum-onnx": "0.1.0", "onnx": "1.22.0",
+                "transformers": "4.57.6"}
+
 CONTROL_PATH = Path("results/quantiser_repro_control.json")
 CANDIDATE_PATH = Path("results/quantiser_repro.json")
 
@@ -183,6 +201,27 @@ def main() -> int:
             f"REFUSING: --role {args.role} needs onnxruntime {expected}, but this "
             f"environment has {local_ort}. {why.capitalize()}.\n"
             f"Build the throwaway env for this role and re-run.")
+
+    # Everything OTHER than onnxruntime must match the host baseline in BOTH roles.
+    import importlib.metadata as _md
+    drift = {}
+    for pkg, want in NON_ORT_PINS.items():
+        try:
+            got = _md.version(pkg)
+        except Exception:
+            got = None
+        if got != want:
+            drift[pkg] = (want, got)
+    if drift:
+        raise SystemExit(
+            "REFUSING: this environment does not match the host baseline's toolchain.\n"
+            + "\n".join(f"    {p}: expected {w}, found {g}" for p, (w, g) in drift.items())
+            + "\n\nOnly onnxruntime may differ between the two roles. If anything else "
+              "has moved, a difference found here is not attributable to onnxruntime and "
+              "the control would fail for the wrong reason.\n"
+              "Rebuild the env with: pip install "
+            + " ".join(f'"{p}=={w}"' for p, w in NON_ORT_PINS.items())
+            + f' "onnxruntime=={expected}"')
 
     control = _require_passing_control(identity) if args.role == "candidate" else None
 

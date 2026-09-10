@@ -18,18 +18,26 @@
 # transformers is pinned BELOW 4.58 here, unlike Tier 1: `optimum-onnx` declares
 # `transformers<4.58.0,>=4.36`, and this notebook needs optimum for the ONNX export.
 # Kaggle ships transformers 5.0.0, so this IS a downgrade — check the output.
-# onnxruntime is PINNED to 1.29.0, the version that quantised the HOST BASELINE
-# (results/tier0_ce_hostB_seed1.json -> train_env.onnxruntime). It was previously
-# unpinned, and E1b drifted 1.29.0 (commit 1) -> 1.30.0 (commit 2) between two halves of
-# ONE seed. Training is torch-only so the drift touched only the export/quantise tail --
-# but the gate compares E1b INT8 against the host baseline INT8, so a quantiser change is
-# a SECOND VARIABLE inside a difference that is supposed to isolate epochs.
+# THE WHOLE QUANTISER TOOLCHAIN IS PINNED TO THE HOST BASELINE'S VERSIONS, read off the
+# rd-tier0-hostb Kaggle pip log rather than assumed:
 #
-# optimum is STILL UNPINNED, and that is a stated gap rather than an oversight: pinning
-# it needs a known-good version and none was ever recorded, because train_env() read
-# `optimum.__version__` (which does not exist) and wrote null every time. The version
-# capture is fixed below; once a run records a real optimum version, pin it here too.
-!pip install "transformers==4.57.6" "optimum[onnxruntime]" onnx "onnxruntime==1.29.0" \
+#   Successfully installed huggingface-hub-0.36.2 onnxruntime-1.29.0 optimum-2.1.0 \
+#       optimum-onnx-0.1.0 transformers-4.57.6
+#   Requirement already satisfied: onnx ... (1.22.0)
+#
+# WHY ALL FOUR AND NOT JUST ONNXRUNTIME. The INT8 artefact is produced by
+# `ORTQuantizer` -- optimum's front end over `onnxruntime.quantization` -- and serialised
+# by `onnx`. Any of them can move the bytes. E1b drifted onnxruntime 1.29.0 (commit 1) ->
+# 1.30.0 (commit 2) across two halves of ONE seed because only `transformers` was pinned.
+# Training is torch-only so the drift touched only the export/quantise tail -- but the
+# gate compares E1b INT8 against the HOST BASELINE INT8 (3ar/3as), so a toolchain change
+# is a SECOND VARIABLE inside a difference registered to isolate epochs.
+#
+# `onnx` is pinned even though the base image already satisfies it: "already satisfied"
+# is a property of today's image, not a guarantee, and an image refresh would move it
+# silently.
+!pip install "transformers==4.57.6" "optimum[onnxruntime]==2.1.0" "optimum-onnx==0.1.0" \
+    "onnx==1.22.0" "onnxruntime==1.29.0" \
     "datasets>=2.19" sentencepiece protobuf scikit-learn
 !pip check || echo "NOTE: pip check reported conflicts above — read them before continuing"
 print("\n" + "=" * 70)
@@ -125,29 +133,58 @@ ARMS = {
     # arm -> (RUN_STEP_BUDGET, RESUME_FROM_STEP_AT_LEAST, description)
     "e1b_commit1": (17815, 0,
                     "E1b seed 1, steps 1-17,815 (epochs 1-5). RAN 2026-09-10."),
+    # CORROBORATED BY THE KAGGLE LOG, not by this repo -- commit 2's arm was set on the
+    # Kaggle copy and never came back here (3bd). The log shows "restored 1:
+    # ['ck_ce10ep_1']", "=== seed 1 (RESUMING) ===" and "[train] begin at step 17815 of
+    # 35630", which corroborates RESUME_FROM_STEP_AT_LEAST=17815 and a real resume.
+    # RUN_STEP_BUDGET=None is NOT yet corroborated: it is confirmed only by the run
+    # ENDING WITHOUT "COMMIT STEP BUDGET EXHAUSTED", and the end of the log has not been
+    # read. Until then it is the declared value, not an observed one.
     "e1b_commit2": (None, 17815,
-                    "E1b seed 1, steps 17,815-35,630 (epochs 6-10). RAN 2026-09-11, "
-                    "on PRE-PIN code: onnxruntime 1.30.0, unpinned."),
+                    "E1b seed 1, steps 17,815-35,630 (epochs 6-10). RAN 2026-09-11 on "
+                    "PRE-PIN code under onnxruntime 1.30.0. Resume corroborated by log; "
+                    "budget=None NOT yet corroborated (needs the run's end)."),
     "host_baseline": (None, 0,
                       "E1's own 3-epoch config on this host (3ak step 1). RAN 2026-09-10 "
                       "under onnxruntime 1.29.0."),
 }
 
-# ONNXRUNTIME IS ASSERTED, NOT PRINTED. The install cell pins it, but a pin that did not
-# take looks exactly like one that did -- and this project has already shipped a preflight
-# that "passed" while running versions nothing introspected. The gate compares INT8
-# artefacts across runs, so the quantiser must be the SAME version in every one of them.
-_ORT_PINNED = "1.29.0"     # the host baseline's quantiser; see the install cell
-import onnxruntime as _ort_pf
-if _ort_pf.__version__ != _ORT_PINNED:
+# THE QUANTISER TOOLCHAIN IS ASSERTED, NOT PRINTED. The install cell pins it, but a pin
+# that did not take looks exactly like one that did -- and this notebook has already
+# shipped a PREFLIGHT that "passed" while running versions nothing introspected. The gate
+# compares INT8 artefacts ACROSS RUNS (E1b INT8 vs host baseline INT8, 3ar/3as), so every
+# component that can move the quantised bytes must be identical in every one of them.
+#
+# Versions are read from importlib.metadata -- the INSTALLED DISTRIBUTION -- not from a
+# module attribute. `optimum.__version__` does not exist and `optimum.onnx.__version__`
+# is None, so an attribute check would have silently skipped exactly the two packages
+# whose drift this guard exists to catch.
+_PINNED_TOOLCHAIN = {          # from the rd-tier0-hostb pip log; see the install cell
+    "onnxruntime": "1.29.0",
+    "optimum": "2.1.0",
+    "optimum-onnx": "0.1.0",
+    "onnx": "1.22.0",
+    "transformers": "4.57.6",
+}
+import importlib.metadata as _md_pf
+_drift = {}
+for _pkg, _want in _PINNED_TOOLCHAIN.items():
+    try:
+        _got = _md_pf.version(_pkg)
+    except Exception:
+        _got = None            # not installed at all -- reported, never defaulted
+    if _got != _want:
+        _drift[_pkg] = (_want, _got)
+if _drift:
     raise RuntimeError(
-        f"onnxruntime is {_ort_pf.__version__}, expected {_ORT_PINNED}. The pin did not "
-        f"take -- almost always because the kernel was not restarted after CELL 1. "
-        f"REFUSING to continue: INT8 artefacts quantised by different onnxruntime "
-        f"versions are not comparable, and the E1b gate is exactly such a comparison "
-        f"(E1b INT8 vs host baseline INT8, PREREGISTRATION 3ar/3as). Re-run CELL 1 and "
-        f"RESTART THE KERNEL.")
-print(f"  PREFLIGHT: onnxruntime {_ort_pf.__version__} matches the pinned quantiser")
+        "QUANTISER TOOLCHAIN DRIFT — REFUSING TO RUN.\n"
+        + "\n".join(f"    {p}: expected {w}, found {g}" for p, (w, g) in _drift.items())
+        + "\n\nThe pins did not take -- almost always because the kernel was not "
+          "restarted after CELL 1.\nINT8 artefacts produced by different toolchains are "
+          "not comparable, and the E1b gate is exactly such a comparison (3ar/3as). "
+          "Re-run CELL 1 and RESTART THE KERNEL.")
+print("  PREFLIGHT: quantiser toolchain matches the host baseline — "
+      + ", ".join(f"{p} {v}" for p, v in _PINNED_TOOLCHAIN.items()))
 
 if RUN_ARM is None:
     raise RuntimeError(
@@ -513,13 +550,14 @@ def train_env():
         except Exception:
             return None
 
-    for k in ("numpy", "datasets", "tokenizers", "optimum", "onnxruntime", "onnx"):
+    for k in ("numpy", "datasets", "tokenizers", "optimum", "optimum-onnx",
+              "onnxruntime", "onnx"):
         e[k] = _version_of(k)
     # The quantiser is optimum-over-onnxruntime, so BOTH must be present for an INT8
     # artefact to be attributable. A null here is not a cosmetic gap: it is the reason
     # the E1b/host-baseline comparison could not be cleared from the artefacts alone.
-    e["quantiser_versions_complete"] = (
-        e["onnxruntime"] is not None and e["optimum"] is not None)
+    e["quantiser_versions_complete"] = all(
+        e[k] is not None for k in ("onnxruntime", "optimum", "optimum-onnx", "onnx"))
     print("  TRAIN ENV: " + " | ".join(
         f"{k}={e[k]}" for k in ("gpu_name", "gpu_capability", "torch", "cuda_runtime",
                                 "cudnn", "driver", "tf32_matmul")))
