@@ -522,9 +522,54 @@ class FlushingLog(TrainerCallback):
 #   2. E2's second arm (LOSS_ARM = "sqrt_inv_freq") is a SEPARATE commit run after C3
 #      reports, and the CE results must be carried into it so one final output holds
 #      every arm.
-# There is deliberately NO step budget here — see 3y. Tier 0 is 3.0-6.6h for all three
-# seeds against a 9h design cap, so a budget would be machinery that never fires.
+# STEP BUDGET — ADDED 2026-09-10 (3bb). 3y decided against one, on the premise that
+# "Tier 0 is 3.0-6.6h for all three seeds against a 9h design cap, so a budget would be
+# machinery that never fires." THAT PREMISE IS FALSIFIED for E1b: 3ba measured the effective
+# rate at 1.248 it/s, so E1b's 35,630 steps are ~7.9h of training alone and ~8.1-8.6h with
+# its 10 epoch-boundary evals — ONE SEED, against a 9h hard cap. The budget now fires.
+#
+# RUN_STEP_BUDGET: steps to train IN THIS COMMIT, then stop and checkpoint cleanly. None
+#   (the default) means "no budget", which is E1's behaviour and leaves 3y's decision intact
+#   for the 3-epoch arms.
+# RESUME_FROM_STEP_AT_LEAST: the global_step the previous commit reported. 0 on the first
+#   commit. A chain that silently fails to advance looks exactly like a healthy resume —
+#   the failure class this project keeps paying for (3s) — so it is asserted, not trusted.
+RUN_STEP_BUDGET = None
+RESUME_FROM_STEP_AT_LEAST = 0
 _IN_NB = Path("/kaggle/input/notebooks")
+class CommitStepBudget(TrainerCallback):
+    """Stop after RUN_STEP_BUDGET steps IN THIS COMMIT, saving at the stop point.
+
+    Ported from kaggle_tier1.py (3s) with its reasoning intact, because the reasoning is
+    what makes it correct and a re-derivation would repeat the mistakes it encodes.
+
+    NOT `max_steps`. max_steps becomes num_training_steps, which is what
+    Trainer.create_scheduler builds the LR schedule from — so max_steps=17815 would decay
+    the learning rate to zero over 17,815 steps instead of the true 35,630. That is a
+    DIFFERENT LR TRAJECTORY, i.e. a different experiment, reported by nothing. The same
+    argument forbids setting EPOCHS=5 for a first commit: num_train_epochs drives the same
+    scheduler. EPOCHS stays 10 in EVERY commit of the chain; only this callback stops early.
+
+    The counter is CLASS-level and therefore shared across seeds — a per-seed budget would
+    hand each new seed a fresh full budget, so one commit could train N x RUN_STEP_BUDGET
+    and hit the very cap bounded commits exist to avoid, silently.
+
+    should_save is set alongside should_training_stop so the stop point is always
+    checkpointed, rather than losing back to the last save_strategy boundary (here: an
+    EPOCH, i.e. up to 3,563 steps / ~47 min at the measured rate)."""
+    used = 0        # steps consumed by THIS COMMIT, across every seed it touches
+
+    def on_step_end(self, args, state, control, **kw):
+        CommitStepBudget.used += 1
+        if CommitStepBudget.used >= RUN_STEP_BUDGET:
+            control.should_save = True
+            control.should_training_stop = True
+        return control
+
+    @classmethod
+    def exhausted(cls): return cls.used >= RUN_STEP_BUDGET
+
+
 _RESTORE_GLOBS = ["ck_*", "fp32_*", "int8_*", "onnx_*",
                   "tier0_*_seed*.json", "logits_*_seed*.npz", "int8_logits_*_seed*.npz"]
 _attached = sorted(d for d in _IN_NB.glob("*/*") if d.is_dir()) if _IN_NB.exists() else []
@@ -621,9 +666,26 @@ for seed in SEEDS:
         data_collator=DataCollatorWithPadding(tok), compute_metrics=metrics)
     tr.add_callback(FlushingLog())
 
+    if RUN_STEP_BUDGET is not None:
+        tr.add_callback(CommitStepBudget())
+
     if not skip_training:
         _HB["phase"] = f"seed {seed}: trainer.train() entered"
         tr.train(resume_from_checkpoint=resume)
+        _reached = tr.state.global_step
+        if RESUME_FROM_STEP_AT_LEAST and _reached <= RESUME_FROM_STEP_AT_LEAST:
+            raise RuntimeError(
+                f"seed {seed}: resumed at or below the previous commit's reported step "
+                f"({_reached} <= {RESUME_FROM_STEP_AT_LEAST}). The chain is NOT advancing, "
+                f"which is indistinguishable from a healthy resume in the logs. Refusing "
+                f"to continue and write an artefact that looks trained.")
+        if RUN_STEP_BUDGET is not None and CommitStepBudget.exhausted():
+            print(f"\n=== COMMIT STEP BUDGET EXHAUSTED at global_step {_reached} ===")
+            print(f"  Set RESUME_FROM_STEP_AT_LEAST = {_reached} in the NEXT commit,")
+            print(f"  attach THIS commit's output as a notebook input, and re-run.")
+            print(f"  EPOCHS stays {EPOCHS} — it drives the LR schedule and must not move.")
+            _HB["phase"] = f"seed {seed}: budget exhausted at {_reached}, exiting cleanly"
+            raise SystemExit(0)
         tr.save_model(str(fp32)); tok.save_pretrained(str(fp32))
         shutil.rmtree(ckpt_dir, ignore_errors=True)   # fp32 saved — never retrain
 

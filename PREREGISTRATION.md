@@ -304,7 +304,7 @@ this does not change any conclusion, but the number must be what it says it is.
   trained?* — and both results appear, with this distinction stated wherever either is
   quoted.
 - **Staged execution, and the stopping rule is registered now.** **Seed 1 runs alone
-  first** (~3.3–7.3 h, PER SEED). Seeds 2 and 3 are scheduled **only if seed 1 clears the
+  first** (~~3.3–7.3 h~~ → **~8.1–8.6 h**, PER SEED; §3ba). Seeds 2 and 3 are scheduled **only if seed 1 clears the
   gate registered in §3ar** — "materially" is no longer undefined; §3ar partitions the
   outcome space with no unassigned region. If it does not, **undertraining is not the cause**, E1b is
   reported as not-accepted on one seed with that reasoning, and no further quota is spent
@@ -1373,6 +1373,71 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bb. E1b runs as TWO BOUNDED COMMITS — and §3y's step-budget decision is reversed (2026-09-10)
+
+**Does a mid-run split need registering? The split itself, NO. The mechanism, YES — and it
+is a bigger change than the split.**
+
+- **The split changes no registered parameter.** Same seed, same `EPOCHS`, same batch, same
+  lr, same `max_length`, same manifests, same selection metric. Splitting one training run
+  into two bounded ones alters neither the data order, the batch composition, the optimizer
+  trajectory nor the number of steps — the checkpoint carries all of it. §3s established
+  exactly this for Tier 1. **No new accept rule; §3ar's gate is untouched.**
+- **But `kaggle_tier0.py` had NO mechanism to do it**, and §3y decided that deliberately:
+  *"Tier 0 is 3.0-6.6h for all three seeds against a 9h design cap, so a budget would be
+  machinery that never fires."* **That premise is now false.** §3ba measures E1b seed 1
+  ALONE at ~8.1–8.6 h against a 9 h hard cap. §3y's decision is **reversed for E1b**, and
+  the reversal is recorded here rather than made silently — a change to the training path is
+  exactly what hard rule 6 exists to surface.
+
+**THE TRAP THE OBVIOUS SPLIT WALKS INTO, and it is why `EPOCHS` must not move.** The
+intuitive way to run "epochs 1–5 then 6–10" is to set `EPOCHS = 5` for commit 1.
+**That would silently change the experiment.** `num_train_epochs` is what
+`Trainer.create_scheduler` builds `num_training_steps` from, so `EPOCHS = 5` decays the
+learning rate to zero over 17,815 steps instead of the true 35,630 — **a different LR
+trajectory, reported by nothing.** The same argument forbids `max_steps`. §3s recorded this
+for Tier 1 and verified on a CPU harness that the callback reproduces the uninterrupted
+schedule exactly while `max_steps` does not.
+
+> **`EPOCHS` stays 10 in EVERY commit of the chain.** Only `CommitStepBudget` stops early.
+
+**EPOCHS = 10 CONFIRMED, and it is the hypothesis — not a cost knob.** 10 epochs = **35,630
+steps**, which clears LexGLUE's ~30,000-step minimum; **6 epochs would be 21,378 and would
+not**. E1b exists to test whether E1's shortfall is undertraining (§E1b: *one variable*), so
+trading epochs for wall clock would answer a different question and is refused.
+
+**`CommitStepBudget` ported from `kaggle_tier1.py`** with its reasoning intact, because the
+reasoning is what makes it correct: class-level counter (a per-seed budget hands each new
+seed a fresh full budget), and `should_save` set alongside `should_training_stop` so the stop
+point is checkpointed rather than losing back to the last **epoch** boundary — which here is
+3,563 steps, ~47 min at the measured rate. `RUN_STEP_BUDGET = None` is the default and a
+**no-op**, so E1 and the 3-epoch arms keep exactly the behaviour §3y chose for them.
+
+**A resume that does not advance is asserted, not trusted.** `RESUME_FROM_STEP_AT_LEAST`
+raises if the chain resumes at or below the step the previous commit reported. A stalled
+chain looks identical to a healthy resume in the logs, and that is the failure class this
+project keeps paying for (§3s).
+
+**THE PLAN.**
+
+| | commit 1 | commit 2 |
+|---|---|---|
+| `E1B` | `True` | `True` |
+| `HOST_BASELINE` | `False` | `False` |
+| `EPOCHS` (derived) | **10** | **10** |
+| `RUN_STEP_BUDGET` | **17815** | **None** |
+| `RESUME_FROM_STEP_AT_LEAST` | **0** | **the step commit 1 prints** |
+| notebook input attached | **none** | **commit 1's output** |
+| trains | steps 1 → 17,815 (epochs 1–5) | 17,815 → 35,630 (epochs 6–10) |
+| estimated | **~4.0–4.3 h** | **~4.0–4.6 h** (carries the eval/export/quantise tail) |
+
+Both are **less than half the 9 h cap**, so the cap risk goes to zero at no extra GPU cost —
+the same 35,630 steps are trained either way. The attach path is confirmed working: the host
+baseline logged *"no notebook input attached → first commit for this arm, starting fresh."*
+
+**Quota:** 27.6 h remaining, E1b seed 1 ≈ 8.1–8.6 h across the two commits, leaving ~19 h —
+enough for seeds 2–3 **only if §3ar's gate opens**, which is what the gate is for.
+
 ### 3ba. E1b RE-COST from measured rate — the registered estimate was too optimistic (2026-09-10)
 
 **The wall clock was 2.38 h against a registered 1.0–2.2 h**, with throughput degrading
@@ -1912,7 +1977,7 @@ disagreement stands unchanged** — that is about the *cause* of the gap between
 and is unaffected by where 0.24 sits relative to chance.
 
 
-### 3at. HOST BASELINE — interpretation rule, registered BEFORE the 1.0–2.2 h is spent (2026-09-10)
+### 3at. HOST BASELINE — interpretation rule, registered BEFORE the run is spent (2026-09-10)
 
 The host-baseline run (§3ak step 1: E1's config, `EPOCHS = 3`, `RUN_TAG = "ce_hostB"`,
 seed 1, new host) had **no registered interpretation rule** — the same hard-rule-6 gap that
@@ -1956,7 +2021,7 @@ between host baseline (1 seed) and E1b seed 1 (1 seed) below 2σ is uninterpreta
 same reason `d` is. It becomes interpretable only when E1b has its 3 seeds — and E1b's
 **accept rule is absolute** (≥ 0.80 on the 3-seed mean) and never became a comparison.
 
-**Cost of being wrong about this rule: 1.0–2.2 h.** Registered before spending it.
+**Cost of being wrong about this rule: ~~1.0–2.2 h~~ → 2.38 h MEASURED (§3ba).** Registered before spending it.
 
 ### 3as. E1b's execution loop: Kaggle trains FP32, arm64 scores INT8 (2026-09-10)
 
@@ -1991,7 +2056,7 @@ The §3ak host-baseline run (`EPOCHS = 3`, tag `ce_hostB`) follows the identical
 
 **Option A is the registered plan** — host baseline seed 1 + E1b seed 1, gate, then seeds
 2–3: gate cost **4.3–9.5 h**, full path **10.9–24.1 h** against the 30 h quota. §3ak's
-3.3–7.3 h is **per seed**, not a 3-seed total.
+~~3.3–7.3 h~~ is **per seed**, not a 3-seed total — and is **superseded by §3ba's measured ~8.1–8.6 h/seed**.
 
 **E7 is NOT scheduled.** It is a latency ablation, and E1b tests the number the whole report
 rests on. E7 holds a **conditional slot** if quota survives Option A. It is a **3-seed
@@ -2270,9 +2335,9 @@ of which are comparisons to E1.
    estimate was low and E1b's is re-costed from the measured rate. **ITS PURPOSE, WHICH IS EASY TO LOSE:** it
    supplies a **3-epoch number on a RECORDED host**, so that E1b (10 ep) vs host baseline
    (3 ep) is a **clean one-variable epochs comparison with both environments persisted**.
-   That — not the comparison back to E1 — is the scientific reason to spend the 1.0–2.2 h.
+   That — not the comparison back to E1 — is the scientific reason to spend the run (~~1.0–2.2 h~~ → **2.38 h measured**).
    Its interpretation rule is registered in **§3at**.
-2. Run **E1b seed 1** on the same host. Cost **3.3–7.3 h**.
+2. Run **E1b seed 1** on the same host. ~~Cost **3.3–7.3 h**~~ → **~8.1–8.6 h (§3ba, measured basis)**, which no longer fits one commit; see §3bb.
 3. The gate becomes **within-host**: does 10 epochs beat 3 epochs *on this host*? That is
    the one-variable question E1b was designed to ask, and it is answered without any
    cross-host term.
@@ -2284,7 +2349,7 @@ of which are comparisons to E1.
    difference here is detectable but NOT attributable**, because E1's environment was never
    recorded — see §3at.
 
-**The cost of the host change is therefore +1.0–2.2 h, roughly +30–45% on E1b's seed-1
+**The cost of the host change is therefore +2.38 h MEASURED (~~+1.0–2.2 h~~), roughly +28% on E1b's seed-1
 gate.** That is the price of keeping the comparison one-variable, and it is cheaper than
 any analysis that tries to reason across hosts after the fact.
 
@@ -3027,7 +3092,12 @@ Tokenised all 60,000 LEDGAR train rows with `microsoft/deberta-v3-base`:
 
 Plus per seed ≈ 2 min eval (3×3,000 selection + 3,000 fp32 test on GPU), 3–6 min INT8 on
 x86 CPU at batch 1, and 12 s for the ONNX export and arm64 quantise (measured, §3
-probe). **1.0–2.2 h per seed, 3.0–6.6 h for all three**, against a 9 h design cap.
+probe). ~~**1.0–2.2 h per seed, 3.0–6.6 h for all three**~~, against a 9 h design cap.
+
+> **⚠ SUPERSEDED 2026-09-10 (§3ba/§3bb).** Measured: **2.38 h** for a 3-epoch seed, and
+> **~8.1–8.6 h** for E1b's 10-epoch seed. **This entry's step-budget decision rested on
+> these numbers and is reversed for E1b in §3bb** — the budget it called "machinery that
+> never fires" now fires.
 
 **Decision: NO step budget for Tier 0.** It fits in one commit at both ends of the
 estimate, so a budget would be machinery that never fires — and untested machinery on a
