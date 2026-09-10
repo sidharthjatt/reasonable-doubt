@@ -175,11 +175,20 @@ def main() -> int:
             acc = [byseed[s][i].accuracy for s in SEEDS]
             mf1 = [byseed[s][i].macro_f1 for s in SEEDS]
             usd = [byseed[s][i].usd_per_1k for s in SEEDS]
+            # PER-SEED ARRAYS ARE CARRIED, NOT DISCARDED (PREREGISTRATION 3aw). A mean
+            # and an sd report spread but not SIGN: 3an's +0.0063 +/- 0.0085 was fully
+            # hard-rule-2 compliant and still concealed that one seed went the other way.
+            # This is the headline deliverable, so it aggregates 3 seeds at 51 targets and
+            # would hide that structure 51 times over.
             rows.append({"escalation_mean": st.mean(esc), "escalation_sd": st.stdev(esc),
                          "macro_f1_mean": st.mean(mf1), "macro_f1_sd": st.stdev(mf1),
                          "accuracy_mean": st.mean(acc), "accuracy_sd": st.stdev(acc),
                          "usd_per_1k_mean": st.mean(usd), "usd_per_1k_sd": st.stdev(usd),
-                         "threshold": byseed[SEEDS[0]][i].threshold})
+                         "threshold": byseed[SEEDS[0]][i].threshold,
+                         "per_seed": {"seeds": list(SEEDS), "escalation_rate": esc,
+                                      "macro_f1": mf1, "accuracy": acc,
+                                      "usd_per_1k": usd,
+                                      "threshold": [byseed[s][i].threshold for s in SEEDS]}})
         agg[case] = rows
 
     from src.eval.pareto import CascadePoint
@@ -190,9 +199,52 @@ def main() -> int:
         pts = [CascadePoint(escalation_rate=r["escalation_mean"], threshold=r["threshold"],
                             accuracy=r["macro_f1_mean"], macro_f1=r["macro_f1_mean"],
                             usd_per_1k=r["usd_per_1k_mean"], n_escalated=0) for r in rows]
-        fronts[case] = [{"escalation_rate": p.escalation_rate, "macro_f1": p.macro_f1,
-                         "usd_per_1k": p.usd_per_1k, "threshold": p.threshold}
-                        for p in pareto_frontier(pts)]
+        # pareto[*].macro_f1 previously carried NO sd and no per-seed values at all --
+        # the most-cited numbers in the whole artefact, reported barest. Both are attached
+        # by looking the point back up in `rows` on its threshold.
+        by_thr = {r["threshold"]: r for r in rows}
+        fronts[case] = []
+        for p in pareto_frontier(pts):
+            r = by_thr[p.threshold]
+            fronts[case].append({
+                "escalation_rate": p.escalation_rate, "macro_f1": p.macro_f1,
+                "macro_f1_sd": r["macro_f1_sd"],
+                "accuracy_mean": r["accuracy_mean"], "accuracy_sd": r["accuracy_sd"],
+                "usd_per_1k": p.usd_per_1k, "threshold": p.threshold,
+                "per_seed": r["per_seed"],
+                "macro_f1_sign_consistency": (
+                    f'{sum(1 for v in r["per_seed"]["macro_f1"] if v > rows[0]["macro_f1_mean"])}'
+                    f'/{len(SEEDS)} above the no-escalation point'),
+            })
+
+    # ---- EXACT-REPRODUCTION GUARD ----------------------------------------------------
+    # This regeneration exists to ADD per-seed structure, not to change a number. A
+    # regeneration that silently moves the headline is worse than the missing table it
+    # was meant to fix, so every previously reported value must reproduce BIT-EXACTLY.
+    prior_path = a.out_json
+    if prior_path.exists():
+        prior = json.loads(prior_path.read_text())
+        drift = []
+        for case, rows_new in agg.items():
+            for i, (o, nrow) in enumerate(zip(prior.get("curves", {}).get(case, []), rows_new)):
+                for k in ("escalation_mean", "escalation_sd", "macro_f1_mean",
+                          "macro_f1_sd", "accuracy_mean", "accuracy_sd",
+                          "usd_per_1k_mean", "usd_per_1k_sd", "threshold"):
+                    if k in o and o[k] != nrow[k]:
+                        drift.append(f"curves[{case}][{i}].{k}: {o[k]!r} -> {nrow[k]!r}")
+        for case, front_new in fronts.items():
+            for i, (o, nrow) in enumerate(zip(prior.get("pareto", {}).get(case, []), front_new)):
+                for k in ("escalation_rate", "macro_f1", "usd_per_1k", "threshold"):
+                    if k in o and o[k] != nrow[k]:
+                        drift.append(f"pareto[{case}][{i}].{k}: {o[k]!r} -> {nrow[k]!r}")
+        if drift:
+            raise SystemExit(
+                "REFUSING TO WRITE: regenerating the frontier CHANGED "
+                f"{len(drift)} previously reported value(s). This run was supposed to add "
+                "per-seed structure and nothing else.\n  "
+                + "\n  ".join(drift[:20]))
+        print(f"  exact-reproduction guard: every previously reported value in "
+              f"{prior_path.name} reproduced bit-exactly")
 
     payload = {
         "experiment": "E6 (cost axis only)",
