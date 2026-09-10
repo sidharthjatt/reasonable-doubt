@@ -1296,11 +1296,22 @@ notebook is invalid and must not be recorded.
 | # | where | action |
 |---|---|---|
 | 1 | Kaggle | Train FP32, `EPOCHS = 10`, arm tag **`ce10ep`** (E1b's collision guard). `train_env()` **PERSISTED** into the seed JSON *and* the npz — §3e instance 9: printing is not recording |
-| 2 | Kaggle | **Do NOT compute or write any INT8 number.** Save `fp32_ce10ep_1/` as notebook output |
+| 2 | Kaggle | The INT8 figure computed there is the **E3 discriminator's diagnostic ONLY** and may never be the gate's input — see the correction below. Save `fp32_ce10ep_1/` as notebook output |
 | 3 | **manual** | **DOWNLOAD** `fp32_ce10ep_1/` → `~/Downloads/tier0_e1b/`. Verify `model.safetensors` ≈ 738 MB, plus `config.json`, `spm.model`, `tokenizer.json`, `training_args.bin`. **Nothing downstream runs until this completes** |
 | 4 | local arm64 | Export ONNX + dynamic quantise → `models/int8_ce10ep_1/` |
 | 5 | local arm64 | Score `test_3000` via `scripts/score_int8_local.py` |
 | 6 | local | Evaluate §3ar's gate **on step 5's number only** |
+
+**CORRECTION to step 2, made before the run rather than after.** This entry first read
+*"Do NOT compute or write any INT8 number"* on Kaggle. That would have **deleted working
+instrumentation**: `kaggle_tier0.py` computes INT8 there deliberately, as **E3's
+three-arm discriminator** (torch-FP32 → ONNX-FP32 isolates the export; ONNX-FP32 → INT8
+isolates the quantised kernel), which is how the Xeon INT8 collapse was localised to a
+non-VNNI kernel rather than to the serving path. The code already labels it diagnostic and
+already says the number must be re-scored on arm64 before being believed either way. **The
+rule is therefore about which number the GATE reads, not about what may be computed:**
+Kaggle's INT8 figure is a diagnostic, the gate reads step 5's arm64 figure, and no INT8
+number produced on a non-VNNI host may be reported as an accuracy.
 
 The §3ak host-baseline run (`EPOCHS = 3`, tag `ce_hostB`) follows the identical six steps.
 

@@ -145,12 +145,36 @@ EPOCHS, LR, BS = 3, 2e-5, 16
 #      label would either crash there or, worse, silently select a different loss.
 # E1b's loss is unchanged CE; only the artefact namespace differs.
 E1B = False
+
+# ---- HOST BASELINE (PREREGISTRATION 3ak step 1) --------------------------------------
+# E1's training environment was never recorded (3e instance 9), so E1b on a NEW host would
+# be a two-variable comparison (epochs AND host) reported as one. 3ak's registered fix is
+# to move the comparison onto the new host: run E1's OWN config here (EPOCHS=3, everything
+# else byte-identical), then E1b on the same host, and ask the epochs question WITHIN host.
+# Its result is reported against E1's original as a measured host effect at n=1, explicitly
+# with no variance estimate.
+HOST_BASELINE = False
+
+assert not (E1B and HOST_BASELINE), (
+    "E1B and HOST_BASELINE are different experiments and must not run in the same commit: "
+    "they would share a RUN_TAG namespace decision and the second would overwrite the first")
+
 RUN_TAG = LOSS_ARM
 if E1B:
     EPOCHS, RUN_TAG, SEEDS = 10, f"{LOSS_ARM}10ep", [1]   # seed 1 GATES seeds 2-3 (E1b)
     print(f"E1b MODE: EPOCHS={EPOCHS}, RUN_TAG={RUN_TAG!r}, SEEDS={SEEDS} — "
           f"seed 1 is a GATE, not a result (hard rule 2 needs >=3 seeds)")
-assert (RUN_TAG == LOSS_ARM) or E1B, "RUN_TAG may only diverge from LOSS_ARM under E1B"
+    print("GATE IS ON INT8 (PREREGISTRATION 3ar) AND THIS HOST CANNOT COMPUTE IT: "
+          "E1 seed 1 read INT8 macro-F1 0.0037 here against FP32 0.7636 on a non-VNNI "
+          "Xeon. The INT8 figure below is E3's DIAGNOSTIC only. Download fp32_"
+          f"{RUN_TAG}_1/ and score it on arm64 (3as steps 3-6) before the gate is read.")
+if HOST_BASELINE:
+    EPOCHS, RUN_TAG, SEEDS = 3, f"{LOSS_ARM}_hostB", [1]  # E1's config, this host, n=1
+    print(f"HOST BASELINE MODE: EPOCHS={EPOCHS}, RUN_TAG={RUN_TAG!r}, SEEDS={SEEDS} — "
+          f"E1's config on THIS host. n=1, NO variance estimate; it is a host-effect "
+          f"measurement (3ak step 1), not a replacement for E1.")
+assert (RUN_TAG == LOSS_ARM) or E1B or HOST_BASELINE, (
+    "RUN_TAG may only diverge from LOSS_ARM under E1B or HOST_BASELINE")
 # gradient_accumulation_steps is not set below, so it is the library default of 1 and
 # the effective train batch is BS * 1 * n_gpu. PREREGISTRATION 3t registers E1/E2/E3 at
 # an effective batch of 16 on ONE visible GPU; both halves are asserted, because either
@@ -566,6 +590,7 @@ for seed in SEEDS:
     # the same npz as sel_ and test_ so one file carries every split E5 needs and cannot
     # be paired with logits from a different seed or arm.
     np.savez_compressed(WORK / f"logits_{RUN_TAG}_seed{seed}.npz",
+                        train_env=json.dumps(TRAIN_ENV),
                         sel_logits=sel.predictions, sel_labels=sel.label_ids,
                         test_logits=tst.predictions, test_labels=tst.label_ids,
                         test_3000_indices=np.array(TEST_IDX),
@@ -628,7 +653,11 @@ for seed in SEEDS:
                                    [ds["validation"][i]["text"] for i in DEV_IDX], MAX_LENGTH)
     int8_test3000 = int8_logits.argmax(-1)
     shutil.rmtree(onnx_dir, ignore_errors=True)   # ~740MB, and now MEASURED, not assumed
+    # train_env goes into the NPZ as well as the JSON. 3e instance 9: a fact needed to
+    # interpret a result later must live in the artefact, and the npz is routinely read
+    # (scripts/build_frontier.py, e6_seed_structure.py) without its sibling JSON.
     np.savez_compressed(WORK / f"int8_logits_{RUN_TAG}_seed{seed}.npz",
+                        train_env=json.dumps(TRAIN_ENV),
                         test_3000_logits=int8_logits, test_3000_indices=np.array(TEST_IDX),
                         onnx_fp32_test_3000_logits=onnx_fp32_logits,
                         dev_2000_logits=dev_int8_logits,
