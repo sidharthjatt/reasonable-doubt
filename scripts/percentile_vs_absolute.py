@@ -23,6 +23,8 @@ from src.router.signals import CLOSED_FORM  # noqa: E402
 
 SEEDS, SIGNAL, MODEL = (1, 2, 3), "margin", "claude-sonnet-5"
 J_ABS, TARGET = 0.2370, 0.040555555555555556
+J_ABS_PAIRS = {"1&2": 0.240, "1&3": 0.258, "2&3": 0.213}   # 3an, absolute thresholds
+J_CHANCE = 0.0208   # two 122-row sets drawn at random from 3,000
 
 
 def main() -> int:
@@ -88,9 +90,18 @@ def main() -> int:
     by_k = Counter(mult.values())
     f = (j_mean - J_ABS) / (1 - J_ABS)
 
-    print(f"\n  pairwise Jaccard: " + ", ".join(f"{k_}={v:.3f}" for k_, v in jac.items()))
-    print(f"  mean J_pct = {j_mean:.4f}   (absolute-threshold baseline {J_ABS:.4f}, "
-          f"chance 0.0208)")
+    # PER-PAIR, not just the mean. The mean is stable while the pairs are not, and an
+    # aggregate that hides opposite-sign movement is the defect this project keeps
+    # rediscovering (3an; 3ap D). j_chance is PRINTED, not left in the JSON: a floor that
+    # exists only in an artefact is 3e instance 9's shape.
+    print(f"\n  {'pair':<8}{'absolute':>10}{'percentile':>12}{'move':>9}")
+    for k_, v in jac.items():
+        print(f"  {k_:<8}{J_ABS_PAIRS[k_]:>10.3f}{v:>12.3f}{v - J_ABS_PAIRS[k_]:>+9.3f}")
+    print(f"  {'mean':<8}{J_ABS:>10.4f}{j_mean:>12.4f}{j_mean - J_ABS:>+9.4f}")
+    print(f"  {'chance':<8}{J_CHANCE:>10.4f}{J_CHANCE:>12.4f}"
+          f"{'':>9}   <- floor for two {per[1]['k']}-row sets from 3000")
+    print(f"\n  observed / chance = {j_mean / J_CHANCE:.1f}x  "
+          f"-> agreement is FAR above chance, and FAR below 1.0")
     print(f"  distinct rows {len(union)}  |  by 1 seed: {by_k[1]}, 2: {by_k[2]}, "
           f"3: {by_k[3]} ({by_k[3]/len(union):.1%})")
     print(f"  f = ({j_mean:.4f} - {J_ABS:.4f}) / (1 - {J_ABS:.4f}) = {f:+.4f}")
@@ -110,7 +121,9 @@ def main() -> int:
     a.out_json.write_text(json.dumps({
         "experiment": "3au", "cost_usd": 0.0, "selection": "rank-based top 4.056%",
         "per_seed": per, "pairwise_jaccard": jac, "j_pct_mean": j_mean,
-        "j_abs_baseline": J_ABS, "j_chance": 0.0208, "fraction_closed": f,
+        "j_abs_baseline": J_ABS, "j_chance": J_CHANCE, "j_abs_pairs": J_ABS_PAIRS,
+        "observed_over_chance": j_mean / J_CHANCE,
+        "per_pair_move": {k_: v - J_ABS_PAIRS[k_] for k_, v in jac.items()}, "fraction_closed": f,
         "distinct_rows": len(union),
         "by_n_seeds": {str(k_): v for k_, v in sorted(by_k.items())},
         "delta_mean": float(d.mean()), "delta_sd": float(d.std(ddof=1)),

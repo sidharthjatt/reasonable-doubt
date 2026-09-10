@@ -1309,6 +1309,10 @@ overlap, distinct rows covered, and the per-seed macro-F1 delta under that selec
 | J under **absolute** thresholds (§3an), mean of the three pairs | **0.2370** |
 | J under **chance** — two 122-row sets drawn at random from 3,000 | **0.0208** |
 
+**The chance floor is REPORTED, not merely computed.** It is printed by
+`scripts/percentile_vs_absolute.py` and appears in the result table below, because a floor
+that exists only inside an artefact cannot discipline the prose that cites it.
+
 So the absolute-threshold sets already overlap ~11× chance; the question is how much of the
 remaining gap to 1.0 is scale rather than ranking.
 
@@ -1346,12 +1350,23 @@ measurement could not see.
 Mean delta **+0.0065**, sd 0.0086, **sign-consistency 2/3** — materially identical to the
 absolute-threshold result (+0.0063, 2/3), so **nothing about E6's verdict changes.**
 
-| quantity | absolute | **percentile** |
-|---|---|---|
-| pairwise Jaccard | 0.240 / 0.258 / 0.213 | **0.298 / 0.208 / 0.220** |
-| mean J | 0.2370 | **0.2419** |
-| distinct rows | 250 | **249** |
-| in all 3 seeds | 25 (10.0%) | **25 (10.0%)** |
+| pair | absolute | **percentile** | move |
+|---|---|---|---|
+| 1 & 2 | 0.240 | **0.298** | **+0.058** |
+| 1 & 3 | 0.258 | **0.208** | **−0.050** |
+| 2 & 3 | 0.213 | **0.220** | +0.007 |
+| **mean** | 0.2370 | **0.2419** | +0.0049 |
+| **chance floor** | 0.0208 | 0.0208 | — |
+| distinct rows | 250 | **249** (157 + 67 + 25) | |
+| in all 3 seeds | 25 (10.0%) | **25 (10.0%)** | |
+
+**THE MEAN IS STABLE; THE PAIRS ARE NOT.** "Percentile selection moved Jaccard by 0.005" is
+true of **no individual pair**: 1&2 rose 0.058, 1&3 *fell* 0.050, 2&3 barely moved. The
+aggregate concealed **opposite-sign movement ten times its own size.** This is the third
+appearance of the same shape in this project — §3an (E6's aggregate delta hiding per-seed
+−0.0015/+0.0049/+0.0153) and §3ap(D) (a mean concealing which label space it used) are the
+prior two. **The conclusion is unchanged and now rests on the per-pair table rather than the
+mean: no pair approaches high overlap** — the maximum is 0.298, and the worst got worse.
 
 **`f = (0.2419 − 0.2370) / (1 − 0.2370) = +0.0065`** — 0.65% of the achievable improvement.
 The registered band puts this in **WEAK / NULL** with room to spare; it is not a near-miss.
@@ -1375,12 +1390,28 @@ Margin's *scale* is not reproducible across retrainings (§3an) **and neither is
 ranking** — at least not in the tail that matters. Only 10% of escalated rows are common to
 all three seeds under either calibration.
 
-**This does NOT contradict §3aq's "routing works".** Both hold, and the pair is the sharper
-statement: **each seed's router correctly identifies rows that are hard *for that model***
-(0.85 → ~0.37 accuracy on its own selection, AUROC 0.86), **but different retrainings find
-different clauses hard.** Difficulty here is substantially **model-specific rather than
-intrinsic to the clause** — which is a claim about LEDGAR and about fine-tuned encoders,
-not a defect in the router.
+**DIFFICULTY IS PARTLY INTRINSIC AND PARTLY MODEL-SPECIFIC — both, and the chance floor is
+what settles it.** An earlier draft of this entry said difficulty is *"substantially
+model-specific rather than intrinsic to the clause"*, which **contradicts the floor computed
+three lines above it**: the chance Jaccard for two 122-row sets drawn at random from 3,000 is
+**0.0208**, and the observed mean is **0.2419 — 11.6× chance**. Three independently
+retrained routers agreeing on which clauses are hard at 11.6× the random rate is a **large**
+effect, not a residue. Computing a floor and then arguing past it is §3e instance 9's shape
+in the analysis rather than the artefact — so the floor is now **printed by the script and
+carried in this table**, not left in the JSON.
+
+**The supported statement is both at once:**
+
+> Difficulty is **partly intrinsic to the clause** — independently retrained routers select
+> overlapping rows at **11.6× chance** — and **partly model-specific** — that overlap is
+> **0.24, far from 1.0**, with only 10% of escalated rows common to all three seeds.
+
+**This does NOT contradict §3aq's "routing works".** Each seed's router correctly identifies
+rows that are hard *for that model* (0.85 → ~0.37 on its own selection, AUROC 0.86); the
+clauses those sets share are hard for the task, and the ones they do not share are hard for
+that particular retraining. **The claim that the non-overlap is essentially all ranking
+disagreement stands unchanged** — that is about the *cause* of the gap between 0.24 and 1.0,
+and is unaffected by where 0.24 sits relative to chance.
 
 
 ### 3at. HOST BASELINE — interpretation rule, registered BEFORE the 1.0–2.2 h is spent (2026-09-10)
