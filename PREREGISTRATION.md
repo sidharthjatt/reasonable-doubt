@@ -1335,6 +1335,54 @@ measurement could not see.
 
 **Cost: $0.00, no GPU.** All inputs are on disk.
 
+**RESULT (2026-09-10) — WEAK / NULL, and decisively so.**
+
+| seed | k | rate | tier0 | cascade | delta |
+|---|---|---|---|---|---|
+| 1 | 122 | 4.067% | 0.7582 | 0.7568 | −0.0014 |
+| 2 | 122 | 4.067% | 0.7514 | 0.7568 | +0.0054 |
+| 3 | 122 | 4.067% | 0.7471 | 0.7628 | +0.0157 |
+
+Mean delta **+0.0065**, sd 0.0086, **sign-consistency 2/3** — materially identical to the
+absolute-threshold result (+0.0063, 2/3), so **nothing about E6's verdict changes.**
+
+| quantity | absolute | **percentile** |
+|---|---|---|
+| pairwise Jaccard | 0.240 / 0.258 / 0.213 | **0.298 / 0.208 / 0.220** |
+| mean J | 0.2370 | **0.2419** |
+| distinct rows | 250 | **249** |
+| in all 3 seeds | 25 (10.0%) | **25 (10.0%)** |
+
+**`f = (0.2419 − 0.2370) / (1 − 0.2370) = +0.0065`** — 0.65% of the achievable improvement.
+The registered band puts this in **WEAK / NULL** with room to spare; it is not a near-miss.
+
+**What this means, in the wording the band requires.** The 1.49× spread in threshold
+*scale* contributed **almost nothing** to escalation-set instability. Removing it by
+construction moved the mean Jaccard by 0.005 and left the all-three core at exactly 25 rows.
+**The non-overlap is ranking disagreement, essentially all of it.**
+
+**§3aq's deployment recommendation is NARROWED, not withdrawn** — as registered in advance:
+
+> Calibrate at a percentile, **because it holds the escalation RATE — and therefore the API
+> bill — fixed across retrainings.** That is its whole benefit. It does **NOT** stabilise
+> *which clauses* are escalated: under percentile selection the escalation sets still
+> overlap only ~24% pairwise, with 10% common to all three seeds. **Any SLA, audit or
+> reproducibility argument that depends on the same clauses being escalated is
+> unsupported.**
+
+**And the finding about the SIGNAL is the inverse of the one §3au said a high J would give.**
+Margin's *scale* is not reproducible across retrainings (§3an) **and neither is its
+ranking** — at least not in the tail that matters. Only 10% of escalated rows are common to
+all three seeds under either calibration.
+
+**This does NOT contradict §3aq's "routing works".** Both hold, and the pair is the sharper
+statement: **each seed's router correctly identifies rows that are hard *for that model***
+(0.85 → ~0.37 accuracy on its own selection, AUROC 0.86), **but different retrainings find
+different clauses hard.** Difficulty here is substantially **model-specific rather than
+intrinsic to the clause** — which is a claim about LEDGAR and about fine-tuned encoders,
+not a defect in the router.
+
+
 ### 3at. HOST BASELINE — interpretation rule, registered BEFORE the 1.0–2.2 h is spent (2026-09-10)
 
 The host-baseline run (§3ak step 1: E1's config, `EPOCHS = 3`, `RUN_TAG = "ce_hostB"`,
@@ -1462,6 +1510,15 @@ same model on the same data.
 > percentile is invariant to the monotone rescaling that retraining applies to margin, and
 > would hold the escalation rate — and therefore the API bill — fixed across retrainings.
 > This is the one actionable engineering result the E6 work produces.
+
+**⚠ NARROWED BY §3au (2026-09-10), which TESTED this recommendation.** Percentile selection
+was measured, and it stabilises the **RATE ONLY**. Mean escalation-set Jaccard moves from
+0.2370 (absolute) to **0.2419** (percentile) — `f = +0.0065`, 0.65% of the achievable
+improvement — with the all-three-seed core unchanged at 25 rows (10.0%). **The recommendation
+stands for cost predictability and for nothing else:** *which clauses* get escalated is
+**not** stabilised, so any SLA, audit or reproducibility claim resting on set stability is
+unsupported. The paragraph above is retained as written, with this correction attached
+(hard rule 7).
 
 ### 3an. E6's aggregate delta hid its per-seed structure — and the structure changes the claim (2026-09-09)
 
