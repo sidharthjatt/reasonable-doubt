@@ -102,6 +102,37 @@ if not ((4, 36) <= _v < (4, 58)):
         f"exists so that cannot recur.")
 print("  PREFLIGHT: transformers version is inside optimum-onnx's supported range")
 
+# ============================== RUN ARM ======================================
+# EVERY RUN MUST DECLARE ITS ARM, and the default is None so that a blind re-upload
+# FAILS IN PREFLIGHT rather than running something plausible.
+#
+# THIS EXISTS BECAUSE THE FAILURE ALREADY HAPPENED. After E1b commit 1, the committed
+# file was left holding commit 1's values (RUN_STEP_BUDGET=17815,
+# RESUME_FROM_STEP_AT_LEAST=0). Commit 2 was armed on the Kaggle copy and that edit never
+# came back to the repo, so the repo and the run disagreed with nothing saying so — and
+# re-uploading the file as it stood would have silently retrained EPOCHS 1-5 over again,
+# ~4 hours of a shared quota, producing a checkpoint that looks exactly like progress.
+#
+# The budget and resume values are DERIVED from this declaration below rather than set
+# by hand, so the two cannot drift apart again.
+#
+# Seeds 2-3 are deliberately absent: they are armed only AFTER the E1b seed-1 gate is
+# read (3ar). Adding them here before the gate would pre-commit the spend the gate exists
+# to decide.
+RUN_ARM = None      # REQUIRED. See ARMS below for the permitted values.
+
+ARMS = {
+    # arm -> (RUN_STEP_BUDGET, RESUME_FROM_STEP_AT_LEAST, description)
+    "e1b_commit1": (17815, 0,
+                    "E1b seed 1, steps 1-17,815 (epochs 1-5). RAN 2026-09-10."),
+    "e1b_commit2": (None, 17815,
+                    "E1b seed 1, steps 17,815-35,630 (epochs 6-10). RAN 2026-09-11, "
+                    "on PRE-PIN code: onnxruntime 1.30.0, unpinned."),
+    "host_baseline": (None, 0,
+                      "E1's own 3-epoch config on this host (3ak step 1). RAN 2026-09-10 "
+                      "under onnxruntime 1.29.0."),
+}
+
 # ONNXRUNTIME IS ASSERTED, NOT PRINTED. The install cell pins it, but a pin that did not
 # take looks exactly like one that did -- and this project has already shipped a preflight
 # that "passed" while running versions nothing introspected. The gate compares INT8
@@ -117,6 +148,22 @@ if _ort_pf.__version__ != _ORT_PINNED:
         f"(E1b INT8 vs host baseline INT8, PREREGISTRATION 3ar/3as). Re-run CELL 1 and "
         f"RESTART THE KERNEL.")
 print(f"  PREFLIGHT: onnxruntime {_ort_pf.__version__} matches the pinned quantiser")
+
+if RUN_ARM is None:
+    raise RuntimeError(
+        "RUN_ARM is None — THIS FILE IS NOT ARMED.\n"
+        "Refusing to run rather than executing whichever budget/resume pair happens to "
+        "be in the file. A stale arm does not look like an error: it looks like a "
+        "healthy run that retrains work already done (E1b commit 1's values were left "
+        "here after commit 2 was armed elsewhere, and a blind re-upload would have "
+        "silently repeated epochs 1-5 for ~4h).\n"
+        f"Set RUN_ARM to one of: {sorted(ARMS)}\n"
+        + "\n".join(f"    {k}: budget={v[0]} resume_at_least={v[1]} — {v[2]}"
+                     for k, v in sorted(ARMS.items())))
+if RUN_ARM not in ARMS:
+    raise RuntimeError(f"RUN_ARM={RUN_ARM!r} is not a known arm; expected one of "
+                       f"{sorted(ARMS)}")
+print(f"  PREFLIGHT: RUN_ARM={RUN_ARM!r} — {ARMS[RUN_ARM][2]}")
 print("PREFLIGHT — validating signatures before anything expensive")
 _require(TrainingArguments, ["output_dir","seed","num_train_epochs","learning_rate",
     "per_device_train_batch_size","per_device_eval_batch_size","eval_strategy",
@@ -590,8 +637,11 @@ class FlushingLog(TrainerCallback):
 # RESUME_FROM_STEP_AT_LEAST: the global_step the previous commit reported. 0 on the first
 #   commit. A chain that silently fails to advance looks exactly like a healthy resume —
 #   the failure class this project keeps paying for (3s) — so it is asserted, not trusted.
-RUN_STEP_BUDGET = 17815   # COMMIT 1 of 2: epochs 1-5 (3bb). Commit 2 sets this to None.
-RESUME_FROM_STEP_AT_LEAST = 0
+# DERIVED FROM RUN_ARM, never set by hand. Hand-setting these is what let the committed
+# file and the executed run disagree after E1b commit 1.
+RUN_STEP_BUDGET, RESUME_FROM_STEP_AT_LEAST = ARMS[RUN_ARM][0], ARMS[RUN_ARM][1]
+print(f"ARM {RUN_ARM!r}: RUN_STEP_BUDGET={RUN_STEP_BUDGET} "
+      f"RESUME_FROM_STEP_AT_LEAST={RESUME_FROM_STEP_AT_LEAST}")
 _IN_NB = Path("/kaggle/input/notebooks")
 class CommitStepBudget(TrainerCallback):
     """Stop after RUN_STEP_BUDGET steps IN THIS COMMIT, saving at the stop point.

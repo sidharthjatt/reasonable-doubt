@@ -1,32 +1,47 @@
-"""Is an INT8 artefact byte-reproducible under THIS machine's quantiser?
+"""Is an INT8 artefact byte-reproducible under a DIFFERENT quantiser version?
 
-    python scripts/verify_quantiser_repro.py \
-        --onnx-fp32 <onnx_ce10ep_1> --reference-int8 <int8_ce10ep_1>
+TWO PHASES, AND THE FIRST IS A POSITIVE CONTROL. Run them in this order:
 
-WHY. E1b commit 1 installed onnxruntime 1.29.0 and commit 2 installed 1.30.0 — the
-Kaggle install cell pins only `transformers`, so ORT, onnx and optimum all float.
-Training is torch-only, so the drift touches ONLY commit 2's ONNX-export + INT8-quantise
-tail. That tail is exactly what the gate reads: the gate compares E1b INT8 against the
-HOST BASELINE INT8, and the host baseline was quantised under ORT 1.29.0
-(results/tier0_ce_hostB_seed1.json -> train_env.onnxruntime). A quantiser version change
-is therefore a SECOND VARIABLE inside a difference that is supposed to isolate epochs.
+    # PHASE 1 — CONTROL. Env pinned to the SAME toolchain that made the reference.
+    python scripts/verify_quantiser_repro.py --role control \
+        --onnx-fp32 onnx_ce10ep_1 --reference-int8 int8_ce10ep_1 --reference-ort 1.30.0
 
-WHAT THIS ANSWERS.
-  1. Do the reference artefact's quantised tensors match what this machine's quantiser
-     produces from the same FP32 ONNX? Byte-for-byte, per initializer.
-  2. Can this machine's onnxruntime LOAD the reference artefact at all?
+    # PHASE 2 — CANDIDATE. Env pinned to the HOST BASELINE's toolchain.
+    python scripts/verify_quantiser_repro.py --role candidate \
+        --onnx-fp32 onnx_ce10ep_1 --reference-int8 int8_ce10ep_1 \
+        --reference-ort 1.30.0 --pinned-ort 1.29.0
 
-If (1) is identical there is no confound and the gate proceeds unchanged. If it is not,
-the locally re-quantised bytes are written next to the reference, the gate reads THOSE
-(matching the host baseline's 1.29.0), and the difference is disclosed rather than
-absorbed.
+WHY THE CONTROL IS NOT OPTIONAL. The candidate phase asks "do 1.29.0's tensors differ
+from 1.30.0's?" A bare NOT-IDENTICAL answers that only if the comparison would have said
+IDENTICAL when nothing differed. It would not, unless quantisation is reproducible across
+everything ELSE that differs between here and Kaggle — and three things do:
 
-WHAT IT DOES NOT DO. It does not attribute a mismatch to onnxruntime specifically.
-`ORTQuantizer` is optimum's front end over `onnxruntime.quantization`, and optimum is
-unpinned too — and its version was never recorded, because `train_env()` reads
-`optimum.__version__`, which does not exist (it lives at `optimum.version.__version__`).
-So a mismatch means "the toolchain moved", and isolating which half moved needs a second
-run holding one of them fixed. That is stated rather than guessed.
+  * ISA. Kaggle quantised on x86; this check runs on arm64.
+  * optimum. `ORTQuantizer` is optimum's front end over `onnxruntime.quantization`.
+  * onnx. The serializer that writes the tensors out.
+
+The control holds the ORT version FIXED at the reference's own and re-quantises. If it
+reproduces the reference exactly, all three are ruled out at once and a later difference
+is attributable to ORT. IF THE CONTROL FAILS, THE INSTRUMENT IS BROKEN AND THE CANDIDATE
+RESULT MEANS NOTHING — so `--role candidate` REFUSES TO RUN until a passing control for
+the same two artefacts is on disk. That refusal is the point: a NOT-IDENTICAL from a
+broken instrument looks exactly like a real quantiser difference.
+
+WHY ANY OF THIS. E1b commit 1 installed onnxruntime 1.29.0 and commit 2 installed 1.30.0
+— the Kaggle install cell pinned only `transformers`. Training is torch-only, so the drift
+touches ONLY commit 2's ONNX-export + INT8-quantise tail. That tail is what the gate
+reads: the gate compares E1b INT8 against the HOST BASELINE INT8, and the host baseline
+was quantised under ORT 1.29.0 (results/tier0_ce_hostB_seed1.json -> train_env). A
+quantiser version change is therefore a SECOND VARIABLE inside a difference that is
+supposed to isolate epochs.
+
+OUTCOMES.
+  control NOT identical -> instrument unusable. Do not run the candidate; report that the
+      confound could not be tested and the gate carries it as a stated limitation.
+  control identical, candidate identical -> no confound. Gate proceeds unchanged.
+  control identical, candidate NOT identical -> real ORT difference. The locally
+      re-quantised 1.29.0 bytes are written beside the reference; the gate reads THOSE,
+      matching the host baseline's quantiser, and the difference is disclosed.
 """
 
 from __future__ import annotations
@@ -89,35 +104,108 @@ def can_load(path: Path) -> tuple[bool, str | None]:
         return False, f"{type(exc).__name__}: {exc}"
 
 
+CONTROL_PATH = Path("results/quantiser_repro_control.json")
+CANDIDATE_PATH = Path("results/quantiser_repro.json")
+
+
+def _artefact_identity(onnx_fp32: Path, reference: Path) -> dict:
+    """What a control must have covered for it to license a candidate run."""
+    return {"onnx_fp32": str(onnx_fp32.resolve()),
+            "reference_int8": str(reference.resolve())}
+
+
+def _require_passing_control(identity: dict) -> dict:
+    """A candidate run is only meaningful behind a control that PASSED on these files."""
+    if not CONTROL_PATH.exists():
+        raise SystemExit(
+            f"REFUSING to run the candidate phase: no control result at {CONTROL_PATH}.\n"
+            f"The candidate asks whether a DIFFERENT onnxruntime produces different "
+            f"tensors. That question is only answerable if this machine reproduces the "
+            f"reference when the onnxruntime is the SAME — otherwise a NOT-IDENTICAL "
+            f"result is indistinguishable from arm64-vs-x86, an optimum difference, or "
+            f"an onnx serializer difference.\n"
+            f"Run --role control first.")
+    control = json.loads(CONTROL_PATH.read_text())
+    if not control.get("identical"):
+        raise SystemExit(
+            f"REFUSING to run the candidate phase: the control at {CONTROL_PATH} did NOT "
+            f"reproduce the reference ({control.get('n_differing')} initializers differ) "
+            f"with the onnxruntime held at the reference's own version "
+            f"{control.get('reference_ort')}.\n"
+            f"THE INSTRUMENT IS BROKEN, not the quantiser. Something other than the ORT "
+            f"version already prevents byte reproduction here — ISA, optimum or onnx. A "
+            f"candidate result would be uninterpretable.\n"
+            f"Report that the confound COULD NOT BE TESTED and let the gate carry it as "
+            f"a stated limitation.")
+    if control.get("artefact_identity") != identity:
+        raise SystemExit(
+            f"REFUSING: the control on disk covered different files.\n"
+            f"  control  : {control.get('artefact_identity')}\n"
+            f"  requested: {identity}\n"
+            f"A control licenses the artefacts it actually ran on and no others.")
+    return control
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--role", required=True, choices=("control", "candidate"),
+                    help="control: same ORT as the reference. candidate: the pinned ORT.")
     ap.add_argument("--onnx-fp32", type=Path, required=True,
                     help="the FP32 ONNX export the reference was quantised from")
     ap.add_argument("--reference-int8", type=Path, required=True,
                     help="the downloaded INT8 artefact to check")
-    ap.add_argument("--work", type=Path, default=None,
-                    help="where to write the local re-quantisation")
+    ap.add_argument("--reference-ort", required=True,
+                    help="the ORT version that MADE the reference (E1b commit 2: 1.30.0)")
+    ap.add_argument("--pinned-ort", default=None,
+                    help="candidate role: the host baseline's ORT (1.29.0)")
+    ap.add_argument("--work", type=Path, default=None)
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
     versions = tool_versions()
-    ref_onnx = next(args.reference_int8.glob("*.onnx"))
+    local_ort = versions["onnxruntime"]
+    identity = _artefact_identity(args.onnx_fp32, args.reference_int8)
 
+    # THE ENV MUST MATCH THE ROLE, and this is asserted rather than trusted: a control
+    # accidentally run under the pinned ORT tests nothing and would "pass" the instrument
+    # by measuring the wrong pair.
+    if args.role == "control":
+        expected = args.reference_ort
+        why = ("the control must hold onnxruntime at the reference's OWN version, so "
+               "that anything it finds is NOT an ORT difference")
+    else:
+        if not args.pinned_ort:
+            raise SystemExit("--pinned-ort is required for --role candidate")
+        expected = args.pinned_ort
+        why = "the candidate must run under the host baseline's quantiser"
+    if local_ort != expected:
+        raise SystemExit(
+            f"REFUSING: --role {args.role} needs onnxruntime {expected}, but this "
+            f"environment has {local_ort}. {why.capitalize()}.\n"
+            f"Build the throwaway env for this role and re-run.")
+
+    control = _require_passing_control(identity) if args.role == "candidate" else None
+
+    ref_onnx = next(args.reference_int8.glob("*.onnx"))
     print("=" * 70)
-    print("QUANTISER REPRODUCIBILITY CHECK")
+    print(f"QUANTISER REPRODUCIBILITY — {args.role.upper()} PHASE")
     print("=" * 70)
-    print(f"  this machine : ort {versions['onnxruntime']}  onnx {versions['onnx']}  "
+    print(f"  this machine : ort {local_ort}  onnx {versions['onnx']}  "
           f"optimum {versions['optimum']}")
+    print(f"  reference made by ort {args.reference_ort}")
     print(f"  fp32 onnx    : {args.onnx_fp32}")
     print(f"  reference    : {ref_onnx}")
+    if control:
+        print(f"  control      : PASSED (ort {control['local_ort']}, "
+              f"{control['n_shared']} initializers reproduced)")
 
     loadable, load_err = can_load(ref_onnx)
-    print(f"\n  reference loads under ort {versions['onnxruntime']}: {loadable}")
+    print(f"\n  reference loads under ort {local_ort}: {loadable}")
     if not loadable:
         print(f"    {load_err}")
 
     work = args.work or (args.reference_int8.parent /
-                         f"{args.reference_int8.name}__requantised_local")
+                         f"{args.reference_int8.name}__requant_{args.role}_{local_ort}")
     work.mkdir(parents=True, exist_ok=True)
     print(f"\n  re-quantising locally -> {work}")
     local_onnx = quantise(args.onnx_fp32, work)
@@ -126,8 +214,8 @@ def main() -> int:
     only_ref, only_loc = sorted(set(ref_d) - set(loc_d)), sorted(set(loc_d) - set(ref_d))
     shared = sorted(set(ref_d) & set(loc_d))
     differing = [n for n in shared if ref_d[n] != loc_d[n]]
-
     identical = not (only_ref or only_loc or differing)
+
     print("\n" + "-" * 70)
     print(f"  initializers: {len(ref_d)} reference / {len(loc_d)} local, "
           f"{len(shared)} shared")
@@ -135,20 +223,44 @@ def main() -> int:
     print(f"  name-only-in-local     : {len(only_loc)}")
     print(f"  shared but DIFFERING   : {len(differing)}")
     print("-" * 70)
-    verdict = ("IDENTICAL — no quantiser confound" if identical
-               else "NOT IDENTICAL — the toolchain moved")
-    print(f"  VERDICT: {verdict}")
-    if not identical:
-        for n in differing[:10]:
-            print(f"    differs: {n}")
-        if len(differing) > 10:
-            print(f"    … and {len(differing) - 10} more")
-        print("\n  The locally re-quantised model is at:")
-        print(f"    {local_onnx}")
-        print("  Score the GATE against those bytes (they match the host baseline's "
-              "toolchain) and disclose the difference.")
 
-    payload = {"versions_this_machine": versions,
+    if args.role == "control":
+        if identical:
+            print("  CONTROL PASSED — this machine reproduces the reference byte for "
+                  "byte with the ORT version held fixed.")
+            print("  arm64-vs-x86, optimum and onnx are all ruled out. A difference in "
+                  "the candidate phase is attributable to onnxruntime.")
+        else:
+            print("  CONTROL FAILED — THE INSTRUMENT IS BROKEN.")
+            print("  With onnxruntime held at the reference's own version, this machine "
+                  "still does not reproduce it. The cause is one of ISA (arm64 here, "
+                  "x86 on Kaggle), optimum, or onnx — this check cannot say which.")
+            print("  DO NOT run the candidate phase. Report that the confound could not "
+                  "be tested and let the gate carry it as a stated limitation.")
+    else:
+        if identical:
+            print(f"  CANDIDATE IDENTICAL — ort {args.pinned_ort} and "
+                  f"{args.reference_ort} produce the same tensors. NO CONFOUND; the "
+                  f"gate proceeds unchanged.")
+        else:
+            print(f"  CANDIDATE NOT IDENTICAL — ort {args.pinned_ort} and "
+                  f"{args.reference_ort} differ on {len(differing)} initializers.")
+            for n in differing[:10]:
+                print(f"    differs: {n}")
+            if len(differing) > 10:
+                print(f"    … and {len(differing) - 10} more")
+            print(f"\n  Behind a PASSING control, this is a real onnxruntime difference.")
+            print(f"  The {args.pinned_ort}-quantised model is at:")
+            print(f"    {local_onnx}")
+            print("  Score the GATE against those bytes — they match the host "
+                  "baseline's quantiser — and disclose the difference.")
+
+    payload = {"role": args.role,
+               "artefact_identity": identity,
+               "versions_this_machine": versions,
+               "local_ort": local_ort,
+               "reference_ort": args.reference_ort,
+               "pinned_ort": args.pinned_ort,
                "onnx_fp32": str(args.onnx_fp32),
                "reference_int8": str(ref_onnx),
                "reference_loads_locally": loadable,
@@ -162,12 +274,18 @@ def main() -> int:
                "differing_names": differing,
                "identical": identical,
                "local_requantised": str(local_onnx),
-               "attribution_note": (
-                   "A mismatch means the TOOLCHAIN moved, not onnxruntime specifically: "
-                   "ORTQuantizer is optimum's front end over onnxruntime.quantization "
-                   "and optimum is unpinned and unrecorded. Isolating which half moved "
-                   "needs a second run holding one fixed.")}
-    out = args.out or Path("results/quantiser_repro.json")
+               "control_result": None if control is None else {
+                   "identical": control["identical"], "local_ort": control["local_ort"]},
+               "interpretation": (
+                   "CONTROL: identical means arm64-vs-x86, optimum and onnx are ruled "
+                   "out, so the candidate phase isolates onnxruntime. Not identical "
+                   "means the instrument cannot test the confound at all."
+                   if args.role == "control" else
+                   "CANDIDATE, valid only behind a passing control: identical means the "
+                   "two onnxruntime versions agree and the gate is unconfounded; not "
+                   "identical means they disagree and the gate must read the pinned-ORT "
+                   "bytes with the difference disclosed.")}
+    out = args.out or (CONTROL_PATH if args.role == "control" else CANDIDATE_PATH)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"\nwrote {out}")

@@ -1373,6 +1373,67 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bd. E1b RUN RECORD — what commit 2 actually ran, and the ORT drift (2026-09-11)
+
+**Recorded because the file no longer says.** §3bb registered the plan; this records the
+execution, which differed from the committed file in two ways that nothing on disk
+captured.
+
+| | commit 1 | commit 2 |
+|---|---|---|
+| ran | 2026-09-10 | 2026-09-11 |
+| `RUN_STEP_BUDGET` | 17815 | **None** |
+| `RESUME_FROM_STEP_AT_LEAST` | 0 | **17815** |
+| `EPOCHS` | 10 | 10 |
+| trains | steps 1 → 17,815 (epochs 1–5) | 17,815 → 35,630 (epochs 6–10) |
+| onnxruntime | **1.29.0** | **1.30.0** |
+| code | pre-pin | **pre-pin** |
+
+**COMMIT 2'S ARM NEVER REACHED THE REPOSITORY.** It was set on the Kaggle copy, so the
+committed file continued to hold commit 1's values. The two disagreed with nothing saying
+so, and a blind re-upload would have retrained **epochs 1–5 again** — ~4 h of quota
+producing a checkpoint indistinguishable from progress. Fixed structurally: `RUN_ARM` is
+now a required declaration that defaults to `None`, PREFLIGHT refuses an undeclared arm
+before a GPU slot is spent, and `RUN_STEP_BUDGET` / `RESUME_FROM_STEP_AT_LEAST` are
+**derived** from it rather than hand-set, so they cannot drift apart again. The file is
+currently **UNARMED**; seeds 2–3 are armed only after the seed-1 gate (§3ar) is read,
+because arming them earlier pre-commits the spend the gate exists to decide.
+
+**THE QUANTISER MOVED MID-EXPERIMENT.** The install cell pinned only `transformers`, so
+onnxruntime drifted **1.29.0 → 1.30.0 between two halves of one seed.** Training is
+torch-only, so the drift touches only commit 2's **ONNX-export + INT8-quantise tail** —
+but that tail is precisely what the gate reads. §3ar's gate compares **E1b INT8 against
+the host baseline INT8**, and the host baseline was quantised under **1.29.0**
+(`results/tier0_ce_hostB_seed1.json` → `train_env.onnxruntime`). A quantiser version
+change is therefore **a second variable inside a difference registered to isolate
+epochs**.
+
+**Status: OPEN, and testable rather than argued.** `scripts/verify_quantiser_repro.py`
+re-quantises the retained FP32 ONNX (`onnx_ce10ep_1`, kept as E3's middle arm) and
+compares initializer tensors against the downloaded artefact. It runs in two phases and
+**the first is a positive control**: re-quantise with onnxruntime held at the reference's
+own 1.30.0 and require byte-identity, which rules out arm64-vs-x86, optimum and onnx at
+once. Only behind a passing control does the 1.29.0 comparison mean anything, and the
+script **refuses** to run the second phase otherwise — a NOT-IDENTICAL from a broken
+instrument is indistinguishable from a real quantiser difference. Outcomes:
+
+- **control fails** → the confound **could not be tested**; the gate carries it as a
+  stated limitation.
+- **control passes, candidate identical** → no confound; the gate proceeds unchanged.
+- **control passes, candidate differs** → real ORT difference; the gate is scored against
+  the locally re-quantised **1.29.0** bytes, matching the host baseline, and the
+  difference is disclosed.
+
+**A RELATED FIELD WAS NULL IN EVERY RUN TO DATE.** The quantiser is `ORTQuantizer` —
+optimum's front end over `onnxruntime.quantization` — and `train_env()` read
+`optimum.__version__`, which does not exist (it lives at `optimum.version.__version__`).
+The bare `except` wrote `null` for optimum every time while the field looked populated, so
+the quantiser's front end is **unversioned in every artefact on disk**. Version capture now
+goes through `importlib.metadata`, adds `onnx`, and records
+`quantiser_versions_complete`. onnxruntime is pinned to **1.29.0** and asserted in
+PREFLIGHT. **optimum remains unpinned pending recovery of the host baseline's version from
+the Kaggle pip log**; pinning it without that would mean inventing the value.
+
 ### 3bc. DEPLOYMENT CONFIG — canary floor and router operating point (2026-09-11)
 
 **THIS IS NOT AN EXPERIMENT AND HAS NO ACCEPT RULE.** Nothing here is tested, nothing
