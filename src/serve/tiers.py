@@ -9,7 +9,10 @@ exists. A stand-in that returns a fixed answer is honest about being one — it 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from src.api.usage import Usage
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,16 @@ class TierResult:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    # The parsed usage block, carried WHOLE rather than flattened into the four ints
+    # above. `Usage` distinguishes "the provider reported 0" from "the provider never
+    # reported this field" (None), and `as_cost_kwargs()` refuses to cost the latter.
+    # Flattening with `or 0` would erase that distinction at the one point where hard
+    # rules 10 and 11 need it to survive.
+    usage: "Usage | None" = None
+    # True when this result came from the on-disk response cache, i.e. no new money was
+    # spent serving it. The dollar figure still reflects what the call cost when it was
+    # actually made, so the two facts are reported separately rather than netted.
+    api_cache_hit: bool | None = None
 
 
 @runtime_checkable

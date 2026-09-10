@@ -45,13 +45,29 @@ def local_usd_per_request(*, hw: dict | None = None, allow_assumed_tariff: bool 
 
 
 def api_usd_for_result(model: str, r, *, batch: bool = False,
-                       cache_ttl: str | None = None) -> CostEstimate:
-    """Exact API cost from the three usage fields, kept separate (hard rule 10)."""
-    usd = compute_cost(model,
-                       input_tokens=r.input_tokens,
-                       cache_creation_input_tokens=r.cache_creation_input_tokens,
-                       cache_read_input_tokens=r.cache_read_input_tokens,
-                       output_tokens=r.output_tokens,
+                       cache_ttl: str = "1h") -> CostEstimate:
+    """Exact API cost from the three input usage fields, kept separate (hard rule 10).
+
+    Routes through ``Usage.as_cost_kwargs()`` rather than passing token counts by hand.
+    That matters for two reasons the previous implementation got wrong:
+
+    * ``as_cost_kwargs`` emits ``compute_cost``'s ACTUAL parameter names. The earlier
+      version passed ``cache_creation_input_tokens=`` / ``cache_read_input_tokens=``,
+      which ``compute_cost`` does not accept — so this function raised ``TypeError`` on
+      every real result. It never fired because the only caller was a stub reporting
+      zero tokens, which took a different branch.
+    * It REFUSES to cost usage whose cache fields were never reported, instead of
+      quietly treating "unknown" as zero (hard rules 10 and 11).
+    """
+    if getattr(r, "usage", None) is None:
+        raise ValueError(
+            f"cannot cost a {model} result that carries no parsed usage block. "
+            f"Reconstructing one from the flattened token ints would turn an "
+            f"unreported cache field into a zero (hard rule 10).")
+    usd = compute_cost(model, **r.usage.as_cost_kwargs(),
                        batch=batch, cache_ttl=cache_ttl)
-    return CostEstimate(usd=usd, basis=f"{model} usage fields via configs/costs.yaml",
-                        is_estimate=False)
+    return CostEstimate(
+        usd=usd,
+        basis=(f"{model} usage fields (input / cache_write / cache_read / output kept "
+               f"separate) via configs/costs.yaml; batch={batch}, cache_ttl={cache_ttl}"),
+        is_estimate=False)

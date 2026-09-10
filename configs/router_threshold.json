@@ -1,0 +1,18 @@
+{
+  "signal": "margin",
+  "threshold": 0.3440407544374466,
+  "rule": "escalate when signal < threshold",
+  "calibrated_on": "dev_2000",
+  "calibrated_on_manifest_sha256": "77d3341979f28114682bf19a9cc1cc28f10cf995a2bd6b95b66e2140903c035e",
+  "artefact": "models/int8_ce_1",
+  "seed": 1,
+  "precision": "int8",
+  "isa": "arm64_local",
+  "max_length": 512,
+  "target_escalation_rate": 0.1,
+  "achieved_escalation_rate_on_dev": 0.1,
+  "retained_tier0_accuracy_on_dev": 0.9038888888888889,
+  "n_dev_rows": 2000,
+  "source_npz": "results/dev_logits_int8_local_ce_seed1.npz",
+  "operating_point_note": "The escalation rate is a POLICY CHOICE, not an accuracy optimum. E6-A found the cascade is not established as better than Tier 0 alone (test_3000 macro-F1 delta +0.0063, 95% CI [-0.0004, +0.0103], sign-consistency 2/3). This threshold buys a defined worst-case handling path, not measured accuracy."
+}

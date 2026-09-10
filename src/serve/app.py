@@ -1,115 +1,217 @@
-"""FastAPI 3-tier cascade service. STRUCTURE ONLY — real models plug in behind `Tier`.
+"""FastAPI service — the DEPLOYED architecture: Tier 0 INT8 -> Claude Sonnet 5.
 
-Returns `tier_used` and `estimated_cost` for every request. Costs come from
-configs/costs.yaml through src/serve/pricing.py and from nowhere else (hard rule 5).
+E4b-A. There is no Tier 1, and its absence is a MEASUREMENT rather than an omission:
+E4 reached macro-F1 0.7254 against a 0.7923 bar, a 0.0669 miss and 12x the test_3000
+sigma, and E4b-A records that no Tier 1 experiment remains in the plan. Wiring a middle
+tier here would serve a model the evidence rejected.
 
-What this deliberately does NOT do yet: load a model, call an API, or spend anything.
-Every tier is a stub until wired, and the response says so on every request — a stub
-that answered plausibly would be indistinguishable from a working cascade, which is the
-failure class this project keeps paying for (PREREGISTRATION 3e).
+WHAT THIS SERVICE WILL NOT DO
+-----------------------------
+* Start with a Tier 0 that cannot reproduce its reference accuracy on this host. INT8
+  kernels degrade to chance on a CPU without AVX-512 VNNI and raise nothing; the target
+  (HF Spaces) is x86. See src/serve/canary.py.
+* Compute a routing threshold at request time. The threshold is calibrated on dev_2000
+  and loaded from a file (hard rule 1).
+* Claim an escalation it did not make. With no ANTHROPIC_API_KEY the Tier 0 answer is
+  returned with `escalation_skipped=true` and `tier_used="tier0"`.
+* Report a price that is not derived from configs/costs.yaml (hard rule 5).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any
 
-from src.serve.pricing import CostEstimate, local_usd_per_request
-from src.serve.tiers import StubTier, Tier, TierResult
+from pydantic import BaseModel
+
+from src.serve.config import ServiceConfig
+from src.serve.pricing import CostEstimate, api_usd_for_result, local_usd_per_request
+from src.serve.tier2 import Tier2Unavailable
+from src.serve.tiers import TierResult
+
+__all__ = ["Cascade", "ClassifyRequest", "MarginRouter", "build_cascade", "create_app"]
 
 
-@dataclass
-class RouterPolicy:
-    """Escalate when the current tier's confidence is below its threshold.
+class ClassifyRequest(BaseModel):
+    """Defined at MODULE level, deliberately.
 
-    Thresholds are placeholders until E5 calibrates them on dev_2000 (hard rule 1); they
-    are named `*_uncalibrated` so a calibrated value cannot be confused with a guess.
+    `from __future__ import annotations` turns every annotation into a string that
+    FastAPI resolves against the module namespace. A request model nested inside
+    `create_app()` is invisible there, so FastAPI silently reinterprets the parameter as
+    a QUERY parameter and every POST /classify returns 422 "field required". The
+    endpoint looks wired and is not — and no unit test of `Cascade` can see it, because
+    the cascade itself works fine.
     """
-    tier0_uncalibrated: float = 0.99
-    tier1_uncalibrated: float = 0.99
-    calibrated: bool = False
+
+    text: str
+
+
+@dataclass(frozen=True)
+class MarginRouter:
+    """Escalate when the margin signal falls BELOW a dev-calibrated threshold.
+
+    The threshold arrives already loaded from `router_threshold.json`. Nothing here
+    derives, adjusts or adapts it: a threshold that moved with live traffic would be
+    fitted to a distribution that is not dev, which is hard rule 1 defeated quietly.
+    """
+
+    threshold: float
+    signal: str = "margin"
 
     def escalate(self, r: TierResult) -> bool:
         if r.label is None:
-            return True
-        th = self.tier0_uncalibrated if r.tier == "tier0" else self.tier1_uncalibrated
-        return (r.confidence or 0.0) < th
+            return True          # nothing to be confident about
+        if r.confidence is None:
+            raise ValueError(
+                f"tier {r.tier} returned no {self.signal}; routing cannot be decided "
+                f"and will not be guessed")
+        return r.confidence < self.threshold
 
 
 @dataclass
 class Cascade:
-    tier0: Tier
-    tier1: Tier
-    tier2: Tier
-    policy: RouterPolicy = field(default_factory=RouterPolicy)
+    """Tier 0, escalating to Tier 2 only when the router says so AND a key exists."""
+
+    tier0: Any
+    tier2: Any
+    router: MarginRouter
+    config: ServiceConfig
 
     def classify(self, text: str) -> dict:
-        trace: list[str] = []
-        costs: list[CostEstimate] = []
-        result: TierResult | None = None
+        t0 = self.tier0.classify(text)
+        margin = t0.confidence
+        costs: list[tuple[str, CostEstimate]] = [("tier0", local_usd_per_request())]
 
-        for tier in (self.tier0, self.tier1, self.tier2):
-            result = tier.classify(text)
-            trace.append(tier.name)
-            costs.append(self._cost(tier, result))
-            if tier is self.tier2 or not self.policy.escalate(result):
-                break
+        wants_escalation = self.router.escalate(t0)
+        escalation_skipped = False
+        skip_reason = None
+        result, tiers = t0, ["tier0"]
 
-        assert result is not None
-        total = sum(c.usd for c in costs)
+        if wants_escalation:
+            if self.tier2.available:
+                try:
+                    result = self.tier2.classify(text)
+                except Tier2Unavailable as exc:
+                    # available said yes and classify said no: a race on the env var.
+                    # Report the Tier 0 answer and say why, rather than 500-ing or
+                    # pretending the escalation happened.
+                    result, escalation_skipped = t0, True
+                    skip_reason = str(exc)
+                else:
+                    tiers.append("tier2")
+                    costs.append(("tier2", api_usd_for_result(
+                        self.config.tier2_model, result,
+                        batch=self.config.tier2_batch)))
+            else:
+                escalation_skipped = True
+                skip_reason = (
+                    "ANTHROPIC_API_KEY is not set. The router selected this clause for "
+                    "escalation; the Tier 0 answer is returned unescalated and is NOT "
+                    "the cascade's answer for this row.")
+
+        total = sum(c.usd for _, c in costs)
         return {
             "label": result.label,
-            "confidence": result.confidence,
+            "margin": margin,
             "tier_used": result.tier,
-            "tiers_invoked": trace,
-            "estimated_cost": {
-                "usd": total,
+            "tiers_invoked": tiers,
+            "estimated_cost_usd": total,
+            "escalation_selected": wants_escalation,
+            "escalation_skipped": escalation_skipped,
+            "escalation_skipped_reason": skip_reason,
+            "api_cache_hit": getattr(result, "api_cache_hit", None),
+            "cost_detail": {
                 "usd_per_1k": total * 1000.0,
-                "per_tier": [{"tier": t, "usd": c.usd, "basis": c.basis,
-                              "is_estimate": c.is_estimate} for t, c in zip(trace, costs)],
-                "is_estimate": any(c.is_estimate for c in costs),
-                "tariff_is_assumed": any(c.tariff_is_assumed for c in costs),
+                "per_tier": [
+                    {"tier": t, "usd": c.usd, "basis": c.basis,
+                     "is_estimate": c.is_estimate,
+                     "tariff_is_assumed": c.tariff_is_assumed}
+                    for t, c in costs],
+                "is_estimate": any(c.is_estimate for _, c in costs),
+                "tariff_is_assumed": any(c.tariff_is_assumed for _, c in costs),
+                "source": "configs/costs.yaml",
             },
-            # Never omitted and never defaulted to False: a stubbed cascade must be
-            # impossible to mistake for a working one, in the response itself.
-            "stub_tiers": [t for t in trace if getattr(
-                {self.tier0.name: self.tier0, self.tier1.name: self.tier1,
-                 self.tier2.name: self.tier2}[t], "is_stub", False)],
-            "router_calibrated": self.policy.calibrated,
+            "router": {
+                "signal": self.router.signal,
+                "threshold": self.router.threshold,
+                "calibrated_on": self.config.threshold.calibrated_on,
+                "calibrated_artefact": self.config.threshold.artefact,
+                "computed_at_request_time": False,
+            },
         }
 
-    def _cost(self, tier: Tier, r: TierResult) -> CostEstimate:
-        if r.tier in ("tier0", "tier1"):
-            return local_usd_per_request()
-        if r.input_tokens or r.output_tokens:
-            from src.serve.pricing import api_usd_for_result
-            return api_usd_for_result("claude-sonnet-5", r, batch=False)
-        return CostEstimate(usd=0.0, basis="tier2 stub made no API call",
-                            is_estimate=True)
+
+def build_cascade(config: ServiceConfig | None = None, *, tier2=None) -> Cascade:
+    """Construct the deployed cascade. Loads the ONNX session once."""
+    from src.data.labels import load_labels
+    from src.serve.tier0 import Tier0Encoder
+    from src.serve.tier2 import Tier2Claude
+
+    config = config or ServiceConfig.load()
+    labels = load_labels()
+
+    tier0 = Tier0Encoder(model_dir=config.tier0_model_dir, labels=labels,
+                         max_length=config.tier0_max_length)
+    tier2 = tier2 if tier2 is not None else Tier2Claude(
+        model=config.tier2_model, labels=labels,
+        max_output_tokens=config.tier2_max_output_tokens,
+        temperature=config.tier2_temperature, batch=config.tier2_batch)
+
+    return Cascade(tier0=tier0, tier2=tier2, config=config,
+                   router=MarginRouter(threshold=config.threshold.threshold,
+                                       signal=config.threshold.signal))
 
 
-def default_cascade() -> Cascade:
-    return Cascade(tier0=StubTier("tier0"), tier1=StubTier("tier1"),
-                   tier2=StubTier("tier2", confidence=1.0))
+def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
+    """Refuse to start unless Tier 0 reproduces its reference accuracy on THIS host."""
+    from src.data.loading import load_ledgar
+    from src.serve.canary import CanarySet, hardware_report, run_canary
+    import json
+
+    cfg = cascade.config
+    if not cfg.canary_enabled:
+        # Explicit, reported, and never the default. A disabled canary is a decision
+        # the operator has to make and the response says it was made.
+        return {"ran": False, "reason": "disabled in configs/serve.yaml",
+                "hardware": hardware_report()}
+
+    canary = CanarySet.from_dict(json.loads(cfg.canary_row_set.read_text()))
+    result = run_canary(cascade.tier0, load_ledgar(), canary,
+                        floor=cfg.canary_min_accuracy)
+    return {"ran": True, "reference_accuracy": cfg.canary_measured_accuracy,
+            **result.as_dict()}
 
 
-def create_app():
-    """Build the FastAPI app. Imported lazily so the cascade is testable without it."""
+def create_app(config: ServiceConfig | None = None, *, tier2=None,
+               run_canary_on_start: bool = True):
+    """Build the FastAPI app. The canary runs HERE, so a failure prevents startup."""
     from fastapi import FastAPI
-    from pydantic import BaseModel
 
-    class ClassifyRequest(BaseModel):
-        text: str
+    cascade = build_cascade(config, tier2=tier2)
+    canary = run_startup_canary(cascade) if run_canary_on_start else {
+        "ran": False, "reason": "explicitly skipped by the caller"}
 
-    app = FastAPI(title="Reasonable Doubt — 3-tier cascade",
-                  description="Structure only; tiers are stubs until models are trained.")
-    cascade = default_cascade()
+    app = FastAPI(
+        title="Reasonable Doubt — Tier 0 INT8 -> Claude Sonnet 5",
+        description="Deployed two-tier cascade (E4b-A). No Tier 1: see PREREGISTRATION.")
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok",
-                "stub_tiers": [t.name for t in (cascade.tier0, cascade.tier1, cascade.tier2)
-                               if t.is_stub],
-                "router_calibrated": cascade.policy.calibrated}
+        from src.serve.canary import cpu_isa_flags, onnxruntime_version
+        return {
+            "status": "ok",
+            "architecture": "tier0_int8 -> claude (no tier1; E4b-A)",
+            "tier0": cascade.tier0.describe(),
+            "tier2": cascade.tier2.describe(),
+            "router": cascade.config.threshold.as_dict(),
+            "canary": canary,
+            "runtime": {
+                "onnxruntime_version": onnxruntime_version(),
+                # null means UNREADABLE, not absent — see src/serve/canary.py.
+                "cpu_isa_flags": cpu_isa_flags(),
+            },
+            "escalation_enabled": cascade.tier2.available,
+        }
 
     @app.post("/classify")
     def classify(req: ClassifyRequest) -> dict:

@@ -1,0 +1,54 @@
+# Deployed service configuration — E4b-A: Tier 0 INT8 -> Claude Sonnet 5, NO Tier 1.
+#
+# Tier 1 is absent by MEASUREMENT, not omission. E4 reached macro-F1 0.7254 against a
+# 0.7923 bar (a 0.0669 miss, 12x the test_3000 sigma) and E4b-A records that no Tier 1
+# experiment remains in the plan. A middle tier here would serve a model the evidence
+# rejected.
+#
+# NO PRICES APPEAR IN THIS FILE. Every USD figure comes from configs/costs.yaml
+# (hard rule 5); this file only names which model's rate card to read.
+
+tier0:
+  # CONFIGURED, NOT HARDCODED. E1b may replace this with a 10-epoch artefact
+  # (fp32_ce10ep_1 -> int8_ce10ep_1). Changing the weights REQUIRES re-running
+  # scripts/calibrate_router_threshold.py: the margin distribution moves with the
+  # weights, and router_threshold.json records which artefact it was calibrated on so
+  # a mismatch is refused at startup rather than served.
+  model_dir: models/int8_ce_1
+  max_length: 512
+
+router:
+  # Loaded from a file produced by dev_2000 calibration (hard rule 1). NEVER computed
+  # at request time — a threshold fitted to live traffic is fitted to the wrong
+  # distribution and drifts with no record.
+  threshold_file: configs/router_threshold.json
+  signal: margin
+
+tier2:
+  # The escalation target. Sonnet 5's rates live in costs.yaml under this exact id.
+  model: claude-sonnet-5
+  max_output_tokens: 40      # matches the stage-1 budget decision in costs.yaml
+  temperature: 0.0
+  # Escalation happens ONLY when ANTHROPIC_API_KEY is set. With no key the service
+  # returns the Tier 0 answer and marks escalation_skipped=true. It never pretends.
+  # Interactive serving is NOT batch: the 50% Batch API discount does not apply and
+  # must not be claimed. Offline evaluation still uses batch (hard rule 4).
+  batch: false
+
+canary:
+  # Startup refusal. MEASURED 2026-09-10 on THIS arm64 host with models/int8_ce_1:
+  # 180/200 = 0.9000 accuracy on the frozen TRAIN row set in configs/canary_200.json.
+  #
+  # FLOOR = 0.80, i.e. 0.10 absolute below the measured value. Chosen so it cannot be
+  # tripped by benign cross-ISA INT8 numeric jitter — E3 measured the largest FP32/INT8
+  # delta in this project at 0.0083, so 0.10 is ~12x that — while sitting far above the
+  # failure it exists to catch: Kaggle's non-VNNI x86 scored these same weights at
+  # macro-F1 0.0037, i.e. chance, WITH NO ERROR RAISED. HF Spaces is x86.
+  #
+  # These are TRAIN rows the model was fitted on, so 0.9000 is NOT comparable to the
+  # test_3000 accuracy of 0.8563 and must never be reported as an accuracy result.
+  row_set: configs/canary_200.json
+  measured_accuracy: 0.9000
+  measured_on: "arm64_local (Apple Silicon), models/int8_ce_1, 2026-09-10"
+  min_accuracy: 0.80
+  enabled: true
