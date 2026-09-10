@@ -1284,6 +1284,57 @@ unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
 
+### 3au. Does PERCENTILE calibration stabilise the escalation SET, or only the RATE? — registered before the run (2026-09-10)
+
+§3aq recommended calibrating the router at a **percentile** of the signal distribution
+rather than at an absolute threshold value, because the dev-calibrated thresholds are
+0.1154 / 0.1177 / 0.1718 (1.49×) and margin is therefore not on a comparable scale across
+retrainings. **That recommendation is currently untested**, and §3an's overlap measurement
+cannot test it: it was taken under **absolute** thresholds, so its Jaccard of 0.213–0.258
+**confounds two things** —
+
+| cause of non-overlap | does percentile calibration fix it? |
+|---|---|
+| the thresholds sit at different **scales** | **yes, by construction** |
+| the margin **ranking** of rows differs between seeds | **no** |
+
+**The test.** Select the top **4.056%** by margin **per seed** (the same target rate, but
+rank-based, so scale is removed by construction), then measure pairwise Jaccard, all-three
+overlap, distinct rows covered, and the per-seed macro-F1 delta under that selection.
+
+**Reference points, both computed before the run:**
+
+| quantity | value |
+|---|---|
+| J under **absolute** thresholds (§3an), mean of the three pairs | **0.2370** |
+| J under **chance** — two 122-row sets drawn at random from 3,000 | **0.0208** |
+
+So the absolute-threshold sets already overlap ~11× chance; the question is how much of the
+remaining gap to 1.0 is scale rather than ranking.
+
+**Accept band, mechanical, using this project's registered `fraction_closed` construction
+(E8, §3ar's midpoint logic):** `f = (J_pct − 0.2370) / (1 − 0.2370)`.
+
+| J_pct | f | disposition |
+|---|---|---|
+| **≥ 0.6185** | ≥ 0.50 | **STRONG SUPPORT.** Percentile calibration substantially stabilises the escalation **SET**. §3aq's recommendation stands as worded — it stabilises rate *and* set |
+| **0.3896 – 0.6184** | 0.20–0.50 | **PARTIAL.** Set stability improves but is not achieved. The recommendation must be reworded to claim rate stabilisation, with set stability stated as improved-not-solved, and quantified |
+| **< 0.3896** | < 0.20 | **WEAK / NULL.** Non-overlap is dominated by **ranking disagreement**, which percentile calibration does not touch. The recommendation must be reworded to say **only** that it stabilises the escalation **RATE** — and that is a weaker, different claim than the one §3aq currently makes |
+
+**Registered in advance, because it is the outcome I expect to have to write.** If the
+result lands in the WEAK band, §3aq's deployment recommendation is **narrowed, not
+withdrawn**: holding the escalation rate fixed across retrainings is still worth having —
+it is what makes the API bill predictable, which was the stated motivation — but the claim
+that the *same clauses* get escalated would be unsupported, and any SLA or audit argument
+resting on set stability would have to go.
+
+**A high J_pct would also be a finding about the SIGNAL, not just the calibration:** it
+would mean margin's *ranking* is reproducible across retrainings even though its *scale* is
+not, which is the property a percentile threshold needs and the property §3an's absolute
+measurement could not see.
+
+**Cost: $0.00, no GPU.** All inputs are on disk.
+
 ### 3at. HOST BASELINE — interpretation rule, registered BEFORE the 1.0–2.2 h is spent (2026-09-10)
 
 The host-baseline run (§3ak step 1: E1's config, `EPOCHS = 3`, `RUN_TAG = "ce_hostB"`,
