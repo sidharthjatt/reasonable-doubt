@@ -155,7 +155,8 @@ def build_cascade(config: ServiceConfig | None = None, *, tier2=None) -> Cascade
     tier2 = tier2 if tier2 is not None else Tier2Claude(
         model=config.tier2_model, labels=labels,
         max_output_tokens=config.tier2_max_output_tokens,
-        temperature=config.tier2_temperature, batch=config.tier2_batch)
+        temperature=config.tier2_temperature, batch=config.tier2_batch,
+        spend_cap_usd=config.tier2_spend_cap_usd, run_id=config.tier2_run_id)
 
     return Cascade(tier0=tier0, tier2=tier2, config=config,
                    router=MarginRouter(threshold=config.threshold.threshold,

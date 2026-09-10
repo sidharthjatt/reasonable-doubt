@@ -504,13 +504,27 @@ class FakeAnthropicClient:
 
 
 def make_tier2(tmp_path, client=None, labels=None):
+    """Build a Tier2Claude wired to a THROWAWAY ledger.
+
+    Tier2Claude defaults to the real results/spend_ledger.jsonl, which is correct in
+    production and catastrophic in a test: it is the version-controlled record of real
+    money (hard rule 12), and a suite that appends fake entries corrupts it. An earlier
+    version of this helper omitted the ledger and wrote 24 fabricated entries into it.
+    The session guard in conftest.py now makes that impossible to miss.
+    """
     from src.api.cache import ResponseCache
+    from src.api.ledger import SpendLedger
     from src.data.labels import load_labels
     from src.serve.tier2 import Tier2Claude
 
+    # temperature deliberately NOT passed: the default is None (omit), matching
+    # Stage 1. Pinning 0.0 here would hide the very regression this suite checks for.
+    ledger_path = tmp_path / "spend_ledger.jsonl"
+    ledger_path.write_text("")
     t = Tier2Claude(model="claude-sonnet-5", labels=labels or load_labels(),
-                    max_output_tokens=40, temperature=0.0, batch=False,
-                    cache=ResponseCache(tmp_path))
+                    max_output_tokens=40, batch=False,
+                    cache=ResponseCache(tmp_path),
+                    ledger=SpendLedger(ledger_path), spend_cap_usd=None)
     t._client = client or FakeAnthropicClient()
     return t
 
@@ -591,3 +605,227 @@ def test_tier2_unparseable_output_yields_no_label_rather_than_a_guess(tmp_path,
     r = t.classify("clause")
     assert r.label is None, "an unparseable response must not become a plausible label"
     assert r.usage is not None, "it still cost money and must still be costable"
+
+
+# ------------------- item 3: the deployed request must match Stage 1's, field by field
+
+
+def test_deployed_prompt_is_byte_identical_to_stage_1(ledgar):
+    """Stage 1 renders from label_names(ds); the service renders from configs/labels.json.
+    Two sources for one cacheable prefix — if they ever diverge, the deployed tier is
+    measured against a baseline it no longer shares a prompt with."""
+    from src.data.labels import load_labels
+    from src.data.loading import label_names
+    from src.data.prompts import render_zeroshot
+
+    assert render_zeroshot(label_names(ledgar)).sha256 == \
+        render_zeroshot(load_labels()).sha256
+
+
+def test_temperature_is_omitted_not_sent_as_zero(tmp_path, monkeypatch):
+    """Sonnet 5 REJECTS `temperature`. Stage 1 passes temperature=None for exactly this
+    reason; sending 0.0 would have been a 400 on every escalation."""
+    from src.serve.tier2 import TEMPERATURE
+
+    assert TEMPERATURE is None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    client = FakeAnthropicClient()
+    make_tier2(tmp_path, client).classify("clause")
+    assert "temperature" not in client.calls[0], \
+        "temperature must be OMITTED, not sent (null is still a rejected field)"
+
+
+def test_thinking_is_explicitly_disabled_like_stage_1(tmp_path, monkeypatch):
+    """Unset lets the model default apply, changing output shape and the token bill."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    client = FakeAnthropicClient()
+    make_tier2(tmp_path, client).classify("clause")
+    assert client.calls[0]["thinking"] == {"type": "disabled"}
+
+
+def test_max_tokens_and_model_match_stage_1(tmp_path, monkeypatch, config):
+    """40 is Stage 1's amended Sonnet output budget (costs.yaml, §3i)."""
+    card = yaml.safe_load((ROOT / "configs" / "costs.yaml").read_text())
+    stage1_out = card["budget"]["stages"]["stage_1"]["max_output_tokens"]
+    assert config.tier2_max_output_tokens == stage1_out["claude-sonnet-5"]
+    assert config.tier2_model == "claude-sonnet-5"
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    client = FakeAnthropicClient()
+    make_tier2(tmp_path, client).classify("clause")
+    assert client.calls[0]["max_tokens"] == 40
+    assert client.calls[0]["model"] == "claude-sonnet-5"
+
+
+def test_the_cache_key_describes_the_request_actually_sent(tmp_path, monkeypatch):
+    """The key's params and the API kwargs come from one `_params()`. If they could
+    drift, a cached entry would answer for a request that was never made."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    client = FakeAnthropicClient()
+    t = make_tier2(tmp_path, client)
+    t.classify("clause")
+    sent = client.calls[0]
+    for k, v in t._params().items():
+        assert sent[k] == v, f"{k} differs between the cache key and the request"
+
+
+# ----------------------------------------- item 4: spend ledger and the escalation cap
+
+
+@pytest.fixture
+def ledger(tmp_path):
+    from src.api.ledger import SpendLedger
+
+    path = tmp_path / "spend_ledger.jsonl"
+    path.write_text("")
+    return SpendLedger(path)
+
+
+def test_a_real_escalation_appends_to_the_spend_ledger(tmp_path, monkeypatch, ledger):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, 10.0
+
+    assert ledger.cumulative_usd() == 0.0
+    t.classify("a clause")
+
+    entries = [json.loads(l) for l in ledger.path.read_text().splitlines() if l.strip()]
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["kind"] == "actual" and e["cost_usd"] > 0
+    assert e["run_id"] == "serve_tier0_sonnet5"
+    # hard rule 10: the three input fields recorded separately, never summed
+    assert e["input_tokens"] == 1200
+    assert e["cache_read_input_tokens"] == 1084
+    assert e["cache_creation_input_tokens"] == 0
+    assert ledger.cumulative_usd() == pytest.approx(e["cost_usd"])
+
+
+def test_a_cache_hit_spends_nothing_and_writes_no_ledger_entry(tmp_path, monkeypatch,
+                                                               ledger):
+    """Billing a free answer a second time would inflate the record of real money."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, 10.0
+
+    t.classify("same clause")
+    after_first = ledger.cumulative_usd()
+    second = t.classify("same clause")
+
+    assert second.api_cache_hit is True
+    assert ledger.cumulative_usd() == pytest.approx(after_first)
+    assert len([l for l in ledger.path.read_text().splitlines() if l.strip()]) == 1
+
+
+def test_escalation_is_refused_once_the_cap_is_reached(tmp_path, monkeypatch, ledger):
+    from src.serve.tier2 import SpendCapReached
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    client = FakeAnthropicClient()
+    t = make_tier2(tmp_path, client)
+    t.ledger = ledger
+    t.spend_cap_usd = 0.001          # below one request's cost
+
+    t.classify("first clause")       # cap not yet reached: this one goes through
+    assert len(client.calls) == 1
+    assert ledger.cumulative_usd() > t.spend_cap_usd
+
+    with pytest.raises(SpendCapReached, match="SPEND CAP REACHED"):
+        t.classify("second clause")
+    assert len(client.calls) == 1, "an API call was made after the cap was reached"
+
+
+def test_a_cache_hit_still_serves_after_the_cap_is_reached(tmp_path, monkeypatch,
+                                                           ledger):
+    """The cap governs SPENDING. A free answer is not spending."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, 10.0
+    t.classify("cached clause")
+
+    t.spend_cap_usd = 0.0            # cap now reached
+    assert t.cap_reached() is True
+    assert t.classify("cached clause").api_cache_hit is True
+
+
+def test_the_cascade_falls_back_to_escalation_skipped_at_the_cap(config, tmp_path,
+                                                                 monkeypatch, ledger):
+    """The required end-to-end behaviour: cap reached -> Tier 0 answer, marked."""
+    from src.serve.tier2 import Tier2Claude
+    from src.api.cache import ResponseCache
+    from src.data.labels import load_labels
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    client = FakeAnthropicClient()
+    t2 = Tier2Claude(model="claude-sonnet-5", labels=load_labels(),
+                     max_output_tokens=40, cache=ResponseCache(tmp_path),
+                     ledger=ledger, spend_cap_usd=0.0)
+    t2._client = client
+
+    below = config.threshold.threshold - 0.01
+    out = make_cascade(config, tier0=FakeTier0(margin=below),
+                       tier2=t2).classify("ambiguous clause")
+
+    assert out["escalation_selected"] is True
+    assert out["escalation_skipped"] is True
+    assert out["tier_used"] == "tier0"
+    assert "SPEND CAP REACHED" in out["escalation_skipped_reason"]
+    assert len(client.calls) == 0, "no API call may be made at the cap"
+    assert [p["tier"] for p in out["cost_detail"]["per_tier"]] == ["tier0"]
+
+
+def test_a_cap_of_none_is_an_explicit_choice_not_a_default(tmp_path, monkeypatch,
+                                                           ledger):
+    """Unlimited spending must be something the operator asked for."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, None
+    assert t.cap_reached() is False
+    t.classify("clause")
+    assert ledger.cumulative_usd() > 0
+
+    serve = yaml.safe_load((ROOT / "configs" / "serve.yaml").read_text())
+    assert serve["tier2"]["spend_cap_usd"] is not None, \
+        "the committed config must ship WITH a cap"
+
+
+def test_spend_cap_is_configurable(config):
+    assert config.tier2_spend_cap_usd == 1.00
+    card = yaml.safe_load((ROOT / "configs" / "costs.yaml").read_text())
+    assert config.tier2_spend_cap_usd < card["budget"]["hard_stop_usd"], \
+        "a serving cap at or above the project budget could consume the experiments"
+
+
+def test_the_real_ledger_holds_no_serving_entries():
+    """results/spend_ledger.jsonl is the record of REAL money (hard rule 12). No live
+    escalation has been made, so no serving run_id may appear in it. The suite-wide
+    tamper guard lives in conftest.py; this asserts the file's actual content."""
+    from src.api.ledger import DEFAULT_LEDGER_PATH
+
+    for line in DEFAULT_LEDGER_PATH.read_text().splitlines():
+        if line.strip():
+            assert json.loads(line)["run_id"] != "serve_tier0_sonnet5", \
+                "a serving entry reached the real ledger; no live escalation has run"
+
+
+# ----------------------------------------------------- the recalibrated threshold
+
+
+def test_threshold_is_percentile_calibrated_at_the_registered_rate(config):
+    d = json.loads((ROOT / "configs" / "router_threshold.json").read_text())
+    assert d["calibration_mode"] == "percentile"
+    assert d["target_escalation_rate"] == pytest.approx(0.040556)
+    assert d["source_npz"].endswith("dev_logits_int8_local_ce_seed1.npz")
+    assert d["precision"] == "int8" and d["isa"] == "arm64_local"
+    assert "NOT AN ACCURACY CLAIM" in d["verdict_note"]
+    assert d["achieved_escalation_rate_on_dev"] == pytest.approx(0.0406, abs=0.005)
+
+
+def test_an_absolute_threshold_file_is_refused(tmp_path):
+    """§3aq: absolute thresholds span 1.49x across seeds and do not transfer."""
+    d = json.loads((ROOT / "configs" / "router_threshold.json").read_text())
+    d["calibration_mode"] = "absolute"
+    bad = tmp_path / "t.json"
+    bad.write_text(json.dumps(d))
+    with pytest.raises(ValueError, match="PERCENTILE"):
+        RouterThreshold.load(bad)

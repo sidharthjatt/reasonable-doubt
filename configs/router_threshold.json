@@ -1,7 +1,12 @@
 {
   "signal": "margin",
-  "threshold": 0.3440407544374466,
+  "calibration_mode": "percentile",
+  "threshold": 0.1153654158115387,
   "rule": "escalate when signal < threshold",
+  "percentile": 4.0556,
+  "target_escalation_rate": 0.040556,
+  "achieved_escalation_rate_on_dev": 0.041,
+  "retained_tier0_accuracy_on_dev": 0.8759124087591241,
   "calibrated_on": "dev_2000",
   "calibrated_on_manifest_sha256": "77d3341979f28114682bf19a9cc1cc28f10cf995a2bd6b95b66e2140903c035e",
   "artefact": "models/int8_ce_1",
@@ -9,10 +14,8 @@
   "precision": "int8",
   "isa": "arm64_local",
   "max_length": 512,
-  "target_escalation_rate": 0.1,
-  "achieved_escalation_rate_on_dev": 0.1,
-  "retained_tier0_accuracy_on_dev": 0.9038888888888889,
   "n_dev_rows": 2000,
   "source_npz": "results/dev_logits_int8_local_ce_seed1.npz",
-  "operating_point_note": "The escalation rate is a POLICY CHOICE, not an accuracy optimum. E6-A found the cascade is not established as better than Tier 0 alone (test_3000 macro-F1 delta +0.0063, 95% CI [-0.0004, +0.0103], sign-consistency 2/3). This threshold buys a defined worst-case handling path, not measured accuracy."
+  "percentile_basis": "\u00a73aq: absolute margin thresholds span 1.49x across E6's three seeds (0.1154 / 0.1177 / 0.1718), so an absolute value does not transfer between retrainings. A percentile is invariant to that rescaling and holds the escalation rate fixed. \u00a73au NARROWS this: it stabilises the RATE ONLY (set Jaccard 0.2370 -> 0.2419), never WHICH rows are escalated.",
+  "verdict_note": "THE ESCALATION RATE FIXES THE BILL. IT IS NOT AN ACCURACY CLAIM. \u00a73av's registered verdict (E6-A) is that cascading adds NO MEASURABLE ACCURACY: test_3000 macro-F1 delta +0.0063, 95% CI [-0.0004, +0.0103], sign-consistency 2/3; under percentile selection +0.0065, 2/3. Routing works \u2014 the margin signal drops accuracy from ~0.85 to ~0.37 on its own selection (AUROC 0.86) \u2014 but the escalation target has no marginal value on precisely the rows routing correctly identifies as hard. This threshold therefore buys a bounded, predictable API bill and a defined worst-case handling path. Any accuracy improvement read off it is unsupported."
 }

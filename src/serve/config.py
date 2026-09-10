@@ -34,6 +34,8 @@ class RouterThreshold:
 
     signal: str
     threshold: float
+    calibration_mode: str
+    percentile: float
     calibrated_on: str
     artefact: str
     seed: int
@@ -54,8 +56,17 @@ class RouterThreshold:
             raise ValueError(
                 f"threshold file says it was calibrated on {d['calibrated_on']!r}. "
                 f"Hard rule 1 permits dev only; refusing to serve it.")
+        if d.get("calibration_mode") != "percentile":
+            raise ValueError(
+                f"threshold file uses calibration_mode={d.get('calibration_mode')!r}. "
+                f"§3aq requires PERCENTILE calibration: absolute margin thresholds span "
+                f"1.49x across seeds of the same model, so an absolute value does not "
+                f"transfer across retrainings and the escalation rate — the API bill — "
+                f"would move with the weights.")
         return cls(
             signal=d["signal"], threshold=float(d["threshold"]),
+            calibration_mode=d["calibration_mode"],
+            percentile=float(d["percentile"]),
             calibrated_on=d["calibrated_on"], artefact=d["artefact"],
             seed=int(d["seed"]),
             target_escalation_rate=float(d["target_escalation_rate"]),
@@ -66,6 +77,8 @@ class RouterThreshold:
 
     def as_dict(self) -> dict[str, Any]:
         return {"signal": self.signal, "threshold": self.threshold,
+                "calibration_mode": self.calibration_mode,
+                "percentile": self.percentile,
                 "calibrated_on": self.calibrated_on, "artefact": self.artefact,
                 "seed": self.seed,
                 "target_escalation_rate": self.target_escalation_rate,
@@ -82,8 +95,10 @@ class ServiceConfig:
     threshold: RouterThreshold
     tier2_model: str
     tier2_max_output_tokens: int
-    tier2_temperature: float
+    tier2_temperature: float | None
     tier2_batch: bool
+    tier2_spend_cap_usd: float | None
+    tier2_run_id: str
     canary_row_set: Path
     canary_min_accuracy: float
     canary_measured_accuracy: float
@@ -127,8 +142,14 @@ class ServiceConfig:
             threshold=threshold,
             tier2_model=d["tier2"]["model"],
             tier2_max_output_tokens=int(d["tier2"]["max_output_tokens"]),
-            tier2_temperature=float(d["tier2"]["temperature"]),
+            # None stays None: it means OMIT the key, and float(None) would crash while
+            # a 0.0 default would silently send a field Sonnet 5 rejects.
+            tier2_temperature=(None if d["tier2"]["temperature"] is None
+                               else float(d["tier2"]["temperature"])),
             tier2_batch=bool(d["tier2"]["batch"]),
+            tier2_spend_cap_usd=(None if d["tier2"].get("spend_cap_usd") is None
+                                 else float(d["tier2"]["spend_cap_usd"])),
+            tier2_run_id=str(d["tier2"]["run_id"]),
             canary_row_set=root / d["canary"]["row_set"],
             canary_min_accuracy=float(d["canary"]["min_accuracy"]),
             canary_measured_accuracy=float(d["canary"]["measured_accuracy"]),

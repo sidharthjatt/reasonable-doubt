@@ -1373,6 +1373,111 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bc. DEPLOYMENT CONFIG — canary floor and router operating point (2026-09-11)
+
+**THIS IS NOT AN EXPERIMENT AND HAS NO ACCEPT RULE.** Nothing here is tested, nothing
+here can be confirmed or falsified, and no number below may be cited as a result. It is
+registered because both values are thresholds chosen from measurements, and hard rule 6
+exists so that a chosen threshold is written down with its basis rather than appearing
+in a config file with no provenance. The deployed service is `src/serve/`
+(**E4b-A**: Tier 0 INT8 → Claude Sonnet 5, no Tier 1).
+
+---
+
+#### 1. Tier 0 startup canary — floor **0.80**, from a measured **0.9000**
+
+| | |
+|---|---|
+| measured | **180/200 = 0.9000** accuracy, arm64 (Apple Silicon), `models/int8_ce_1`, 2026-09-10 |
+| row set | `configs/canary_200.json` — 200 TRAIN rows, seed 20260910 |
+| floor | **0.80** |
+| behaviour | `create_app()` raises `CanaryFailure`; the process does not start |
+
+**Why a refusal rather than a warning.** Kaggle's non-VNNI x86 scored these same weights
+at INT8 macro-F1 **0.0037** against FP32's 0.7636 — chance, **with no error raised
+anywhere**. INT8 kernels are ISA-specific and degrade silently without AVX-512 VNNI. The
+deployment target (HF Spaces) is x86, i.e. the same hardware class. A service that
+started anyway would serve chance-level labels with plausible confidences on every
+request, which is exactly the silent-degradation path hard rule 11 forbids.
+
+**Why 0.80 and not something tighter.** The gap to the measured value is 0.10 absolute,
+≈12× the largest FP32/INT8 delta this project has measured (E3, max |delta| 0.0083), so
+benign cross-ISA numeric jitter cannot trip it; and it sits far above any degenerate
+outcome, so the failure it exists to catch cannot pass it. The floor is deliberately
+loose: it is a smoke test for a catastrophic mode, not a precision instrument.
+
+> **THE 0.9000 IS NOT AN ACCURACY RESULT AND IS NOT COMPARABLE TO ANYTHING REPORTED.**
+> These are TRAIN rows the model was fitted on. `test_3000` INT8 accuracy for the same
+> artefact is **0.8563** (macro-F1 0.7582). The canary number is higher *because* it is
+> contaminated by construction; that is acceptable for a fixed reference point and
+> disqualifying for anything else.
+
+The rows are drawn from TRAIN **excluding** `train_holdout_3000` and `exemplars_8`, so no
+evaluation role is consumed: `test_3000` reports, `dev_2000` is thresholds only (hard
+rule 1), `train_holdout_3000` selects checkpoints.
+
+---
+
+#### 2. Router operating point — percentile calibration at **4.056%**
+
+| | |
+|---|---|
+| mode | **percentile**, not absolute (§3aq) |
+| target escalation rate | **4.056%** |
+| derived threshold | margin **0.115365** on `dev_2000`, seed 1, `models/int8_ce_1` |
+| achieved on dev | 4.10% |
+| source | `results/dev_logits_int8_local_ce_seed1.npz` (int8 / arm64_local) |
+
+**Percentile, per §3aq.** Absolute dev-calibrated margin thresholds span **1.49×** across
+E6's three seeds (0.1154 / 0.1177 / 0.1718), and that spread *causes* the 1.53× spread in
+realized escalation rate. Margin is not on a comparable scale across retrainings, so an
+absolute value does not transfer. **§3au narrows what this buys:** percentile selection
+stabilises the **RATE ONLY** (set Jaccard 0.2370 → 0.2419, f = +0.0065). *Which* clauses
+escalate is not stabilised, so no SLA, audit or reproducibility claim may rest on it.
+
+**THE RATE FIXES THE BILL. IT IS NOT AN ACCURACY CLAIM.** §3av's registered verdict
+(**E6-A**) stands unchanged: cascading adds **no measurable accuracy** — `test_3000`
+macro-F1 delta **+0.0063**, 95% CI **[−0.0004, +0.0103]**, sign-consistency **2/3**;
+under percentile selection **+0.0065**, 2/3. Routing works (margin drops accuracy ~0.85 →
+~0.37 on its own selection, AUROC 0.86), but the escalation target has no marginal value
+on precisely those rows. The operating point therefore buys a bounded, predictable API
+bill and a defined worst-case path, and nothing else.
+
+> **⚠ THE OPERATING POINT WAS CHOSEN AFTER SEEING TEST, AND THIS IS THE DISCLOSURE.**
+> 4.056% is the **mean applied escalation rate across E6's three seeds on `test_3000`**
+> ((120 + 97 + 148) / 3 ÷ 3000), and §3au's rank-based top-4.056% selection is built from
+> the same figure. It was **not** derived on dev in advance. The *threshold value* is
+> computed on `dev_2000` only, so hard rule 1 is intact for the threshold — but **the
+> RATE those thresholds target came from test.**
+>
+> **Consequence, stated plainly: `test_3000` numbers at this operating point are NOT a
+> held-out estimate for the deployed configuration.** Any cascade macro-F1, escalation
+> rate or USD/1k figure read off `test_3000` at 4.056% is an in-sample figure for the
+> rate that selected it, and must be reported as such. A held-out estimate for the
+> deployed config would need a rate fixed without reference to test, or a fresh
+> reporting split. Neither exists, and the number is not repaired by restating it.
+>
+> This is recorded rather than corrected because the alternative — silently picking a
+> different rate now — would replace a disclosed dependence with an undisclosed one.
+
+**A recalibration is REQUIRED whenever the weights change**, E1b's 10-epoch artefact
+included: the percentile is transferable, the derived absolute value is not.
+`configs/router_threshold.json` records the artefact it was calibrated against and
+`ServiceConfig` refuses to start when the served weights differ.
+
+---
+
+#### 3. Live-serving spend
+
+Escalation appends to `results/spend_ledger.jsonl` (hard rule 12) under run id
+`serve_tier0_sonnet5`, separating serving spend from the offline runs. A configurable
+cap (`tier2.spend_cap_usd`, shipped at **$1.00**, under the $15 hard stop) is checked
+against cumulative recorded spend before every call; at the cap the service **refuses to
+escalate** and returns the Tier 0 answer with `escalation_skipped=true`. A cache hit
+spends nothing, so it is served without consulting the cap and writes no ledger entry.
+**As of registration no live escalation has been made and the ledger contains no serving
+entry.**
+
 ### 3bb. E1b runs as TWO BOUNDED COMMITS — and §3y's step-budget decision is reversed (2026-09-10)
 
 **Does a mid-run split need registering? The split itself, NO. The mechanism, YES — and it

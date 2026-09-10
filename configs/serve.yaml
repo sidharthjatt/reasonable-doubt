@@ -28,12 +28,28 @@ tier2:
   # The escalation target. Sonnet 5's rates live in costs.yaml under this exact id.
   model: claude-sonnet-5
   max_output_tokens: 40      # matches the stage-1 budget decision in costs.yaml
-  temperature: 0.0
+  # NULL MEANS OMIT THE KEY, not send null. Sonnet 5 REJECTS `temperature`
+  # ("deprecated for this model"), which is why scripts/submit_batch.py passes
+  # temperature=None for both Stage 1 legs. The deployed tier must send the same
+  # request the baseline was measured with; sending 0.0 here was rejected by the API
+  # on every escalation.
+  temperature: null
   # Escalation happens ONLY when ANTHROPIC_API_KEY is set. With no key the service
   # returns the Tier 0 answer and marks escalation_skipped=true. It never pretends.
   # Interactive serving is NOT batch: the 50% Batch API discount does not apply and
   # must not be claimed. Offline evaluation still uses batch (hard rule 4).
   batch: false
+  # SPEND CAP, in USD, checked against cumulative real spend in
+  # results/spend_ledger.jsonl before every API call. On reaching it the service
+  # REFUSES to escalate and returns the Tier 0 answer with escalation_skipped=true —
+  # a stop, not a throttle. Set below the $15 total budget so a running service can
+  # never consume the experiment budget; the ledger's own hard_stop_usd still applies
+  # underneath this as the project-wide backstop.
+  # A cache hit spends nothing and is served without consulting the cap.
+  spend_cap_usd: 1.00
+  # Names this service's entries in the ledger so live serving spend is separable from
+  # the offline experiment runs.
+  run_id: serve_tier0_sonnet5
 
 canary:
   # Startup refusal. MEASURED 2026-09-10 on THIS arm64 host with models/int8_ce_1:
