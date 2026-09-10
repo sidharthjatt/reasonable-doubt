@@ -120,7 +120,49 @@ def prep(split, idx):
     return [dict(zip(enc, v)) for v in zip(*enc.values())]
 dev_ds = prep("validation", DEV_IDX)
 
-def macro(y, pred): return f1_score(y, pred, average="macro", zero_division=0)
+# --- BEGIN PORT OF src.eval.metrics.score (PREREGISTRATION 3ay) ----------------------
+# This notebook is STANDALONE — it runs on Kaggle where the repo is not present, so it
+# cannot import src.eval.metrics. Until 3ay this file called sklearn's f1_score directly,
+# which is the bypass 3ay records: sklearn's default averages over gold UNION predicted, so
+# a class the model predicts but that has no gold examples scores 0.0 and DEFLATES macro-F1.
+# Measured on E8's 97-of-100 rows that is -0.0188 (-3.00%) — not a rounding difference.
+# It never bit here only because test_3000's gold covers all 100 classes.
+#
+# This port is asserted EQUAL to src.eval.metrics.score by
+# tests/test_scorer_provenance.py::test_notebook_port_matches_registered_scorer, which
+# extracts the block between these sentinels and runs both on the divergence case. Keep the
+# sentinels; the test locates the code by them.
+def _macro_report(y, pred, labels=None, allow_absent=False):
+    """macro-F1 over an EXPLICIT label set, refusing silent deflation.
+
+    Mirrors src.eval.metrics.score: averages over `labels` (default = the classes present
+    in gold) and RAISES if `labels` contains a class with no gold examples unless the
+    caller opts in, because such a class scores 0.0 and drags the mean down in proportion.
+    Returns classes_averaged, because macro-F1 is undefined without the set it averaged
+    over (3aw).
+    """
+    y = list(y); pred = list(pred)
+    average_over = sorted(set(y)) if labels is None else list(labels)
+    gold_set = set(y)
+    absent = [c for c in average_over if c not in gold_set]
+    if absent and not allow_absent:
+        raise ValueError(
+            f"{len(absent)} of {len(average_over)} classes to average over have NO gold "
+            f"examples ({absent[:5]}). Each scores 0.0 and deflates macro-F1. Pass "
+            "allow_absent=True deliberately, or labels=None to average over gold's classes.")
+    per = f1_score(y, pred, labels=average_over, average=None, zero_division=0)
+    return {"macro_f1": float(sum(per) / len(per)),
+            "accuracy": float(np.mean(np.asarray(pred) == np.asarray(y))),
+            "n": len(y),
+            "classes_in_gold": len(gold_set),
+            "classes_predicted": len(set(pred)),
+            "classes_averaged": len(average_over),
+            "absent_classes": absent,
+            "per_class_f1": {str(c): float(f) for c, f in zip(average_over, per)}}
+# --- END PORT ------------------------------------------------------------------------
+
+def macro(y, pred): return _macro_report(y, pred)["macro_f1"]
+def macro_full(y, pred): return _macro_report(y, pred)
 
 def onnx_predict(model_dir, texts, max_length, batch=1):
     """Run an ONNX graph. Both discriminator arms use THIS function, so a disagreement
@@ -228,12 +270,14 @@ for seed in SEEDS:
 
     out = {"seed": seed, "loss_arm": LOSS_ARM, "checkpoint": str(fp32),
            "retrained": False, "max_length": MAX_LENGTH,
+           "dev_2000_fp32": macro_full(dev.label_ids, dev.predictions.argmax(-1)),
            "dev_2000_fp32_macro_f1_convenience": float(dev_macro),
            "dev_2000_absent_classes": DEV_ABSENT,
-           "test_3000_onnx_fp32": {"macro_f1": macro(y3, a2),
-                                   "accuracy": float((a2 == y3).mean())},
-           "test_3000_int8": {"macro_f1": macro(y3, a3),
-                              "accuracy": float((a3 == y3).mean())},
+           # Full reports: macro_f1/accuracy keep their names so readers are unaffected,
+           # and classes_averaged / per_class_f1 come along (3aw, 3ay).
+           "scorer": ("_macro_report — port of src.eval.metrics.score, PREREGISTRATION 3ay"),
+           "test_3000_onnx_fp32": macro_full(y3, a2),
+           "test_3000_int8": macro_full(y3, a3),
            "e3_discriminator": {"onnx_fp32_vs_int8_argmax_agree": float((a2 == a3).mean()),
                                 "onnx_env": env},
            "seed_wall_clock_s": round(time.time() - t_seed, 1)}

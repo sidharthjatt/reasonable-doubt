@@ -120,6 +120,7 @@ def main() -> int:
 
     # ---- per-seed cascade sweeps -----------------------------------------------------
     per_seed = {}
+    classes_averaged: set[int] = set()
     for s in SEEDS:
         dev = load_split(a.results_dir / f"dev_logits_int8_local_ce_seed{s}.npz",
                          "dev_2000", for_calibration=True)
@@ -153,6 +154,11 @@ def main() -> int:
         # PREDICTIONS are scored, not just its hit rate. An escalation policy can raise
         # accuracy while losing tail classes, and accuracy alone would hide that — which
         # is the whole reason this project leads with macro-F1.
+        # The label set macro-F1 is averaged over, RECORDED not implied (3aw/3ay). Every
+        # score() call below uses labels=sorted(set(gold)); capturing it here is what lets
+        # a reader compare this number to any other.
+        classes_averaged.add(len(sorted(set(gold))))
+
         def macro_for(esc_mask, gold=gold, t0_pred=t0_pred, api_p=api_p):
             combined = np.where(esc_mask, api_p, t0_pred)
             return score(list(gold), [None if c is None else str(c) for c in combined],
@@ -260,7 +266,14 @@ def main() -> int:
         "device_cost_usd": device_cost_usd(hw),
         "tariff_is_assumed": bk.tariff_is_assumed, "tariff_basis": bk.tariff_basis,
         "energy_is_soc_only": bk.energy_is_soc_only,
-        "seeds": list(SEEDS), "curves": agg, "pareto": fronts,
+        "seeds": list(SEEDS),
+        "classes_averaged": (classes_averaged.pop() if len(classes_averaged) == 1
+                             else sorted(classes_averaged)),
+        "classes_averaged_note": ("macro-F1 is averaged over the classes present in "
+                                  "test_3000's gold; a single value here means every seed "
+                                  "averaged over the same set (PREREGISTRATION 3aw)."),
+        "scorer": "src.eval.metrics.score",
+        "curves": agg, "pareto": fronts,
     }
     a.out_json.parent.mkdir(parents=True, exist_ok=True)
     a.out_json.write_text(json.dumps(payload, indent=2))

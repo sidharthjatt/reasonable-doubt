@@ -1423,8 +1423,45 @@ again (§3e).** What is committed instead:
    may only shrink**.
 5. `test_grandfathered_list_only_shrinks` — a stale entry would hide a real gap.
 
-Suite: **478 passed, 1 skipped.** The bypass in the notebooks is still open — the notebooks
-still call sklearn — but it can no longer reach a reported number without a test failing.
+**BYPASS CLOSED 2026-09-10, before E1b was armed — and it had to be, because the rule and
+the run collided.** E1b runs the same unmodified `kaggle_tier0.py`, so it would have emitted
+new seed JSONs carrying a `macro_f1` with no `classes_averaged`. Then **either**
+`test_committed_artefacts_record_classes_averaged` fails, **or** the files get added to
+`GRANDFATHERED` — which `test_grandfathered_list_only_shrinks` forbids. **One of the two
+breaks on E1b's first write.** A guard that forces a choice between failing and being
+weakened is not yet a guard.
+
+**The notebooks are STANDALONE** — they run on Kaggle where the repo is absent, so
+`from src.eval.metrics import score` is not available. The fix is therefore a **port**, and a
+port that is never compared to its original is §3ay's defect again in a new place. So:
+
+- `notebooks/kaggle_tier0.py` and `kaggle_tier0_dev.py` now define `_macro_report`, a port of
+  `src.eval.metrics.score` between `# --- BEGIN PORT` / `# --- END PORT` sentinels. It
+  averages over an explicit label set, **raises** on absent classes, and returns
+  `classes_averaged`, `classes_in_gold`, `classes_predicted`, `absent_classes` and
+  `per_class_f1`.
+- Every reported metric block is now the **full report**. `macro_f1` and `accuracy` keep
+  their names, so `scripts/score_int8_local.py` and the E3 discriminator read unchanged.
+- `dev_2000` gains a full `dev_2000_fp32` report — **it is the split where the deflation is
+  actually reachable**, covering 99 of 100 classes.
+- **`test_notebook_port_matches_registered_scorer`** extracts the real shipped block from
+  each notebook by its sentinels, `exec`s it, and asserts agreement with
+  `src.eval.metrics.score` on four cases **including the divergence case**, that it inherits
+  the raising guard, and that it does **not** reproduce sklearn's deflation.
+- **`test_notebooks_no_longer_call_sklearn_directly_for_reported_metrics`** fails if
+  `def macro(...): return f1_score(` reappears.
+
+**`e6_frontier.json` came OFF the grandfathered list the same day it went on** — regenerated
+under the exact-reproduction guard, which passed bit-exactly, now recording
+`classes_averaged: 100` and `scorer: src.eval.metrics.score`. The regeneration that added
+per-seed arrays was the free moment to add this and it was missed; adding it separately cost
+one more run. **The list shrank, which is the only direction its test permits.**
+
+Suite: **481 passed, 1 skipped.** Remaining grandfathered: the 6 Kaggle seed JSONs already on
+disk and 2 rung-0 files — **historical artefacts that cannot be reissued**, not future ones.
+`notebooks/kaggle_tier1.py` still calls sklearn directly and is **not** closed; it is
+recorded here rather than fixed, because no Tier 1 run remains (E4-A/E4b-A) and editing a
+notebook nothing will execute would be change without verification.
 
 ### 3ax. SECOND DEFECT CLASS — "superseded figure still presented as current" (2026-09-10)
 

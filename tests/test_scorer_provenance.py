@@ -40,8 +40,10 @@ GRANDFATHERED = {
     "tier0_ce_seed1.json", "tier0_ce_seed2.json", "tier0_ce_seed3.json",
     "tier0_dev_ce_seed1.json", "tier0_dev_ce_seed2.json", "tier0_dev_ce_seed3.json",
     "rung0_groq_gptoss120b.json", "rung0_groq_qwen3.6-27b.json",
-    "e6_frontier.json",   # aggregates over seeds; label set is fixed by the loader
 }
+# e6_frontier.json was grandfathered on 2026-09-10 and CAME OFF the list the same day: it
+# now records classes_averaged: 100 and its scorer. The list shrank, which is the only
+# direction test_grandfathered_list_only_shrinks permits.
 
 
 def _sklearn_macro(gold, pred, labels=None):
@@ -136,6 +138,66 @@ def test_committed_artefacts_record_classes_averaged():
         f"classes_averaged: {missing}. macro-F1 is defined relative to the label set "
         "averaged over; add it, or add the file to GRANDFATHERED with a reason."
     )
+
+
+def _extract_notebook_port(name: str):
+    """Pull the ported scorer out of a standalone Kaggle notebook and make it callable.
+
+    The notebooks cannot import src/ — they run on Kaggle where the repo is absent — so the
+    scorer is PORTED into them. A port that is never compared to its original is two
+    implementations again (3ay), so this executes the real shipped block.
+    """
+    import numpy as np
+    from sklearn.metrics import f1_score
+
+    src = (ROOT / "notebooks" / name).read_text()
+    start = src.index("# --- BEGIN PORT")
+    end = src.index("# --- END PORT")
+    ns: dict = {"np": np, "f1_score": f1_score}
+    exec(src[start:end], ns)          # noqa: S102 — executing our own committed source
+    return ns["_macro_report"]
+
+
+@pytest.mark.parametrize("notebook", ["kaggle_tier0.py", "kaggle_tier0_dev.py"])
+def test_notebook_port_matches_registered_scorer(notebook):
+    """The ported scorer must agree with src.eval.metrics.score, INCLUDING on the case
+    where sklearn's default does not — otherwise closing the bypass changed nothing."""
+    port = _extract_notebook_port(notebook)
+
+    cases = [
+        (["A", "A", "B", "B", "C", "C", "D", "D"], ["A", "A", "B", "B", "C", "E", "D", "D"]),
+        (["A", "B", "C"], ["A", "B", "C"]),
+        ([0, 0, 1, 1, 2, 2], [0, 1, 1, 1, 2, 0]),
+        (["A"] * 9 + ["B"], ["A"] * 8 + ["B", "B"]),          # imbalanced tail
+    ]
+    for gold, pred in cases:
+        want = score(gold, pred, labels=sorted(set(gold)))
+        got = port(gold, pred)
+        assert got["macro_f1"] == pytest.approx(want.macro_f1, abs=1e-12), (
+            f"{notebook}: port disagrees with the registered scorer on {gold}/{pred}")
+        assert got["accuracy"] == pytest.approx(want.accuracy, abs=1e-12)
+        assert got["classes_averaged"] == want.classes_averaged
+        assert got["classes_in_gold"] == want.classes_in_gold
+
+    # And it must inherit the guard, not just the arithmetic.
+    with pytest.raises(ValueError, match="NO gold examples"):
+        port(["A", "A", "B", "B"], ["A", "A", "B", "B"], labels=["A", "B", "C"])
+
+    # The divergence case: the port must NOT reproduce sklearn's deflation.
+    gold = ["A", "A", "B", "B", "C", "C", "D", "D"]
+    pred = ["A", "A", "B", "B", "C", "E", "D", "D"]
+    assert port(gold, pred)["macro_f1"] - _sklearn_macro(gold, pred) > 0.05, (
+        f"{notebook}: the port reproduces sklearn's absent-class deflation — the bypass "
+        "is not actually closed")
+
+
+def test_notebooks_no_longer_call_sklearn_directly_for_reported_metrics():
+    """The reported-metric helpers must route through the port, not f1_score."""
+    for name in ("kaggle_tier0.py", "kaggle_tier0_dev.py"):
+        src = (ROOT / "notebooks" / name).read_text()
+        assert 'def macro(y, pred): return f1_score(' not in src, (
+            f"{name} still defines macro() directly on sklearn — 3ay's bypass")
+        assert "_macro_report" in src, f"{name} is missing the ported scorer"
 
 
 def test_grandfathered_list_only_shrinks():
