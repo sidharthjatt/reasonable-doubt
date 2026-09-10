@@ -18,7 +18,18 @@
 # transformers is pinned BELOW 4.58 here, unlike Tier 1: `optimum-onnx` declares
 # `transformers<4.58.0,>=4.36`, and this notebook needs optimum for the ONNX export.
 # Kaggle ships transformers 5.0.0, so this IS a downgrade — check the output.
-!pip install "transformers==4.57.6" "optimum[onnxruntime]" onnx onnxruntime \
+# onnxruntime is PINNED to 1.29.0, the version that quantised the HOST BASELINE
+# (results/tier0_ce_hostB_seed1.json -> train_env.onnxruntime). It was previously
+# unpinned, and E1b drifted 1.29.0 (commit 1) -> 1.30.0 (commit 2) between two halves of
+# ONE seed. Training is torch-only so the drift touched only the export/quantise tail --
+# but the gate compares E1b INT8 against the host baseline INT8, so a quantiser change is
+# a SECOND VARIABLE inside a difference that is supposed to isolate epochs.
+#
+# optimum is STILL UNPINNED, and that is a stated gap rather than an oversight: pinning
+# it needs a known-good version and none was ever recorded, because train_env() read
+# `optimum.__version__` (which does not exist) and wrote null every time. The version
+# capture is fixed below; once a run records a real optimum version, pin it here too.
+!pip install "transformers==4.57.6" "optimum[onnxruntime]" onnx "onnxruntime==1.29.0" \
     "datasets>=2.19" sentencepiece protobuf scikit-learn
 !pip check || echo "NOTE: pip check reported conflicts above — read them before continuing"
 print("\n" + "=" * 70)
@@ -90,6 +101,22 @@ if not ((4, 36) <= _v < (4, 58)):
         f"passed while running versions that were never introspected — this check "
         f"exists so that cannot recur.")
 print("  PREFLIGHT: transformers version is inside optimum-onnx's supported range")
+
+# ONNXRUNTIME IS ASSERTED, NOT PRINTED. The install cell pins it, but a pin that did not
+# take looks exactly like one that did -- and this project has already shipped a preflight
+# that "passed" while running versions nothing introspected. The gate compares INT8
+# artefacts across runs, so the quantiser must be the SAME version in every one of them.
+_ORT_PINNED = "1.29.0"     # the host baseline's quantiser; see the install cell
+import onnxruntime as _ort_pf
+if _ort_pf.__version__ != _ORT_PINNED:
+    raise RuntimeError(
+        f"onnxruntime is {_ort_pf.__version__}, expected {_ORT_PINNED}. The pin did not "
+        f"take -- almost always because the kernel was not restarted after CELL 1. "
+        f"REFUSING to continue: INT8 artefacts quantised by different onnxruntime "
+        f"versions are not comparable, and the E1b gate is exactly such a comparison "
+        f"(E1b INT8 vs host baseline INT8, PREREGISTRATION 3ar/3as). Re-run CELL 1 and "
+        f"RESTART THE KERNEL.")
+print(f"  PREFLIGHT: onnxruntime {_ort_pf.__version__} matches the pinned quantiser")
 print("PREFLIGHT — validating signatures before anything expensive")
 _require(TrainingArguments, ["output_dir","seed","num_train_epochs","learning_rate",
     "per_device_train_batch_size","per_device_eval_batch_size","eval_strategy",
@@ -412,11 +439,40 @@ def train_env():
             e["driver"] = r.stdout.strip().splitlines()[0].strip()
     except (OSError, subprocess.SubprocessError):
         pass                      # driver stays None: not measured, never guessed
-    for k in ("numpy", "datasets", "tokenizers", "optimum", "onnxruntime"):
+    # VERSION CAPTURE, VIA THREE ROUTES BECAUSE ONE WAS SILENTLY FAILING.
+    # `__import__("optimum").__version__` does not exist -- optimum exposes it at
+    # `optimum.version.__version__` -- so the bare except wrote null for optimum in
+    # EVERY run to date, leaving the quantiser front end unversioned in every artefact
+    # on disk while the field looked populated. importlib.metadata is the authority
+    # (it reads the installed distribution), with the attribute routes as fallbacks for
+    # packages whose dist name differs from the import name.
+    import importlib
+    import importlib.metadata as _md
+
+    def _version_of(name):
         try:
-            e[k] = __import__(k).__version__
+            return _md.version(name)
         except Exception:
-            e[k] = None
+            pass
+        try:
+            mod = importlib.import_module(name)
+        except Exception:
+            return None            # genuinely not installed: null is the truth here
+        v = getattr(mod, "__version__", None)
+        if v is not None:
+            return v
+        try:                        # optimum's actual location
+            return importlib.import_module(f"{name}.version").__version__
+        except Exception:
+            return None
+
+    for k in ("numpy", "datasets", "tokenizers", "optimum", "onnxruntime", "onnx"):
+        e[k] = _version_of(k)
+    # The quantiser is optimum-over-onnxruntime, so BOTH must be present for an INT8
+    # artefact to be attributable. A null here is not a cosmetic gap: it is the reason
+    # the E1b/host-baseline comparison could not be cleared from the artefacts alone.
+    e["quantiser_versions_complete"] = (
+        e["onnxruntime"] is not None and e["optimum"] is not None)
     print("  TRAIN ENV: " + " | ".join(
         f"{k}={e[k]}" for k in ("gpu_name", "gpu_capability", "torch", "cuda_runtime",
                                 "cudnn", "driver", "tf32_matmul")))
