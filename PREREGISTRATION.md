@@ -70,13 +70,44 @@ that decides whether local inference ever wins**. **Measurement falsified that.*
 
 Measured on the Mac Mini, ONNX-INT8, DeBERTa-v3-base architecture:
 
-| quantity | value |
-|----------|-------|
-| throughput | **28.97 ± 0.24 req/s** (4 runs, bs=1, max_length 512) |
-| SoC power under load | 16.0 W *(package only — see caveat)* |
-| energy | 0.526 J / request |
+> **⚠ SUPERSEDED 2026-09-09 — the figures below were replaced and this block is the
+> historical record.** This table read **28.97 ± 0.24 req/s (4 runs)**, measured on an
+> **UNTRAINED architecture probe** and on a contaminated n=4 set (**§3e instance 8**). The
+> live figures are **9 runs over the three TRAINED INT8 artefacts** (§3aj's registered rule:
+> mean over all runs, no outlier excluded). The stale number stood here as "measured" while
+> §3aj already carried the replacement — corrected under §3aw, and found only by the §3ax
+> sweep, not by any check.
+
+| quantity | value (LIVE, 9 runs, 3 trained artefacts) | superseded (n=4, untrained probe) |
+|----------|-------|---|
+| throughput | **28.3615 ± 1.1839 req/s** (bs=1, max_length 512) | ~~28.97 ± 0.24~~ |
+| p50 latency | **25.3969 ± 0.8824 ms** | — |
+| marginal SoC power | **17.7546 ± 0.5449 W** (load − idle) | ~~16.0 W package~~ |
+| energy | **0.6269 ± 0.0311 J / request** | ~~0.526 J~~ |
+
+**Per-run values, required by §3aw and carried here rather than only in the artefact:**
+
+| artefact | run | rps | p50 ms | p95 ms | marginal W | J/req |
+|---|---|---|---|---|---|---|
+| int8_ce_1 | 1 | 28.6402 | 25.0328 | 101.6378 | 17.3140 | 0.6045 |
+| int8_ce_1 | 2 | 27.3710 | 26.4489 | 106.0808 | 17.7396 | 0.6481 |
+| int8_ce_1 | 3 | 29.4894 | 24.7160 | 97.2942 | 18.6136 | 0.6312 |
+| int8_ce_2 | 1 | 28.7610 | 24.9569 | 95.9016 | 16.8503 | 0.5859 |
+| int8_ce_2 | 2 | 27.8682 | 25.9455 | 101.5982 | 17.4198 | 0.6251 |
+| int8_ce_2 | 3 | 26.1640 | 27.0067 | 102.5825 | 18.1729 | 0.6946 |
+| int8_ce_3 | 1 | 29.7825 | 24.5410 | 95.7084 | 18.0896 | 0.6074 |
+| int8_ce_3 | 2 | 29.4628 | 24.5560 | 97.3014 | 18.1293 | 0.6153 |
+| int8_ce_3 | 3 | 27.7141 | 25.3685 | 100.0497 | 17.4625 | 0.6301 |
+
+**All nine are the same sign and the spread is run-to-run, not artefact-to-artefact:**
+`F(artefact) = 1.04` on df=(2,4) against a 95% critical value of 6.94 — the artefact
+explains nothing beyond noise (§3aj). Per-artefact means 28.50 / 27.60 / 28.98.
+
+The arithmetic below is **left at the superseded figures as the historical record**; the
+live cost line is computed from `configs/costs.yaml`, which carries the 9-run values.
 
 ```
+[SUPERSEDED ARITHMETIC — kept per hard rule 7, do not cite]
 1000 clauses / 28.97 req/s        = 34.5 s
 16.0 W x 34.5 s                   = 552 J = 0.000153 kWh
 at $0.085/kWh                     = $0.0000130 per 1000 clauses
@@ -120,7 +151,7 @@ this does not change any conclusion, but the number must be what it says it is.
 
 | input | status |
 |-------|--------|
-| Tier 0 throughput | **measured** 28.97 ± 0.24 req/s |
+| Tier 0 throughput | **measured 28.3615 ± 1.1839 req/s** (9 runs, 3 trained INT8 artefacts, §3aj). ~~28.97 ± 0.24 (n=4, untrained probe)~~ **superseded — §3e instance 8**; per-run table in §1 |
 | `device_cost_usd` | **derived** $633.86 (59,900 INR ÷ 94.50, FX dated 2026-09-07) |
 | Tier 0 SoC power | first reading taken with a defective harness; **re-measure** |
 | Tier 0 wall power | not obtainable without a meter; **optional given the margin** |
@@ -1283,6 +1314,50 @@ not a test of the accept rule** — the accept rule is still decided on the 3-se
 unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
+
+### 3ax. SECOND DEFECT CLASS — "superseded figure still presented as current" (2026-09-10)
+
+§3ax's sweep found the 28.97 throughput defect **incidentally**, while looking for something
+else. That is the tell: **no targeted check existed**, so a separate sweep was run. It found
+**five more**. This is a different failure from §3aw — there the number was correct and the
+structure was missing; here **the number itself has been replaced and the replacement did not
+propagate.**
+
+**THE CLASS.** *A figure that a §3e instance or a later measurement replaced, still stated
+elsewhere in the record without a supersession marker — so the report asserts two
+contradictory values and a reader cannot tell which is live.*
+
+Why it evades everything already registered: hard rule 7 says negative and rejected results
+**stay** in the report, which is right — but "stays" was silently read as "stays *unmarked at
+every site*". Hard rule 5 routes costs through `configs/costs.yaml`, and **`costs.yaml` was
+correct in every case below** — the stale values live only in the prose. The artefacts and
+the narrative drifted apart with nothing comparing them.
+
+| # | figure stated as current | live value | where | impact |
+|---|---|---|---|---|
+| **1** | **28.97 ± 0.24 req/s** (n=4, untrained probe) | **28.3615 ± 1.1839** (n=9, trained) | §1 L75, §1b L123 | **FIXED 2026-09-10** — both sites now carry the live figure, the strike-through and the per-run table |
+| **2** | **30.23 req/s / 18.20 W / 17.88 W marginal / 0.591 J/req**, headed "measured" | **28.3615 / 18.5108 / 17.7546 / 0.6269** | §3aa's own table (~L2440) | **the §3ac marker at L2360 covers §3ac's sensitivity table, NOT this one.** Four figures, all superseded, all unmarked |
+| **3** | *"E6's numbers are unchanged — 0.591 J/req, $1.390e-5 per 1k, V\* = 1,413,969"* | energy 0.6269; V\* 1,413,971 per §3ac | §3ab close (~L2431) | asserted as live in a sentence whose point is that nothing changed |
+| **4** | `measured_throughput_rps` **(30.23)**, `power_draw_soc_watts` **(18.20)**, `energy_joules_per_request` **(0.591)** described as *"now measured and in `configs/costs.yaml`"* | costs.yaml holds 28.3615 / 17.7546 / 0.6269 | E6 entry L479–482 | **the cited file disagrees with the citation.** `power_draw_soc_watts` is not even a field any more — §3ab split it into `_idle`/`_load`/`_marginal` |
+| **5** | **`V_max` = 714,999,960 clauses at 30.23 rps** | **670,806,198** at 28.3615 rps (**−6.2%**) | §1b L139 | conclusion unchanged (still 506× → 474× V\*), number stale |
+| **6** | **Sonnet 5 $0.4483 per 1,000**, used live in `V* = 633,862.43 / (0.4483 − e)` | **$0.43610** — `e6_frontier.json`'s `api_usd_per_1k`, from actual Stage 1 usage | §1 L114, §3aa L2450, §3ac L2454 | **0.4483 was a PROJECTION made before Stage 1 ran**; the measured figure is 2.8% lower, so **V\* moves 1,413,925 → 1,453,465 (+39,540 clauses, +2.80%)** |
+
+**Item 6 is the one that matters most, and it is the subtlest.** Every other entry is a
+measurement superseded by a better measurement of the same thing. Item 6 is a **projection
+that was never replaced by the measurement it was projecting** — Stage 1 ran, the actual
+per-1k cost is on disk in `e6_frontier.json`, and the V\* arithmetic still divides by the
+forecast. **No conclusion changes** (V\* remains ~1.45M, still ~18× the entire 80,000-clause
+LEDGAR corpus), but the headline break-even number is 2.8% stale and its input is labelled
+"measured" when it is projected.
+
+**None of these change a conclusion.** All six are reporting defects. That is precisely why
+they survived: **nothing that depended on them broke.**
+
+**MITIGATION, registered:** when a figure is superseded, the supersession is recorded **at
+every site that states it**, not only at the site that discovered it — and the live value is
+carried with the strike-through so the two are legible together. A `grep` for the old value
+is the check, and it is cheap. **Items 2–6 are REPORTED here and NOT yet fixed**, per the
+sweep-then-fix order.
 
 ### 3aw. DEFECT CLASS — "aggregate hides structure", with a registered mitigation (2026-09-10)
 
