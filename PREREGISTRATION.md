@@ -133,7 +133,7 @@ this does not change any conclusion, but the number must be what it says it is.
 
 | id | hypothesis | rationale | how it could be wrong |
 |----|-----------|-----------|-----------------------|
-| H1 | A 3-tier cascade reaches macro-F1 within 0.04 of Sonnet-5-alone on `test_3000` at **under half** the USD/1k-clause cost. | Tier 0 answers head-class clauses in milliseconds at near-zero marginal cost; the top 10 classes are 31.5% of the corpus. | Escalation is driven by rare classes, which are also where Tier 0 is weakest, so the router escalates most of the tail and saves little. Or Tier 0's errors are confident, so the router does not catch them. |
+| H1 | **⚠ RESTATED → H1-A (§3av); original preserved, and it is SATISFIED TRIVIALLY in the wrong direction.** A 3-tier cascade reaches macro-F1 within 0.04 of Sonnet-5-alone on `test_3000` at **under half** the USD/1k-clause cost. | Tier 0 answers head-class clauses in milliseconds at near-zero marginal cost; the top 10 classes are 31.5% of the corpus. | Escalation is driven by rare classes, which are also where Tier 0 is weakest, so the router escalates most of the tail and saves little. Or Tier 0's errors are confident, so the router does not catch them. |
 | H2 | Tier 0's softmax **margin** is a better routing signal than LLM **verbalized confidence**, measured by AUROC for predicting own-correctness on `dev_2000`. | Verbalized confidence is severely compressed in every model measured: sd 0.031 (Gemini, non-reasoning), 0.083 (gpt-oss), 0.174 (Haiku), 0.184 (Sonnet), all with means 0.86–0.97 against accuracies 0.65–0.84. Haiku emitted **5 distinct values in 20 answers**. A continuous margin has no such plateaus. | The encoder is also badly calibrated, or its margin is compressed in a different way; or verbalized confidence, despite discretization, still ranks correctness well enough that AUROC is comparable. |
 | H3 | Class weighting raises macro-F1 over unweighted CE at 137.7x train imbalance. | Unweighted CE optimises accuracy, which the head dominates; macro-F1 weights all 100 classes equally. | Weighting destabilises training or trades so much head accuracy that macro-F1 does not move beyond the noise floor. At `inv_freq` the weight ratio is 137x and may simply not converge. |
 
@@ -150,9 +150,9 @@ this does not change any conclusion, but the number must be what it says it is.
 | E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
 | E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | planned **[C3-gated]** |
 | E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04** = **0.7923** (E1 INT8 0.7523, §3ar) | **seed 1: 0.7254 — misses by 0.0669 = 12× test_3000 σ** |
-| E4b | Two-tier `Tier 0 → Claude` fallback | E6's rule with Tier 1 removed. **Registered before E4 runs** | registered |
+| E4b | Two-tier `Tier 0 → Claude` fallback | E6's rule with Tier 1 removed. **Registered before E4 runs** | **SUPERSEDED BY MEASUREMENT (E4b-A, §3av)** — the E6 frontier IS this configuration; no Tier 1 experiment remains |
 | E5 | Routing signal: margin vs max-softmax vs entropy | best **AUROC ≥ 0.75** AND **≥ 0.05** above worst, on `dev_2000` only | planned |
-| E6 | **Cost-vs-volume break-even curve** — the headline | (1) within **0.04** macro-F1 of Sonnet-5-alone; (2) finite crossover **V\* ≤ V_max**; (3) asymptote **< 50%** of Sonnet-5. **V\* is reported, not tested** | **BLOCKED by §1b** |
+| E6 | **Cost-vs-volume break-even curve** — the headline | (1) within **0.04** macro-F1 of Sonnet-5-alone — **MET TRIVIALLY**; (2) finite crossover **V\* ≤ V_max** and (3) asymptote **< 50%** of Sonnet-5 — **PREMISE-FALSIFIED**. **V\* is reported, not tested** | **RESTATED → E6-A (§3av); verdict UNCHANGED** |
 | E7 | `max_length` 256 vs 512 ablation | loses **< 0.02** macro-F1 paired AND **≥ 1.5×** faster; per-class deltas required | planned **[C3-gated]** |
 | E8 | Few-shot vs zero-shot Sonnet-5, paired on 1,000 rows | **`fraction_closed` ≥ 0.50 AND paired-bootstrap CI excludes 0** ⇒ premise live, defer restatement; **≤ 0.20** ⇒ capability not prompting. Band in full below | **registered — see E8 below** |
 | C1 | Calibration-set robustness (§3a) | thresholds agree within **1 decile** AND escalation within **3pp** | planned |
@@ -1283,6 +1283,123 @@ not a test of the accept rule** — the accept rule is still decided on the 3-se
 unchanged.
 
 **The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
+
+### 3av. RESTATEMENTS adopted for H1, E4, E4b and E6 (2026-09-10)
+
+Adopted after E8 (few-shot does not close the gap), §3an/§3ap (E6's per-seed structure) and
+§3au (percentile stabilises rate, not set). **E1 is deliberately NOT restated** — the host
+baseline and E1b are in flight and E1's wording depends on their outcome.
+
+**Hard rule 7 governs all four: every falsified version is preserved verbatim alongside its
+replacement. Nothing below deletes a rule.**
+
+---
+
+#### H1 → **H1-A**
+
+**FIRST, THE DISCLOSURE, BECAUSE THE ORDER MATTERS.** H1 as registered reads: *"A 3-tier
+cascade reaches macro-F1 within 0.04 of Sonnet-5-alone on `test_3000` at under half the
+USD/1k-clause cost."* **H1 is SATISFIED — trivially, and in the wrong direction.** Tier 0
+alone is **0.137 ABOVE** Sonnet-5-alone, so "within 0.04" is met by a cascade that never
+escalates at all, at ~1/1,700th the cost. H1 presupposed Sonnet as the accuracy **ceiling**;
+it is the **floor**. A rule that is satisfied by the opposite of the mechanism it was written
+to test has not been confirmed — it has been bypassed. **H1-A below is written after seeing
+that, and is therefore post-hoc; this paragraph is the mitigation, and it appears first for
+that reason.**
+
+> **H1-A.** *A fine-tuned Tier 0 encoder matches or exceeds zero-shot Sonnet-5 on
+> `test_3000` macro-F1 at under 1% of its cost; cascading to a frontier model adds no
+> measurable accuracy.*
+
+**Argument.** Preserves both of H1's clauses — a joint accuracy-and-cost claim, with the
+0.04 tolerance still meaningful — and flips only the direction the evidence flipped. It is
+testable and already tested (E6, E8, §3ap).
+
+**Survives untouched from the original registration:** the *form* of the hypothesis; the
+0.04 tolerance; the entire cost side; and H1's "how it could be wrong" column, which
+anticipated *escalation driven by rare classes where Tier 0 is weakest* — **the wrong
+failure mode.** H1 failed by a route it did not consider, which is worth more than a
+correct guess.
+
+---
+
+#### E4 → **E4-A** (no restatement)
+
+**E4's rule is not restated, because it fired correctly.** On the corrected bar of
+`E1 + 0.04 = 0.7923` (E1 INT8 0.7523, §3ar), Tier 1 reached **0.7254** — a **0.0669** miss,
+**12× the `test_3000` σ** of 0.0056.
+
+> **E4-A.** E4 is reported as **NOT ACCEPTED at n = 1**, with the hard-rule-2 shortfall
+> stated as an explicit limitation: *n = 1, no seed variance measured. Tier 1's own seed sd
+> would have to be ~11× Tier 0's for two further seeds to bridge 0.0669. That is an
+> argument, not a measurement.*
+
+**Argument.** Seeds 2–3 cannot change a verdict at 12σ; they would satisfy a reporting
+requirement, not a scientific one, at ~28 h of a 30 h quota that E1b needs.
+
+**Survives untouched:** all of it. **Explicitly rejected:** retro-fitting E4's bar to what
+Tier 1 reached — that is fitting a rule to its answer, which hard rule 6 exists to prevent.
+
+---
+
+#### E4b → **E4b-A** (superseded by measurement)
+
+> **E4b-A.** E4b's configuration **has already been measured.** The E6 frontier **is**
+> Tier 0 → Sonnet-5 with no middle tier. E4b's result is E6's result; **no separate run is
+> required.**
+
+**Argument.** E4b was registered assuming the open question was *removing Tier 1*. §3aq
+shows the open question is whether **Tier 2 adds anything at all** — and E6 answers that for
+exactly this two-tier configuration. Re-running it would spend budget to re-derive a number
+on disk.
+
+**THE CONSEQUENCE, STATED PLAINLY BECAUSE IT IS EASY TO MISS:** with E4b superseded by E6's
+existing measurement and E4 not accepted at n = 1, **no Tier 1 experiment remains in the
+plan. Tier 1 stands as a pure negative result at n = 1** — trained, evaluated, below bar,
+with no successor experiment and no further quota allocated. That is the honest end state,
+and it is reported as such rather than left looking like unfinished work.
+
+**Survives untouched:** E4b's original text, and the fact that it was **registered in
+advance of E4's outcome** — preregistration working as intended, even though the experiment
+it authorised is now answered by other means.
+
+**Considered and rejected — E4b-B, re-scoping to Haiku-4.5** (0.7210) as the escalation
+target: Haiku is *worse* than Sonnet, which is already worse than Tier 0. §3aq predicts no
+headroom, so this would spend budget to confirm a stronger form of a settled result.
+
+---
+
+#### E6 → **E6-A**
+
+> **E6-A.** **Routing works; the escalation target has no marginal value on the rows routing
+> correctly identifies as hard.** The margin signal drops accuracy from ~0.85 to ~0.37 on
+> its own selection (AUROC 0.86, E5), and Sonnet-5 does not beat Tier 0 on those rows by any
+> amount the evidence supports. **A frontier model adds nothing on exactly the examples a
+> fine-tuned encoder finds hard.**
+
+**THE REGISTERED VERDICT IS UNCHANGED.**
+
+> `test_3000` macro-F1 delta **+0.0063**, 95% CI **[−0.0004, +0.0103]**, sign-consistency
+> **2/3**. Under percentile selection: **+0.0065**, 2/3 (§3au). **The cascade is not
+> established as better than Tier 0 alone.**
+>
+> **§3ap(B)'s escalated-row result does NOT revive it.** That macro-F1 is 3/3 positive
+> (+0.0545 / +0.0495 / +0.0807) with **all three CIs including zero**, computed over the
+> escalated rows' *own* 44–59-class label space. It is **not a decomposition of the
+> +0.0063** and does not transfer to it. It says where value *would* sit if any existed; it
+> does not establish that any does.
+
+**Survives untouched:** **condition 1** (within 0.04 macro-F1 of Sonnet-5-alone) is **MET** —
+by Tier 0 with no cascade at all, and is marked *met trivially*. **Conditions 2 and 3**
+(finite crossover V\* ≤ V_max; asymptote < 50% of Sonnet-5) are marked
+**premise-falsified**, not wrong: their arithmetic was never tested, because both assume
+escalation buys accuracy and that assumption is what failed. V\* is still *reported, not
+tested*, as registered.
+
+**Also preserved:** §3an, §3ap and §3au in full, **including the corrections that reversed
+my own claims** — the accuracy-for-macro-F1 substitution (§3e instance 10), the withdrawn
+"by construction" variance mechanism, and the chance-floor overreach. Those are part of the
+result, not scaffolding to be removed once the conclusion is tidy.
 
 ### 3au. Does PERCENTILE calibration stabilise the escalation SET, or only the RATE? — registered before the run (2026-09-10)
 
