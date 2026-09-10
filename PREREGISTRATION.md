@@ -149,7 +149,7 @@ this does not change any conclusion, but the number must be what it says it is.
 | E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **registered — see E1b below** |
 | E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
 | E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | planned **[C3-gated]** |
-| E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04**; else Tier 1 not justified → E4b | planned |
+| E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04** = **0.7923** (E1 INT8 0.7523, §3ar) | **seed 1: 0.7254 — misses by 0.0669 = 12× test_3000 σ** |
 | E4b | Two-tier `Tier 0 → Claude` fallback | E6's rule with Tier 1 removed. **Registered before E4 runs** | registered |
 | E5 | Routing signal: margin vs max-softmax vs entropy | best **AUROC ≥ 0.75** AND **≥ 0.05** above worst, on `dev_2000` only | planned |
 | E6 | **Cost-vs-volume break-even curve** — the headline | (1) within **0.04** macro-F1 of Sonnet-5-alone; (2) finite crossover **V\* ≤ V_max**; (3) asymptote **< 50%** of Sonnet-5. **V\* is reported, not tested** | **BLOCKED by §1b** |
@@ -273,8 +273,9 @@ this does not change any conclusion, but the number must be what it says it is.
   trained?* — and both results appear, with this distinction stated wherever either is
   quoted.
 - **Staged execution, and the stopping rule is registered now.** **Seed 1 runs alone
-  first** (~3.3–7.3 h). Seeds 2 and 3 are scheduled **only if seed 1 moves macro-F1
-  materially toward 0.80**. If it does not, **undertraining is not the cause**, E1b is
+  first** (~3.3–7.3 h, PER SEED). Seeds 2 and 3 are scheduled **only if seed 1 clears the
+  gate registered in §3ar** — "materially" is no longer undefined; §3ar partitions the
+  outcome space with no unassigned region. If it does not, **undertraining is not the cause**, E1b is
   reported as not-accepted on one seed with that reasoning, and no further quota is spent
   on this hypothesis. Reporting a 1-seed E1b as a *result* would violate hard rule 2 —
   it is a **gate**, and is labelled as one.
@@ -1221,6 +1222,98 @@ version is confounded by construction. This is **§3e instance 9's shape with a
 disagreement attached** — a number whose denominator was not recorded. The script now
 writes **both**, each with its `classes_averaged`, and marks which is `reported`.
 
+### 3ar. E1b's seed-1 GATE — registered, with every boundary derived (2026-09-10)
+
+E1b's **accept rule** has been registered since 2026-09-09 (macro-F1 ≥ 0.80 on
+`test_3000`, INT8, mean over seeds 1/2/3). Its **seed-1 gate** was not: the entry says
+seeds 2–3 run only if seed 1 *"moves macro-F1 materially toward 0.80"*, and **"materially"
+was never defined.** That is C2's defect in advance — a rule with an unassigned region that
+interpretation would fill once the number arrived (§3ap A). Registered now, before any E1b
+run.
+
+**Two corrections that move every boundary, made first.**
+
+1. **E1's headline is 0.7523, not 0.7570.** `0.7570` is E1's **FP32** 3-seed mean
+   (0.7636 / 0.7597 / 0.7478). Every rule here attaches to the **deployed INT8 artefact**,
+   whose arm64 3-seed mean is **0.7523** (0.7582 / 0.7514 / 0.7471). §3ak's "compare to
+   E1's 0.7570" quoted an FP32 figure against an INT8 rule, and **E4's miss inherited it**:
+   E4's bar is `E1 + 0.04` = **0.7923**, and Tier 1's 0.7254 misses by **0.0669**, not
+   0.0716 — still 12× the `test_3000` σ, so E4's verdict is unchanged.
+2. **σ = 0.0056, not 0.0032.** `0.0032` is the **selection-split** seed sd. This rule is
+   stated on `test_3000` INT8, whose measured across-seed sd is **0.0056**. Using a
+   selection-split sd for a test-split rule is §3ap(B)'s class of error — the wrong
+   statistic for the stated question.
+
+**ONE construction, and every boundary derives from it.** Two anchors that mean something —
+the accept target **0.80** and the baseline **E1 = 0.7523** — with the band between them
+split at its midpoint. **Nothing is stacked.** An earlier draft mixed a stacked-2σ ladder
+with an `E1 + 2σ` anchor and opened a **0.7635–0.7681 dead zone** in which a result **more
+than 2σ above E1** would still have stopped the run.
+
+| symbol | derivation | arithmetic | value |
+|---|---|---|---|
+| σ | measured across-seed sd, `test_3000` INT8 arm64, seeds 1–3 | sd(0.7582, 0.7514, 0.7471) | **0.0056** |
+| **T** | 0.80 − 1.645σ | 0.80 − 1.645 × 0.0056 = 0.80 − 0.009212 = 0.790788 | **0.7908** |
+| **B** | E1 + 2σ | 0.7523 + 2 × 0.0056 = 0.7523 + 0.0112 | **0.7635** |
+| **M** | (B + T) / 2 | (0.7635 + 0.7908) / 2 = 0.777144 | **0.7771** |
+
+**The partition — total, with no unassigned region:**
+
+| seed-1 INT8 macro-F1 | region | action |
+|---|---|---|
+| **≥ 0.7908** (≥ T) | ON TRACK | **run seeds 2–3** |
+| **0.7771 – 0.7907** (M ≤ x < T) | MOVED, UPPER | **run seeds 2–3** |
+| **0.7635 – 0.7770** (B ≤ x < M) | MOVED, LOWER | **STOP.** Partial movement: undertraining contributes but does not account for E1's shortfall |
+| **0.7523 – 0.7634** (E1 ≤ x < B) | WITHIN NOISE OF E1 | **STOP.** Undertraining is not the cause |
+| **< 0.7523** | WORSE THAN E1 | **STOP.** Falsified |
+
+**WHAT T BOUNDS, stated rather than left to inference.** T is a **seed-level** bound. It
+asks: *given this one observation, is a true mean of ≥ 0.80 still plausible at one-sided
+95%?* It does **not** ask whether the 3-seed mean will reach 0.80 — that question uses the
+standard error of the mean, σ/√3, giving 0.80 − 1.645 × 0.0056/√3 = **0.7947**, a
+**tighter** bar.
+
+Seed-level is correct **because we have one seed, not three.** Grading a single observation
+against the standard error of a three-seed mean would understate that observation's
+uncertainty — borrowing a mean's precision to judge a single draw. The seed-level bound is
+also deliberately the **more permissive** of the two (0.7908 vs 0.7947), and the asymmetry
+is intended: a false STOP abandons a possibly-true hypothesis permanently, while a false
+CONTINUE costs two seeds of quota. **The gate is a spending decision under one observation,
+not a test of the accept rule** — the accept rule is still decided on the 3-seed mean,
+unchanged.
+
+**The gate is evaluated on INT8, which the training host cannot compute — see §3as.**
+
+### 3as. E1b's execution loop: Kaggle trains FP32, arm64 scores INT8 (2026-09-10)
+
+**The gate is stated on INT8 and Kaggle cannot produce an INT8 number.** Measured, not
+assumed: E1 seed 1's `test_3000_int8` on Kaggle's Xeon read macro-F1 **0.0037** (accuracy
+0.0173) against FP32 0.7636 — chance, on a non-VNNI CPU. Any INT8 figure written in the
+notebook is invalid and must not be recorded.
+
+**Six steps. Step 3 is manual and blocking.**
+
+| # | where | action |
+|---|---|---|
+| 1 | Kaggle | Train FP32, `EPOCHS = 10`, arm tag **`ce10ep`** (E1b's collision guard). `train_env()` **PERSISTED** into the seed JSON *and* the npz — §3e instance 9: printing is not recording |
+| 2 | Kaggle | **Do NOT compute or write any INT8 number.** Save `fp32_ce10ep_1/` as notebook output |
+| 3 | **manual** | **DOWNLOAD** `fp32_ce10ep_1/` → `~/Downloads/tier0_e1b/`. Verify `model.safetensors` ≈ 738 MB, plus `config.json`, `spm.model`, `tokenizer.json`, `training_args.bin`. **Nothing downstream runs until this completes** |
+| 4 | local arm64 | Export ONNX + dynamic quantise → `models/int8_ce10ep_1/` |
+| 5 | local arm64 | Score `test_3000` via `scripts/score_int8_local.py` |
+| 6 | local | Evaluate §3ar's gate **on step 5's number only** |
+
+The §3ak host-baseline run (`EPOCHS = 3`, tag `ce_hostB`) follows the identical six steps.
+
+**Option A is the registered plan** — host baseline seed 1 + E1b seed 1, gate, then seeds
+2–3: gate cost **4.3–9.5 h**, full path **10.9–24.1 h** against the 30 h quota. §3ak's
+3.3–7.3 h is **per seed**, not a 3-seed total.
+
+**E7 is NOT scheduled.** It is a latency ablation, and E1b tests the number the whole report
+rests on. E7 holds a **conditional slot** if quota survives Option A. It is a **3-seed
+training job**: E7 says "paired, same rows", deliberately omitting E3's "same model", and
+its `train rows truncated` column and `[C3-gated]` tag cohere only on that reading — so it
+is not cheap and does not fit alongside a full Option A.
+
 ### 3aq. THE ACTUAL FINDING: routing works; the escalation target has no marginal value (2026-09-09)
 
 Everything above was framed as "the cascade premise is falsified", and **that framing is
@@ -1491,7 +1584,7 @@ of which are comparisons to E1.
 gate.** That is the price of keeping the comparison one-variable, and it is cheaper than
 any analysis that tries to reason across hosts after the fact.
 
-**Rejected:** running E1b alone on a new host and comparing to E1's 0.7570. That is a
+**Rejected:** running E1b alone on a new host and comparing to E1's INT8 headline of **0.7523** (this line previously read *"E1's 0.7570"* — E1's **FP32** mean quoted against an INT8 rule; corrected in §3ar). That is a
 two-variable comparison (epochs AND host) reported as one, and no recorded metadata
 converts it back into one variable.
 
