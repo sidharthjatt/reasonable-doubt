@@ -1435,6 +1435,39 @@ Both are **less than half the 9 h cap**, so the cap risk goes to zero at no extr
 the same 35,630 steps are trained either way. The attach path is confirmed working: the host
 baseline logged *"no notebook input attached → first commit for this arm, starting fresh."*
 
+**TWO PRECONDITIONS VERIFIED AGAINST THE PINNED SOURCE BEFORE ARMING — the split rests on
+both, and neither follows from the ordering already checked.**
+
+**(1) The checkpoint at 17,815 IS written.** Read from `transformers==4.57.6`'s own
+`trainer.py` (downloaded and inspected — the local venv is 5.0.0 and would have answered a
+different question):
+
+| line | statement |
+|---|---|
+| 2755 | `self.control = self.callback_handler.on_step_end(...)` ← our callback sets `should_save` **and** `should_training_stop` |
+| 2756 | `self._maybe_log_save_evaluate(...)` |
+| 3227 | `if self.control.should_save: self._save_checkpoint(model, trial)` |
+| 2772 | `if ... should_training_stop: break` |
+
+**`_maybe_log_save_evaluate` runs AFTER `on_step_end` and BEFORE the break**, and the save is
+gated on the flag our callback just set. So the stop point is checkpointed in the same
+iteration. **No off-by-one workaround is needed**, and `save_total_limit=2` cannot evict it
+because it is the newest. Had the order been the other way, commit 2 would have resumed from
+epoch 4 and silently trained 4+5 epochs = 9, not 10.
+
+**(2) Commit 1 exits CLEANLY, with no exception.** The first implementation used
+`raise SystemExit(0)`. **That was replaced**: Kaggle executes this file as a Script on some
+paths and through IPython as a Notebook on others; `SystemExit` is a clean exit code 0 in the
+first and can surface as an error in the second. Since the entire point of a bounded commit
+is that **its output stays attachable**, an ambiguous exit is not acceptable. The callback now
+sets a `_BUDGET_STOPPED` flag and `break`s, the script reaches its natural end, and
+**AST-verified: no `SystemExit` is raised anywhere in the file.** The closing banner is
+conditional — a bounded stop prints `COMMIT COMPLETE (BOUNDED)` with the resume values, and
+explicitly states that **no fp32 model was saved and no completion marker written**, so the
+next commit resumes rather than skipping.
+
+
+
 **Quota:** 27.6 h remaining, E1b seed 1 ≈ 8.1–8.6 h across the two commits, leaving ~19 h —
 enough for seeds 2–3 **only if §3ar's gate opens**, which is what the gate is for.
 

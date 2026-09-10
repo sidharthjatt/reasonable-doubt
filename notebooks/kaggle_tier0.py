@@ -144,7 +144,7 @@ EPOCHS, LR, BS = 3, 2e-5, 16
 #      ce / inv_freq / sqrt_inv_freq / effective_number. Overloading LOSS_ARM with a run
 #      label would either crash there or, worse, silently select a different loss.
 # E1b's loss is unchanged CE; only the artefact namespace differs.
-E1B = False
+E1B = True
 
 # ---- HOST BASELINE (PREREGISTRATION 3ak step 1) --------------------------------------
 # E1's training environment was never recorded (3e instance 9), so E1b on a NEW host would
@@ -153,7 +153,7 @@ E1B = False
 # else byte-identical), then E1b on the same host, and ask the epochs question WITHIN host.
 # Its result is reported against E1's original as a measured host effect at n=1, explicitly
 # with no variance estimate.
-HOST_BASELINE = True
+HOST_BASELINE = False
 
 assert not (E1B and HOST_BASELINE), (
     "E1B and HOST_BASELINE are different experiments and must not run in the same commit: "
@@ -534,7 +534,7 @@ class FlushingLog(TrainerCallback):
 # RESUME_FROM_STEP_AT_LEAST: the global_step the previous commit reported. 0 on the first
 #   commit. A chain that silently fails to advance looks exactly like a healthy resume —
 #   the failure class this project keeps paying for (3s) — so it is asserted, not trusted.
-RUN_STEP_BUDGET = None
+RUN_STEP_BUDGET = 17815   # COMMIT 1 of 2: epochs 1-5 (3bb). Commit 2 sets this to None.
 RESUME_FROM_STEP_AT_LEAST = 0
 _IN_NB = Path("/kaggle/input/notebooks")
 class CommitStepBudget(TrainerCallback):
@@ -610,6 +610,7 @@ TRAIN_ENV = train_env()
 # invent one. The obligation is that every seed's JSON carries the environment that made
 # its weights, so a cross-host comparison can be ADJUDICATED rather than assumed.
 _T_START = time.time()
+_BUDGET_STOPPED: dict = {}     # set by CommitStepBudget's exit; read after the loop
 for seed in SEEDS:
     _t_seed = time.time()
     done = WORK / f"tier0_{RUN_TAG}_seed{seed}.json"
@@ -680,12 +681,23 @@ for seed in SEEDS:
                 f"which is indistinguishable from a healthy resume in the logs. Refusing "
                 f"to continue and write an artefact that looks trained.")
         if RUN_STEP_BUDGET is not None and CommitStepBudget.exhausted():
+            # NOT `raise SystemExit`. Kaggle runs this file as a Script in some paths and
+            # through IPython as a Notebook in others; SystemExit is a clean exit code 0 in
+            # the first and can surface as an error in the second. Since the WHOLE POINT of
+            # a bounded commit is that its output stays attachable, the exit must be
+            # unambiguous: set a flag, break, and let the script reach its natural end with
+            # no exception raised anywhere.
+            _BUDGET_STOPPED.update(seed=seed, step=_reached)
             print(f"\n=== COMMIT STEP BUDGET EXHAUSTED at global_step {_reached} ===")
-            print(f"  Set RESUME_FROM_STEP_AT_LEAST = {_reached} in the NEXT commit,")
+            print(f"  checkpoint written at this step (should_save is set alongside")
+            print(f"  should_training_stop, and transformers 4.57.6 runs")
+            print(f"  _maybe_log_save_evaluate AFTER on_step_end and BEFORE the break).")
+            print(f"  NEXT COMMIT: RESUME_FROM_STEP_AT_LEAST = {_reached}, "
+                  f"RUN_STEP_BUDGET = None,")
             print(f"  attach THIS commit's output as a notebook input, and re-run.")
             print(f"  EPOCHS stays {EPOCHS} — it drives the LR schedule and must not move.")
-            _HB["phase"] = f"seed {seed}: budget exhausted at {_reached}, exiting cleanly"
-            raise SystemExit(0)
+            _HB["phase"] = f"seed {seed}: budget exhausted at {_reached}, stopping cleanly"
+            break
         tr.save_model(str(fp32)); tok.save_pretrained(str(fp32))
         shutil.rmtree(ckpt_dir, ignore_errors=True)   # fp32 saved — never retrain
 
@@ -799,17 +811,26 @@ for seed in SEEDS:
     out["e3_int8_minus_fp32_macro_f1"] = (out["test_3000_int8"]["macro_f1"]
                                           - out["test_3000_fp32"]["macro_f1"])
     done.write_text(json.dumps(out, indent=2))
-    # Per-seed wall clock. Tier 0 has NO step budget (3y): all three seeds are estimated
-    # at 3.0-6.6h against a 9h cap, so a budget would be machinery that never fires. This
-    # number is the check on that estimate — if a seed exceeds ~2.5h the pessimistic end
-    # is real, and the remaining seeds should be split into their own commits by editing
-    # SEEDS, before a commit hits the cap and loses its whole output (3v).
+    # Per-seed wall clock. 3y's "no step budget" decision and its 1.0-2.2h / 3.0-6.6h
+    # estimates are SUPERSEDED (3ba, 3bb): the measured 3-epoch seed was 2.38h at an
+    # effective 1.248 it/s, and E1b's 10-epoch seed is ~8.1-8.6h — which is why
+    # RUN_STEP_BUDGET now exists and why E1b runs as two bounded commits.
     _seed_h = (time.time() - _t_seed) / 3600
-    print(f"  seed {seed} wall clock: {_seed_h:.2f}h  (estimate 1.0-2.2h; if >2.5h, run "
-          f"the remaining seeds as separate commits)")
+    _expect = "~8.1-8.6h (E1b, 10 epochs)" if E1B else "~2.4h (3 epochs, measured 3ba)"
+    print(f"  seed {seed} wall clock: {_seed_h:.2f}h  (expected {_expect}; a seed that "
+          f"approaches the 9h cap must be split with RUN_STEP_BUDGET, not left to time out)")
     print(json.dumps({k: out[k] for k in
           ("selection", "test_3000_fp32", "test_3000_int8", "e3_int8_minus_fp32_macro_f1")},
           indent=2))
     gc.collect(); torch.cuda.empty_cache()
 
-print("\nALL SEEDS DONE — download /kaggle/working/*.json, *.npz and int8_* dirs")
+if _BUDGET_STOPPED:
+    print(f"\n=== COMMIT COMPLETE (BOUNDED) — seed {_BUDGET_STOPPED['seed']} stopped at "
+          f"step {_BUDGET_STOPPED['step']} of {EPOCHS * 3563} ===")
+    print("  This is NOT a finished seed. No fp32 model was saved and no completion")
+    print("  marker was written, so the next commit RESUMES rather than skipping.")
+    print(f"  NEXT COMMIT: RESUME_FROM_STEP_AT_LEAST = {_BUDGET_STOPPED['step']}, "
+          f"RUN_STEP_BUDGET = None, attach this commit's output.")
+    print("  Save & Run All (Commit) so this version's output is attachable.")
+else:
+    print("\nALL SEEDS DONE — download /kaggle/working/*.json, *.npz and int8_* dirs")
