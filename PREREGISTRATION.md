@@ -1373,9 +1373,58 @@ compares them.* §3aw is a missing table, §3ax is a stale value; this is **two 
 implementations of one definition**, where the guard the project wrote to protect the metric
 sits in the path that never produces the numbers.
 
-**Mitigation — NOT yet implemented, recorded as the next fix:** the Kaggle notebooks should
-call `src.eval.metrics.score`, or a test should assert the two agree on the committed
-artefacts. Until one of those exists, the bypass is documented but not closed.
+**VERIFIED 2026-09-10 — the gate's path is CLEAN, and this was checked rather than assumed.**
+`kaggle_tier0.py:307,310` is a bypass site and it is the script running E1b, so the question
+is whether the gate reads a bypassed number. It does not:
+
+| quantity | produced by | scorer |
+|---|---|---|
+| **E1 = 0.7523**, the anchor every §3ar boundary derives from | `scripts/score_int8_local.py` → `results/int8_local_seed*.json` | **`src.eval.metrics.score`** (line 27/75) |
+| **E1b's gate input** (§3as step 5) | `scripts/score_int8_local.py`, same script | **`src.eval.metrics.score`** |
+| E8's numbers | `scripts/score_fewshot.py` (line 35/137/146) | **`src.eval.metrics.score`** |
+
+**The anchor and the gate input come from the SAME implementation**, and both record
+`classes_averaged`. Kaggle's own macro-F1 is never read by the gate. E8 likewise used the
+registered scorer — verified in the code and in the artefact (`classes_averaged: 97`,
+`absent_classes: []` on both arms), not inferred from "written afterwards".
+
+**THE DIVERGENCE IS NOW BOUNDED, NOT HYPOTHESISED.** On E8's own 97-of-100 rows:
+
+| scoring | macro-F1 |
+|---|---|
+| registered scorer, 97 gold classes | **0.6276** |
+| sklearn default (`average="macro"`, no `labels=`) | **0.6088** |
+| **deflation** | **−0.0188 (−3.00%)** |
+
+The mechanism is exact: sklearn averages over **gold ∪ predicted**, so the moment a model
+predicts a class with no gold examples, that class scores 0.0 and drags the mean down. On
+`test_3000` this is impossible (gold covers all 100), which is the only reason the committed
+numbers agreed to 4 ULP. **On any subset arm it is a 3%-scale error, and nothing would have
+announced it.**
+
+**MITIGATION IMPLEMENTED — `tests/test_scorer_provenance.py`, 5 tests.** The first proposal
+("assert sklearn and the registered scorer agree on the committed artefacts") was
+**rejected**: it is green today *only because* `classes_averaged` happened to match
+everywhere, and it would stay green until a subset arm appeared — which is exactly when it
+would be needed. **A test that cannot fail on the defect it guards is the proxy-check shape
+again (§3e).** What is committed instead:
+
+1. `test_subset_case_must_diverge` — constructs the case where the two implementations
+   **must** disagree and asserts the divergence is **large (> 0.05), not ULP scale**.
+   Mutation-checked: if `score()` were reimplemented on sklearn's default the difference
+   becomes 0.0000 and **the test goes red** (measured: registered 0.9167 vs sklearn 0.7333,
+   diff +0.1833).
+2. `test_scorer_refuses_absent_classes` — the guard **raises**, and averages absent classes
+   in only under an explicit `allow_absent_classes=True`.
+3. `test_e8_subset_divergence_is_real_and_recorded` — pins E8's 97-class label set.
+4. `test_committed_artefacts_record_classes_averaged` — **every** artefact carrying a
+   `macro_f1` must record the label set it averaged over, with a named `GRANDFATHERED` list
+   (the 6 Kaggle seed JSONs, 2 rung-0 files, and the frontier) so the debt is **visible and
+   may only shrink**.
+5. `test_grandfathered_list_only_shrinks` — a stale entry would hide a real gap.
+
+Suite: **478 passed, 1 skipped.** The bypass in the notebooks is still open — the notebooks
+still call sklearn — but it can no longer reach a reported number without a test failing.
 
 ### 3ax. SECOND DEFECT CLASS — "superseded figure still presented as current" (2026-09-10)
 
