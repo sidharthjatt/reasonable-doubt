@@ -5294,6 +5294,59 @@ experiment id. Never edit a past entry — add a correcting entry instead.
   - **Not engaged by the §3bk swap:** the served path is **FP32**, so no INT8 delta sits in
     it under either reading.
 
+### Served-config escalation check — instrumentation *(2026-09-11)*
+
+- **Experiment id:** none. **DESCRIPTIVE INSTRUMENTATION under §3bk**, reported because
+  the served artefact changed. **NOT an E6 rebuild** — E6, H1 and E8 remain on E1 and no
+  frontier, break-even, gap or USD figure was recomputed or touched.
+- **Date:** 2026-09-11
+- **Config / command:** `python scripts/served_config_escalation.py`. Tier 0 =
+  `models/onnx_ce10ep_1_fp32` (E1b seed 1) FP32 logits on **arm64**; threshold **0.528864**
+  **read from the served `configs/router_threshold_fp32.json`, not recomputed**; served
+  rule `margin < threshold`; Tier 2 arm = Sonnet-5 **zero-shot** predictions already on
+  disk in `results/stage1_results.json`. The script **refuses** to run if the logits'
+  precision, ISA or artefact disagree with the threshold file's.
+- **Seeds:** **n = 1** — the served artefact. Hard rule 2 forbids reading this as a model
+  result; it is a property of one deployed configuration.
+- **Result — `test_3000`, 3,000 rows:**
+
+  | | macro-F1 |
+  |---|---|
+  | Tier 0 alone | **0.809052** |
+  | cascade (Tier 0 → Sonnet 5) | 0.809874 |
+  | **delta** | **+0.000822** |
+
+  - escalated **129 / 3000 = 4.30%** (target rate 4.056%)
+  - paired bootstrap, 10,000 resamples, seed 20260911: **95% CI [−0.0060, +0.0072]**,
+    **p = 0.857 — INCLUDES 0**
+  - **McNemar on the 129 escalated rows** (accuracy, not macro-F1): API right / Tier 0
+    wrong **28**, Tier 0 right / API wrong **21**, net **+7**, exact two-sided
+    **p = 0.392**
+  - accuracy **on those rows**: Tier 0 **0.3488**, Sonnet 5 **0.4031**
+- **Cost:** **$0.00.** No API call; nothing appended to `results/spend_ledger.jsonl`.
+- **Accept rule met?** n/a — no accept rule. **Stated plainly: the cascade does NOT beat
+  Tier 0 alone at the served operating point.** The interval includes 0 and the point
+  estimate is +0.0008, roughly a tenth of E1's +0.0063.
+- **IN-SAMPLE, per §3bc.** The threshold *value* is `dev_2000`-calibrated (hard rule 1
+  intact), but the **4.056% RATE was selected on test**, so this is an in-sample figure for
+  the rate that chose it. It is not a held-out estimate of the deployed configuration.
+- **Notes.**
+  - **THE ROUTER IS WORKING; THE ESCALATION TARGET IS NOT PAYING.** Tier 0 scores **0.3488**
+    on the rows it routes away against **0.8733** overall — the margin signal is finding
+    genuinely hard rows. Sonnet 5 manages **0.4031** on those same rows. This **replicates
+    §3aq/§3av's E6-A verdict on the new served artefact**, and slightly more starkly: E1's
+    delta was +0.0063 with a lower bound of −0.0004 (borderline); this one is +0.0008 with
+    an interval comfortably spanning 0.
+  - **What this does NOT say.** It does not say escalation is harmless to remove — the
+    escalation path is also the defined handling route for low-confidence rows, and this
+    measures accuracy only, not that. Whether escalation stays enabled is a deployment
+    decision and is **not** made here.
+  - Fixed while producing this: `scripts/score_int8_local.py` stamped `precision: "int8"`
+    into every saved logits npz regardless of the artefact — the same defect corrected in
+    `scripts/dev_logits_int8_local.py` at §3bk. It had already mislabelled this run's FP32
+    logits once; `--precision` is now required with no default, and the file was
+    regenerated.
+
 ### _(template — copy per run)_
 
 - **Experiment id:** _(TODO)_

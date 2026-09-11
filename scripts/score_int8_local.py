@@ -1,6 +1,13 @@
 """Score the downloaded INT8 artefact ON THE MAC — the ISA that actually deploys it.
 
-    python scripts/score_int8_local.py --int8-dir <downloaded int8_ce_1> --seed 1
+    python scripts/score_int8_local.py --model-dir <downloaded int8_ce_1> \
+        --precision int8 --seed 1
+
+**`--precision` IS REQUIRED AND HAS NO DEFAULT.** It labels the saved logits and the
+printed banner. This script used to hardcode "int8" in both, so scoring an FP32 artefact
+(which it accepts — it takes any directory holding one *.onnx, and §3bg/§3bk serve FP32)
+produced FP32 logits stamped `precision: "int8"` in their own provenance block. A default
+would reintroduce that, so there is none (hard rule 11).
 
 Kaggle quantises for arm64 but EVALUATES on its own x86 CPU. INT8 kernels are
 ISA-specific and their numerics can differ, so the accuracy Kaggle reports for the
@@ -29,7 +36,12 @@ from src.eval.metrics import score  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--int8-dir", type=Path, required=True)
+    ap.add_argument("--model-dir", "--int8-dir", dest="model_dir", type=Path,
+                    required=True,
+                    help="any directory holding one *.onnx (INT8 or FP32)")
+    ap.add_argument("--precision", required=True, choices=("int8", "fp32"),
+                    help="the precision of --model-dir. REQUIRED, no default: it is "
+                         "stamped into the saved logits' provenance block.")
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--kaggle-result", type=Path, default=None,
                     help="tier0_<arm>_seed<N>.json from Kaggle, to compare against")
@@ -56,12 +68,13 @@ def main() -> int:
     texts = list(split.select(man.indices)["text"])
     gold = [names[int(x)] for x in split.select(man.indices)["label"]]
 
-    tok = AutoTokenizer.from_pretrained(str(args.int8_dir))
-    sess = ort.InferenceSession(str(next(args.int8_dir.glob("*.onnx"))),
+    tok = AutoTokenizer.from_pretrained(str(args.model_dir))
+    sess = ort.InferenceSession(str(next(args.model_dir.glob("*.onnx"))),
                                 providers=["CPUExecutionProvider"])
     wanted = {i.name for i in sess.get_inputs()}
     print(f"manifest {man.name} sha={man.text_sha256[:16]}… ({len(texts)} rows)")
-    print(f"artefact {args.int8_dir}  providers={sess.get_providers()}")
+    print(f"artefact {args.model_dir} [{args.precision}]  "
+          f"providers={sess.get_providers()}")
 
     logits = []
     for i in range(0, len(texts), args.batch_size):
@@ -76,7 +89,7 @@ def main() -> int:
 
     rep = score(gold, pred, labels=sorted(set(gold)))
     print("\n" + "=" * 62)
-    print(f"INT8 on THIS machine (arm64) — {args.manifest}")
+    print(f"{args.precision.upper()} on THIS machine (arm64) — {args.manifest}")
     print("=" * 62)
     print(rep.render())
 
@@ -89,12 +102,13 @@ def main() -> int:
             test_3000_labels=np.array([int(x) for x in
                                        split.select(man.indices)["label"]]),
             provenance=np.array(json.dumps({
-                "precision": "int8", "isa": "arm64_local",
-                "artefact": str(args.int8_dir), "seed": args.seed,
+                "precision": args.precision, "isa": "arm64_local",
+                "artefact": str(args.model_dir), "seed": args.seed,
                 "manifest": man.name, "manifest_sha256": man.text_sha256})))
-        print(f"wrote logits -> {args.save_logits}  [precision=int8, isa=arm64_local]")
+        print(f"wrote logits -> {args.save_logits}  "
+              f"[precision={args.precision}, isa=arm64_local]")
 
-    payload = {"seed": args.seed, "artefact": str(args.int8_dir),
+    payload = {"seed": args.seed, "artefact": str(args.model_dir),
                "manifest": man.name, "manifest_sha256": man.text_sha256,
                "isa": "arm64_local", "metrics": rep.as_dict()}
 
@@ -112,7 +126,7 @@ def main() -> int:
                   + ("" if abs(d) < 1e-9 else
                      "\n  -> non-zero: INT8 kernels differ across ISAs. Report the gap."))
 
-    out = args.out or Path(f"results/int8_local_seed{args.seed}.json")
+    out = args.out or Path(f"results/{args.precision}_local_seed{args.seed}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2))
     print(f"\nwrote {out}")

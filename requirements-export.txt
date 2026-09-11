@@ -1,0 +1,59 @@
+# THE PINNED ONNX-EXPORT TOOLCHAIN — reproduces the SERVED FP32 artefact byte-for-byte.
+#
+# Why this file exists (§3bk). Kaggle never ships the FP32 ONNX: kaggle_tier0.py exports
+# it, hands it to the E3 discriminator, then deletes it, so it never reaches the notebook
+# output. The served artefact must therefore be exported LOCALLY from the torch weights —
+# and the repo's own .venv has drifted off the pin (transformers 5.0.0 against the pinned
+# 4.57.6), against which optimum's exporter does not import at all. Without this file the
+# one step between trained weights and served bytes had no reproducible environment.
+#
+# These are the versions kaggle_tier0.py installs, plus the two the notebook's pip log
+# records but its pin line does not name (huggingface-hub, tokenizers). Recorded at the
+# versions that actually produced the export, not at ranges.
+#
+# CONTROLLED, NOT ASSUMED. Re-exporting E1's fp32_ce_1 through this toolchain reproduced
+# models/onnx_ce_1_fp32 — the bytes §3bg served — at
+#   sha256 4363c460923211fb9c5ea11e6ae9a0a85420ae2b4721ac5e148a56c6dbb9f301
+# BYTE-IDENTICAL. That control is what licenses trusting a new export; run it again
+# (below) if any version here moves.
+#
+# ---------------------------------------------------------------------------------
+# USE — as an overlay on the repo venv, NOT as a replacement.
+#
+# torch, numpy, protobuf and sentencepiece come from the repo venv and are NOT pinned
+# here: the export reads safetensors and writes ONNX, and torch 2.14.0 vs Kaggle's 2.10.0
+# was already measured as not mattering for these bytes (§3be). Pinning them would claim
+# a control that was never run.
+#
+#   SP=$(mktemp -d)
+#   .venv/bin/pip install --no-deps --target="$SP/exportlibs" -r requirements-export.txt
+#   PYTHONPATH="$SP/exportlibs" .venv/bin/python scripts/export_fp32_onnx.py \
+#       --fp32-dir ~/Downloads/tier0_e1b/fp32_ce10ep_1 \
+#       --out models/onnx_ce10ep_1_fp32
+#
+# --no-deps and --target are deliberate: the overlay shadows ONLY the packages named
+# here, leaving the repo venv's torch stack untouched. Installing these into .venv itself
+# would downgrade transformers under every other script in the project.
+#
+# THE CONTROL, to re-run before trusting a new export:
+#   PYTHONPATH="$SP/exportlibs" .venv/bin/python scripts/export_fp32_onnx.py \
+#       --fp32-dir ~/Downloads/tier0/fp32_ce_1 --out "$SP/control"
+#   shasum -a 256 "$SP/control/model.onnx" models/onnx_ce_1_fp32/model.onnx
+# Both must print 4363c460…f301. If they do not, the export path has moved and no new
+# artefact may be served until that is explained.
+# ---------------------------------------------------------------------------------
+#
+# Verified together on macOS-arm64 under python 3.11.15, 2026-09-11.
+
+# The pin line from notebooks/kaggle_tier0.py, verbatim in version:
+transformers==4.57.6
+optimum==2.1.0
+optimum-onnx==0.1.0
+onnx==1.22.0
+onnxruntime==1.29.0
+
+# Recorded in the notebook's pip log but absent from its pin line. transformers 4.57.6
+# REFUSES to import against huggingface-hub>=1.0, which is what the repo venv carries, so
+# this one is load-bearing rather than incidental.
+huggingface-hub==0.36.2
+tokenizers==0.22.2
