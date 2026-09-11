@@ -113,6 +113,7 @@ class ServiceConfig:
     tier0_model_dir: Path
     tier0_max_length: int
     threshold: RouterThreshold
+    tier2_enabled: bool
     tier2_model: str
     tier2_max_output_tokens: int
     tier2_temperature: float | None
@@ -202,6 +203,9 @@ class ServiceConfig:
             tier0_model_dir=model_dir,
             tier0_max_length=int(d["tier0"]["max_length"]),
             threshold=threshold,
+            # DEFAULT true, so an older serve.yaml without the key keeps its current
+            # behaviour rather than silently losing escalation.
+            tier2_enabled=bool(d["tier2"].get("enabled", True)),
             tier2_model=d["tier2"]["model"],
             tier2_max_output_tokens=int(d["tier2"]["max_output_tokens"]),
             # None stays None: it means OMIT the key, and float(None) would crash while

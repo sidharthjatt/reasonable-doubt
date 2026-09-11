@@ -26,19 +26,66 @@ class CostEstimate:
     tariff_is_assumed: bool = False
 
 
+# The per_tier_throughput key for each served precision. The top-level
+# `energy_joules_per_request` / `assumed_lifetime_requests` fields are the INT8 row's and
+# are NOT precision-neutral, which is exactly how §3bh caught every /classify response
+# quoting an INT8 cost while the service ran FP32.
+_TIER0_ROW = {"int8": "tier0_encoder_onnx_int8", "fp32": "tier0_encoder_onnx_fp32"}
+
+
+def _tier0_hw(hw: dict, precision: str) -> dict:
+    """The measured row for `precision`, or a refusal. Never a fallback (hard rule 11)."""
+    try:
+        key = _TIER0_ROW[precision]
+    except KeyError:
+        raise ValueError(f"unknown Tier 0 precision {precision!r}; "
+                         f"expected one of {sorted(_TIER0_ROW)}") from None
+    row = hw["per_tier_throughput"][key]
+    missing = [f for f in ("energy_joules_per_request", "requests_per_second")
+               if row.get(f) is None]
+    if missing:
+        raise MeasurementUnavailable(
+            f"configs/costs.yaml has no measured {', '.join(missing)} for {key}. "
+            f"REFUSING to price a request against another precision's figures or an "
+            f"estimate: the energy term is the local cost curve's asymptote, and "
+            f"substituting one would be exactly the silent degradation hard rule 11 "
+            f"forbids. Measure it with `sudo python -m src.serve.bench_local "
+            f"--onnx-dir <dir> --tier {key} --batch-size 1 --max-length 512 --run <r>`.")
+    return row
+
+
+class MeasurementUnavailable(RuntimeError):
+    """A per-precision measurement costs need is absent. Never substituted."""
+
+
 def local_usd_per_request(*, hw: dict | None = None, allow_assumed_tariff: bool = True,
-                          lifetime_requests: int | None = None) -> CostEstimate:
-    """Amortised capital + measured marginal energy, per request."""
+                          lifetime_requests: int | None = None,
+                          precision: str = "fp32") -> CostEstimate:
+    """Amortised capital + measured marginal energy, per request, FOR `precision`.
+
+    PRECISION-KEYED SINCE §3bl. It previously read the top-level hardware fields, which
+    are the INT8 row's, so every `/classify` response reported an INT8 cost while §3bg
+    served FP32 (§3bh recorded this as live and wrong). The served precision now selects
+    its own measured energy and throughput, and a precision with no measurement RAISES
+    rather than borrowing the other one's.
+    """
     hw = load_hardware() if hw is None else hw
     tariff = resolve_tariff(hw, allow_assumed=allow_assumed_tariff)
-    n = int(lifetime_requests or hw["assumed_lifetime_requests"])
+    row = _tier0_hw(hw, precision)
+    if lifetime_requests is not None:
+        n = int(lifetime_requests)
+    else:
+        n = int(round(float(row["requests_per_second"]) * 3600 * 24 * 365
+                      * float(hw["device_lifetime_years"]) * float(hw["duty_cycle"])))
     capital = device_cost_usd(hw) / n
-    energy = energy_usd_per_1k(float(hw["energy_joules_per_request"]),
+    energy = energy_usd_per_1k(float(row["energy_joules_per_request"]),
                                tariff.usd_per_kwh) / 1000.0
     return CostEstimate(
         usd=capital + energy,
-        basis=(f"capital {device_cost_usd(hw):.2f} USD / {n:,} lifetime requests "
-               f"+ marginal energy at {tariff.usd_per_kwh} USD/kWh"),
+        basis=(f"{precision}: capital {device_cost_usd(hw):.2f} USD / {n:,} lifetime "
+               f"requests (at {float(row['requests_per_second']):.4f} req/s) "
+               f"+ marginal energy {float(row['energy_joules_per_request']):.6f} J/req "
+               f"at {tariff.usd_per_kwh} USD/kWh"),
         is_estimate=True,          # lifetime_requests is a projection, never a measurement
         tariff_is_assumed=tariff.is_assumed,
     )

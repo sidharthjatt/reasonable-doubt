@@ -80,9 +80,22 @@ class Cascade:
     def classify(self, text: str) -> dict:
         t0 = self.tier0.classify(text)
         margin = t0.confidence
-        costs: list[tuple[str, CostEstimate]] = [("tier0", local_usd_per_request())]
+        # PRECISION-KEYED (§3bl). Passing the served precision is what stops this
+        # response quoting the INT8 row's cost while the service runs FP32 (§3bh).
+        costs: list[tuple[str, CostEstimate]] = [
+            ("tier0", local_usd_per_request(precision=self.config.tier0_precision))]
 
-        wants_escalation = self.router.escalate(t0)
+        # THE ROUTER ALWAYS RUNS. Its selection is information about the clause and is
+        # reported whether or not anything is done with it (§3bm).
+        low_confidence = self.router.escalate(t0)
+        escalation_enabled = self.config.tier2_enabled
+        # ESCALATION IS A SEPARATE QUESTION FROM LOW CONFIDENCE, and conflating them is
+        # what `escalation_skipped` did. With Tier 2 disabled by config a flagged clause
+        # is NOT a skipped escalation — nothing was selected for escalation at all, so
+        # `escalation_selected` is false and `escalation_skipped` stays false. A reader
+        # counting escalation_skipped as "escalations we failed to make" would otherwise
+        # read a deliberate architecture as a degraded one.
+        wants_escalation = low_confidence and escalation_enabled
         escalation_skipped = False
         skip_reason = None
         result, tiers = t0, ["tier0"]
@@ -116,6 +129,12 @@ class Cascade:
             "tier_used": result.tier,
             "tiers_invoked": tiers,
             "estimated_cost_usd": total,
+            # The router's own verdict on this clause, independent of what is done with
+            # it. Tier 0 answers these at 0.3488 accuracy against 0.8733 overall (§3bm),
+            # so the flag is the useful part even with escalation off.
+            "low_confidence": low_confidence,
+            "needs_review": low_confidence,
+            "escalation_enabled": escalation_enabled,
             "escalation_selected": wants_escalation,
             "escalation_skipped": escalation_skipped,
             "escalation_skipped_reason": skip_reason,
@@ -133,6 +152,7 @@ class Cascade:
             },
             "router": {
                 "signal": self.router.signal,
+                "escalation_enabled": escalation_enabled,
                 "threshold": self.router.threshold,
                 "calibrated_on": self.config.threshold.calibrated_on,
                 "calibrated_artefact": self.config.threshold.artefact,

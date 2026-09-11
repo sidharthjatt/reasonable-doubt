@@ -54,6 +54,7 @@ class FakeTier2:
                  input_tokens=1000, output_tokens=20,
                  cache_read=500, cache_write=0, cache_hit=False):
         self.available = available
+        self.calls = 0          # so a test can assert Tier 2 was NOT invoked (§3bm)
         self._label, self._hit = label, cache_hit
         self._usage = parse_usage(
             {"input_tokens": input_tokens, "output_tokens": output_tokens,
@@ -62,6 +63,7 @@ class FakeTier2:
             model="claude-sonnet-5", provider="anthropic", cache_fields_reported=True)
 
     def classify(self, text):
+        self.calls += 1
         return TierResult(label=self._label, confidence=0.9, tier="tier2",
                           is_stub=False, usage=self._usage,
                           input_tokens=self._usage.input_tokens,
@@ -78,6 +80,21 @@ class FakeTier2:
 @pytest.fixture
 def config():
     return ServiceConfig.load()
+
+
+@pytest.fixture
+def config_tier2_on():
+    """The SERVED config with escalation forced ON.
+
+    §3bm turned escalation off in `configs/serve.yaml` because it does not pay for
+    itself in accuracy — but the Tier 2 path must stay working and re-enableable by
+    config alone, so every Tier 2 behaviour below is still exercised against it. If
+    these tests had been deleted or left to skip, "reversible by config" would be a
+    claim with nothing holding it up.
+    """
+    import dataclasses
+
+    return dataclasses.replace(ServiceConfig.load(), tier2_enabled=True)
 
 
 def make_cascade(config, *, tier0=None, tier2=None):
@@ -163,11 +180,11 @@ def test_cpu_flags_report_unreadable_as_none_not_false():
 # ------------------------------------------------- 3. the escalation_skipped path
 
 
-def test_no_api_key_returns_tier0_and_marks_escalation_skipped(config):
+def test_no_api_key_returns_tier0_and_marks_escalation_skipped(config_tier2_on):
     """Never pretend to escalate. The router selected the row; the key is absent; the
     response says both, and reports Tier 0 as the tier that actually answered."""
-    below = config.threshold.threshold - 0.05
-    cascade = make_cascade(config, tier0=FakeTier0(margin=below),
+    below = config_tier2_on.threshold.threshold - 0.05
+    cascade = make_cascade(config_tier2_on, tier0=FakeTier0(margin=below),
                            tier2=FakeTier2(available=False))
     out = cascade.classify("ambiguous clause")
 
@@ -188,9 +205,9 @@ def test_confident_row_does_not_escalate_even_with_a_key(config):
     assert out["tier_used"] == "tier0"
 
 
-def test_escalation_happens_when_the_key_is_present(config):
-    below = config.threshold.threshold - 0.05
-    out = make_cascade(config, tier0=FakeTier0(margin=below)).classify("ambiguous")
+def test_escalation_happens_when_the_key_is_present(config_tier2_on):
+    below = config_tier2_on.threshold.threshold - 0.05
+    out = make_cascade(config_tier2_on, tier0=FakeTier0(margin=below)).classify("ambiguous")
     assert out["tier_used"] == "tier2"
     assert out["tiers_invoked"] == ["tier0", "tier2"]
     assert out["escalation_skipped"] is False
@@ -198,7 +215,7 @@ def test_escalation_happens_when_the_key_is_present(config):
         "margin is Tier 0's, even when Tier 2 answered"
 
 
-def test_tier2_unavailable_mid_request_does_not_fabricate(config):
+def test_tier2_unavailable_mid_request_does_not_fabricate(config_tier2_on):
     """`available` said yes and `classify` then raised — a race on the env var. The
     Tier 0 answer is returned and marked; no exception escapes as a fake escalation."""
     from src.serve.tier2 import Tier2Unavailable
@@ -207,8 +224,8 @@ def test_tier2_unavailable_mid_request_does_not_fabricate(config):
         def classify(self, text):
             raise Tier2Unavailable("ANTHROPIC_API_KEY vanished mid-request")
 
-    below = config.threshold.threshold - 0.05
-    out = make_cascade(config, tier0=FakeTier0(margin=below),
+    below = config_tier2_on.threshold.threshold - 0.05
+    out = make_cascade(config_tier2_on, tier0=FakeTier0(margin=below),
                        tier2=Racy(available=True)).classify("x")
     assert out["tier_used"] == "tier0" and out["escalation_skipped"] is True
 
@@ -228,15 +245,15 @@ def _rates(model: str) -> dict:
     return card["providers"]["anthropic"]["models"][model]
 
 
-def test_tier2_cost_is_derived_from_costs_yaml(config):
+def test_tier2_cost_is_derived_from_costs_yaml(config_tier2_on):
     """Recompute the escalated cost straight from the YAML and require a match."""
     r = _rates("claude-sonnet-5")
     card = yaml.safe_load((ROOT / "configs" / "costs.yaml").read_text())
     cache_read_mult = card["modifiers"]["cache_read_multiplier"]
 
-    below = config.threshold.threshold - 0.05
+    below = config_tier2_on.threshold.threshold - 0.05
     tier2 = FakeTier2(input_tokens=1000, output_tokens=20, cache_read=500, cache_write=0)
-    out = make_cascade(config, tier0=FakeTier0(margin=below), tier2=tier2).classify("x")
+    out = make_cascade(config_tier2_on, tier0=FakeTier0(margin=below), tier2=tier2).classify("x")
 
     expected_tier2 = (1000 * r["input"]
                       + 500 * r["input"] * cache_read_mult
@@ -760,7 +777,7 @@ def test_a_cache_hit_still_serves_after_the_cap_is_reached(tmp_path, monkeypatch
     assert t.classify("cached clause").api_cache_hit is True
 
 
-def test_the_cascade_falls_back_to_escalation_skipped_at_the_cap(config, tmp_path,
+def test_the_cascade_falls_back_to_escalation_skipped_at_the_cap(config_tier2_on, tmp_path,
                                                                  monkeypatch, ledger):
     """The required end-to-end behaviour: cap reached -> Tier 0 answer, marked."""
     from src.serve.tier2 import Tier2Claude
@@ -774,8 +791,8 @@ def test_the_cascade_falls_back_to_escalation_skipped_at_the_cap(config, tmp_pat
                      ledger=ledger, spend_cap_usd=0.0)
     t2._client = client
 
-    below = config.threshold.threshold - 0.01
-    out = make_cascade(config, tier0=FakeTier0(margin=below),
+    below = config_tier2_on.threshold.threshold - 0.01
+    out = make_cascade(config_tier2_on, tier0=FakeTier0(margin=below),
                        tier2=t2).classify("ambiguous clause")
 
     assert out["escalation_selected"] is True
@@ -1088,3 +1105,99 @@ def test_health_architecture_reports_the_served_precision(config, fastapi_client
     assert body["tier0"]["precision"] == config.tier0_precision
     if config.tier0_precision == "fp32":
         assert "int8" not in body["architecture"]
+
+
+# ---------------------------------------- escalation OFF: the served default (§3bm)
+
+
+def test_served_config_has_escalation_off():
+    """§3bm's decision lives in the config, so a test has to hold it there.
+
+    Not an opinion about whether escalation is a good idea — a check that the deployed
+    file says what §3bm registered. If someone flips it back on, that should be a
+    deliberate act that breaks this test, not a silent drift.
+    """
+    assert ServiceConfig.load().tier2_enabled is False
+
+
+def test_low_confidence_row_is_FLAGGED_not_escalation_skipped(config):
+    """A flagged clause is NOT a failed escalation, and the response must not say it is.
+
+    `escalation_skipped` means "the router picked this row and we could not escalate it".
+    With Tier 2 off by config nothing is picked, so reporting skipped=True would make a
+    deliberate architecture read as a degraded one to anything counting that field.
+    """
+    below = config.threshold.threshold - 0.05
+    out = make_cascade(config, tier0=FakeTier0(margin=below),
+                       tier2=FakeTier2(available=True)).classify("ambiguous clause")
+
+    assert out["low_confidence"] is True
+    assert out["needs_review"] is True
+    assert out["escalation_enabled"] is False
+    assert out["escalation_selected"] is False, "nothing was selected: Tier 2 is off"
+    assert out["escalation_skipped"] is False, "not a skipped escalation — see docstring"
+    assert out["escalation_skipped_reason"] is None
+    assert out["tier_used"] == "tier0"
+    assert out["tiers_invoked"] == ["tier0"]
+    assert [p["tier"] for p in out["cost_detail"]["per_tier"]] == ["tier0"]
+
+
+def test_confident_row_is_not_flagged(config):
+    above = config.threshold.threshold + 0.05
+    out = make_cascade(config, tier0=FakeTier0(margin=above)).classify("clear clause")
+    assert out["low_confidence"] is False
+    assert out["needs_review"] is False
+    assert out["escalation_selected"] is False
+
+
+def test_escalation_off_never_calls_tier2_even_with_a_key(config, monkeypatch):
+    """The cap, the ledger and the key are all irrelevant when the config says off."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-not-used")
+    below = config.threshold.threshold - 0.05
+    spy = FakeTier2(available=True)
+    out = make_cascade(config, tier0=FakeTier0(margin=below), tier2=spy)
+    out = out.classify("ambiguous clause")
+    assert out["tiers_invoked"] == ["tier0"]
+    assert spy.calls == 0, "Tier 2 was invoked while disabled by config"
+
+
+def test_escalation_is_reenableable_by_config_alone(config_tier2_on):
+    """§3bm claims the decision is reversible without touching code. Hold it to that."""
+    below = config_tier2_on.threshold.threshold - 0.05
+    out = make_cascade(config_tier2_on, tier0=FakeTier0(margin=below),
+                       tier2=FakeTier2(available=True)).classify("ambiguous clause")
+    assert out["escalation_enabled"] is True
+    assert out["escalation_selected"] is True
+    assert out["low_confidence"] is True, "the flag survives escalation being on"
+    assert "tier2" in out["tiers_invoked"]
+
+
+def test_classify_cost_is_keyed_to_the_SERVED_precision(config):
+    """§3bh: every /classify response quoted an INT8 cost while the service served FP32.
+
+    The regression this pins is not 'the number is wrong' but 'the number describes a
+    different system than the one answering'.
+    """
+    from src.serve.pricing import local_usd_per_request
+
+    out = make_cascade(config, tier0=FakeTier0(margin=0.9)).classify("clear clause")
+    served = local_usd_per_request(precision=config.tier0_precision)
+    other = local_usd_per_request(
+        precision="int8" if config.tier0_precision == "fp32" else "fp32")
+    assert out["estimated_cost_usd"] == pytest.approx(served.usd)
+    assert out["estimated_cost_usd"] != pytest.approx(other.usd)
+    assert config.tier0_precision in out["cost_detail"]["per_tier"][0]["basis"]
+
+
+def test_local_pricing_refuses_a_precision_with_no_measured_energy():
+    """Hard rule 11: an unmeasured energy term RAISES; it never borrows the other row's."""
+    import copy
+
+    from src.serve.pricing import MeasurementUnavailable, local_usd_per_request
+
+    from src.eval.breakeven import load_hardware
+
+    hw = copy.deepcopy(load_hardware())
+    hw["per_tier_throughput"]["tier0_encoder_onnx_fp32"]["energy_joules_per_request"] = None
+    with pytest.raises(MeasurementUnavailable, match="energy_joules_per_request"):
+        local_usd_per_request(hw=hw, precision="fp32")

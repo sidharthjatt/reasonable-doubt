@@ -238,46 +238,110 @@ local_hardware:
       # asymptote IS the power term, and a curve built without it tends to zero and makes
       # local always win at volume. The throughput and latency figures below are real
       # measurements; the energy ones are absent, not estimated (hard rule 11).
-      status: incomplete_for_e6_energy_unmeasured
+      # ENERGY MEASURED 2026-09-11 under sudo on the SERVED artefact (§3bl). This row
+      # is no longer incomplete. What it is NOT: a replacement for the INT8 row, which
+      # stays exactly as measured and remains the basis of every published E6 number.
+      status: measured
+      energy_measured_on: "models/onnx_ce10ep_1_fp32 (E1b seed 1, the SERVED artefact), 3 runs, arm64_local, 2026-09-11, sudo powermetrics"
       # SAME PROTOCOL AND REPLICATE COUNT AS THE INT8 ROW: 3 artefacts x 3 runs = 9 runs,
       # batch size 1, max_length 512, mean over ALL runs with no outlier excluded (3aj).
       # The three FP32 ONNX exports come from fp32_ce_{1,2,3} through the export path
       # 3be's control validated byte-for-byte.
-      requests_per_second: 24.5969
-      requests_per_second_sd: 2.2374
-      p50_latency_ms: 29.3805
-      p50_latency_ms_sd: 2.7296
-      p95_latency_ms: 110.9449
-      p95_latency_ms_sd: 10.4128
-      n_runs: 9
+      # ⚠ THROUGHPUT IS SESSION-DEPENDENT BY ~20% AND THAT IS MEASURED, NOT SUSPECTED.
+      # Two figures for the same precision exist and they disagree by 26%:
+      #   morning session (3 artefacts x 3 runs, --skip-power) : 24.5969 +/- 2.2374
+      #   energy session  (served artefact  x 3 runs, sudo)    : 30.9137 +/- 0.6698
+      # An INTERLEAVED CONTROL (§3bl) settles which it is: onnx_ce_1_fp32 and
+      # onnx_ce10ep_1_fp32 alternated, 3 runs each, one session, same protocol —
+      #   onnx_ce_1_fp32     29.1437 +/- 1.9072
+      #   onnx_ce10ep_1_fp32 29.8622 +/- 0.2989
+      # ARTEFACT effect +0.7186 rps, inside E1's own within-session sd. SAME ARTEFACT
+      # ACROSS SESSIONS +4.8471 rps = +19.95%. The 26% gap is MEASUREMENT CONDITIONS,
+      # not weights. Any figure derived from throughput inherits that ~20% band.
+      #
+      # THE SERVED ROW USES THE ENERGY SESSION'S THROUGHPUT, because J/req is
+      # marginal_W / rps measured WITHIN each run: pairing this session's energy with
+      # another session's throughput would mix regimes inside a single quotient.
+      requests_per_second: 30.9137
+      requests_per_second_sd: 0.6698
+      requests_per_second_n_runs: 3
+      p50_latency_ms: 23.2370
+      p50_latency_ms_sd: 0.5620
+      p95_latency_ms: 88.2460
+      p95_latency_ms_sd: 5.6141
+      n_runs: 3
       batch_size: 1
       max_length: 512
-      measured_on: "3 FP32 ONNX exports x 3 runs, arm64_local, 2026-09-11, --skip-power"
-      # Per-artefact means 24.2966 / 25.1584 / 24.3356 — a 3.5% spread against a 9.1%
-      # within-run sd, i.e. the same weight-independence the INT8 row measured, though
-      # NOT re-tested formally here.
-      per_artefact_throughput_rps: [24.2966, 25.1584, 24.3356]
-      # ENERGY IS NOT MEASURED. Null means unmeasured, never zero and never inherited
-      # from the INT8 row: FP32 does ~4x the arithmetic per token and its power draw is
-      # an open question, not a copy.
-      power_draw_soc_watts_idle: null
-      power_draw_soc_watts_load: null
-      power_draw_soc_watts_marginal: null
-      power_draw_wall_watts: null
-      energy_joules_per_request: null
-      energy_joules_per_request_sd: null
+      measured_on: "models/onnx_ce10ep_1_fp32 x 3 runs, arm64_local, 2026-09-11, sudo powermetrics"
+      # SUPERSEDED, RETAINED (§3ax's class: a superseded figure must not be presented as
+      # current, and must not be deleted either). The morning session's 9-run FP32
+      # throughput row, measured on the three E1 FP32 exports with --skip-power:
+      superseded_2026_09_11:
+        requests_per_second: 24.5969
+        requests_per_second_sd: 2.2374
+        p50_latency_ms: 29.3805
+        p95_latency_ms: 110.9449
+        n_runs: 9
+        per_artefact_throughput_rps: [24.2966, 25.1584, 24.3356]
+        why: >
+          Not wrong, and not an outlier — a different session. The interleaved control
+          above shows the same artefact moves 19.95% between sessions, which is larger
+          than any artefact effect measured. Superseded as the SERVED row because the
+          served artefact and the energy measurement both come from the later session.
+      interleaved_control_2026_09_11:
+        onnx_ce_1_fp32: [30.3178, 26.9431, 30.1701]
+        onnx_ce10ep_1_fp32: [29.9017, 29.5456, 30.1395]
+        artefact_effect_rps: 0.7186
+        same_artefact_cross_session_rps: 4.8471
+        conclusion: "measurement conditions, not artefact"
+      # ENERGY — MEASURED 2026-09-11, no longer null. Three runs, NO RUN EXCLUDED (§3aj).
+      # Per-run: J/req 0.503315 / 0.515419 / 0.498270; idle 0.11465 / 0.07695 / 1.36195 W;
+      # marginal 15.74140 / 16.14535 / 15.01825 W.
+      power_draw_soc_watts_idle: 0.5179       # sd 0.7313 — see idle_baseline_caveat
+      power_draw_soc_watts_load: 16.1529      # sd 0.2689
+      power_draw_soc_watts_marginal: 15.6350  # sd 0.5710; load - idle; E6 uses this one
+      power_draw_wall_watts: null             # still not obtainable from powermetrics
+      energy_joules_per_request: 0.505668
+      energy_joules_per_request_sd: 0.008813
+      idle_baseline_caveat: >
+        RUN 3'S IDLE BASELINE IS CONTAMINATED AND THE RUN IS STILL REPORTED. Its idle
+        reads 1.36195 W against 0.11465 and 0.07695 — background applications were open
+        and the machine could not be brought fully idle. Because marginal = load - idle,
+        a HIGH idle biases marginal DOWN, so run 3 pulls the reported energy figure DOWN
+        rather than up. It is included because §3aj's protocol excludes no run, and the
+        no-exclusion rule is worth more than the 0.73% it costs here.
+        SENSITIVITY, stated so the reader does not have to trust the rule blindly —
+        runs 1-2 only: marginal 15.9434 W (+1.97%), J/req 0.509367 (+0.73%),
+        sunk $1.198427e-05 per 1k (+0.73%), local $0.00086820 per 1k (-1.21%).
+        No conclusion in this file changes under either choice.
       energy_note: >
-        UNMEASURED. Needs `sudo powermetrics`, which this run could not obtain. Until it
-        is measured, NO FP32 cost-per-clause, break-even volume or E6 curve point can be
-        computed — the energy term is the curve's asymptote. Re-run
-        `python -m src.serve.bench_local --onnx-dir models/onnx_ce_<n>_fp32
-        --tier tier0_encoder_onnx_fp32 --batch-size 1 --max-length 512 --run <r>`
-        under sudo, 3 artefacts x 3 runs, then scripts/bench_aggregate.py.
-      throughput_note: >
-        FP32 is 1.15x slower than INT8 on this host (24.5969 vs 28.3615 req/s), and p50
-        latency 29.38ms vs 25.40ms. That is a far smaller penalty than the 715MB vs 244MB
-        artefact size suggests, and it is the price of the only precision qualified to run
-        on a Linux target (3bf/3bg).
+        MEASURED 2026-09-11 under sudo on the SERVED artefact (§3bl), unblocking §3bh's
+        group A. 0.505668 J/request is the MARGINAL figure (15.6350 W / 30.9137 req/s),
+        marginal and not load for the same reason the INT8 row gives: idle draw is
+        incurred whether or not Tier 0 serves anything.
+        At the ASSUMED $0.0847/kWh that is $1.189724e-05 per 1000 clauses — 1/36,656 of
+        Sonnet 5's measured $0.43610 per 1000. Combined with the capital term
+        ($633.86 / 731,170,028 lifetime requests) the served local cost is
+        $0.00087881 per 1000 clauses.
+        THE TARIFF IS STILL ASSUMED, not measured (§3ac). Every USD figure in this note
+        inherits that and `src/eval/breakeven.py` still refuses it unless a caller asks
+        for it by name.
+        SoC PACKAGE ONLY — CPU+GPU+ANE, excluding RAM, SSD, PSU losses, networking and
+        fans. Wall power remains unmeasured and is not obtainable from powermetrics.
+      fp32_vs_int8_note: >
+        DO NOT READ A PRECISION COMPARISON OFF THIS FILE. The FP32 row here (30.9137
+        req/s, 0.505668 J/req) and the INT8 row (28.3615 req/s, 0.6269 J/req) were
+        measured in DIFFERENT SESSIONS, and the interleaved control above measured the
+        same artefact moving 19.95% between sessions — larger than the gap between the
+        two rows. Arithmetically this file's numbers would say FP32 is both FASTER and
+        CHEAPER than INT8 ($0.00087881 vs $0.00095968 per 1k, -8.43%), REVERSING §3bh's
+        projected +15% to +20%. That reversal is NOT supported: it is a cross-session
+        comparison of the kind the control just invalidated.
+        The only comparison that would settle it is an INTERLEAVED INT8-vs-FP32 run in
+        one session. IT HAS NOT BEEN RUN. Until it is, the precision penalty on this
+        host is UNMEASURED — not 1.15x, not zero, and not negative.
+        §3bg's deployment decision does not depend on this: it rests on FP32 being the
+        only precision qualified on a Linux target (§3bf/§3bg), not on speed or cost.
 
     tier1_qwen2_5_1_5b_instruct:
       # UNMEASURED — a real gap, not a decision. Filling it needs the trained adapter

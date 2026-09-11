@@ -61,6 +61,23 @@ router:
   signal: margin
 
 tier2:
+  # ESCALATION IS OFF. TIER 0 ONLY. Decision recorded in §3bc/§3bm, 2026-09-11.
+  #
+  # WHY, and it is a measurement not a preference: at this exact operating point — the
+  # served artefact, the served threshold, test_3000 — the cascade's macro-F1 is 0.809874
+  # against Tier 0 alone at 0.809052. Delta +0.000822, paired bootstrap 95% CI
+  # [-0.0060, +0.0072], p = 0.857, INCLUDES 0. McNemar on the 129 escalated rows: 28/21,
+  # net +7, exact p = 0.392. The escalation target does not pay for itself in accuracy.
+  #
+  # THE ROUTER STAYS ON AND IS STILL DOING ITS JOB. Tier 0 scores 0.3488 on the rows it
+  # selects against 0.8733 overall — the margin signal identifies genuinely hard clauses.
+  # What it cannot do is hand them to something that answers them better. Those rows are
+  # now FLAGGED (`low_confidence: true`, `needs_review: true`) instead of escalated, so
+  # the routing information is kept and the API bill is zero.
+  #
+  # REVERSIBLE BY CONFIG ALONE. Tier 2 code, its tests, the spend cap, the ledger path
+  # and the threshold are all unchanged and still exercised. Flip `enabled` back to true.
+  enabled: false
   # The escalation target. Sonnet 5's rates live in costs.yaml under this exact id.
   model: claude-sonnet-5
   max_output_tokens: 40      # matches the stage-1 budget decision in costs.yaml

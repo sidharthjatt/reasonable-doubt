@@ -1404,6 +1404,156 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bm. ESCALATION TURNED OFF — Tier 0 only, by measurement (2026-09-12)
+
+**A DEPLOYMENT DECISION, registered under §3bc. Not an experiment, no accept rule.**
+The operator's decision, taken on the served-config check filed in §4.
+
+#### What it rests on
+
+| | macro-F1 |
+|---|---|
+| Tier 0 alone | **0.809052** |
+| cascade | 0.809874 |
+| delta | **+0.000822**, 95% CI **[−0.0060, +0.0072]**, p = **0.857** |
+
+McNemar on the 129 escalated rows: **28 / 21, net +7, exact p = 0.392**.
+
+> **The escalation target does not pay for itself in accuracy at the served operating
+> point.** Escalation is therefore **off**: `tier2.enabled: false`.
+
+**THE ROUTER STAYS ON, AND THAT IS THE POINT.** Tier 0 scores **0.3488** on the rows the
+margin signal selects against **0.8733** overall — the signal identifies genuinely hard
+clauses. What it cannot do is hand them to something that answers them better. Those rows
+are now **flagged**, not escalated.
+
+#### The flag is NOT a skipped escalation, and the response says so
+
+`escalation_skipped` means *"the router picked this row and we could not escalate it"* — a
+degraded state. With Tier 2 off by config nothing is picked, so reporting `skipped: true`
+would make a deliberate architecture read as a failure to anything counting that field.
+
+| field | low-margin row, escalation OFF |
+|---|---|
+| `low_confidence` / `needs_review` | **true** |
+| `escalation_enabled` | false |
+| `escalation_selected` | **false** — nothing was selected |
+| `escalation_skipped` | **false** |
+| `escalation_skipped_reason` | null |
+| `tiers_invoked` | `["tier0"]` |
+
+Verified live with no API key on `test_3000`'s **lowest-margin row** (margin 0.001359
+against threshold 0.528864): `label Definitions`, flagged, not escalated, Tier 0 billed
+alone.
+
+#### Reversible by config alone, and held to it
+
+Tier 2's code, tests, spend cap, ledger path and threshold are **unchanged**. The five
+Tier 2 behaviour tests now run against a fixture that forces `tier2_enabled=True`, so the
+path stays exercised — **deleting or skipping them would have left "reversible by config"
+as a claim with nothing holding it up.** `test_escalation_is_reenableable_by_config_alone`
+asserts the round trip; `test_served_config_has_escalation_off` pins the served default so
+a flip back is a deliberate act that breaks a test rather than silent drift.
+
+#### What this does NOT claim
+
+- **Not** that escalation is worthless in general — it is one operating point, **n = 1
+  seed**, and **in-sample for the 4.056% rate** (§3bc).
+- **Not** that the low-confidence rows are handled. They are **flagged and returned with a
+  Tier 0 answer**; the review path they imply does not exist. The flag is honest about the
+  uncertainty, not a fix for it.
+- **Not** a change to any published result. E6, H1 and E8 are untouched.
+
+### 3bl. FP32 ENERGY MEASURED; the throughput gap is SESSION, not artefact (2026-09-12)
+
+**Not an experiment.** Fills §3bh group A's hard block and corrects the live pricing path.
+
+#### 1. The energy bench — 3 runs, served artefact, NO run excluded
+
+| run | rps | idle W | load W | marginal W | J/req |
+|---|---|---|---|---|---|
+| 1 | 31.2755 | 0.11465 | 15.85605 | 15.74140 | 0.503315 |
+| 2 | 31.3247 | 0.07695 | 16.22230 | 16.14535 | 0.515419 |
+| **3** | 30.1408 | **1.36195 ⚠** | 16.38020 | 15.01825 | 0.498270 |
+| **mean ± sd** | **30.9137 ± 0.6698** | 0.5179 ± 0.7313 | 16.1529 ± 0.2689 | **15.6350 ± 0.5710** | **0.505668 ± 0.008813** |
+
+**RUN 3'S IDLE BASELINE IS CONTAMINATED AND THE RUN IS STILL REPORTED.** Idle reads
+**1.36195 W** against 0.11465 and 0.07695 — background applications were open and the
+machine could not be brought fully idle. Because `marginal = load − idle`, **a high idle
+biases marginal DOWN**, so run 3 pulls the reported figure **down**, not up. It is kept
+because §3aj's protocol excludes no run.
+
+> **SENSITIVITY, so the no-exclusion rule is not asked for on trust.** Runs 1–2 only:
+> marginal **15.9434 W** (+1.97%), J/req **0.509367** (+0.73%), sunk **$1.198427e-05**/1k
+> (+0.73%), local **$0.00086820**/1k (−1.21%). **No conclusion moves under either choice**,
+> which is the only reason the contaminated run is harmless rather than merely disclosed.
+
+#### 2. THE THROUGHPUT CONTRADICTION — resolved, and it is not the weights
+
+Two FP32 throughput figures disagreed by 26% (24.5969 ± 2.2374 in the morning session vs
+30.9137 above), and FP32 appeared to overtake INT8's 28.3615. **Interleaved control**, no
+sudo, `--skip-power`, both artefacts alternated, 3 runs each, one session:
+
+| artefact | runs | mean ± sd |
+|---|---|---|
+| `onnx_ce_1_fp32` (E1) | 30.3178 / 26.9431 / 30.1701 | 29.1437 ± 1.9072 |
+| `onnx_ce10ep_1_fp32` (E1b, served) | 29.9017 / 29.5456 / 30.1395 | 29.8622 ± 0.2989 |
+
+| effect | size |
+|---|---|
+| **artefact** (E1b − E1, one session) | **+0.7186 rps** — inside E1's own within-session sd |
+| **same artefact, across sessions** (E1 today − E1 this morning) | **+4.8471 rps = +19.95%** |
+
+> ### THE GAP IS MEASUREMENT CONDITIONS, NOT ARTEFACT.
+>
+> And the consequence is larger than the question asked: **no cross-session throughput or
+> energy comparison in this project is safe**, including **FP32 vs INT8**. Arithmetically
+> the file now says FP32 is faster *and* 8.4% cheaper than INT8, **reversing §3bh's
+> projected +15% to +20%** — but the INT8 row is a third session, and the drift measured
+> here is bigger than the gap. **The precision penalty on this host is UNMEASURED**: not
+> 1.15×, not zero, not negative. Settling it needs an interleaved INT8-vs-FP32 run, which
+> has **not** been done and is not chased here.
+>
+> §3bg's deployment decision is unaffected — it rests on FP32 being the only precision
+> qualified on a Linux target (§3bf/§3bg), never on speed or cost.
+
+The morning row is **retained, not deleted** (§3ax's class) under
+`superseded_2026_09_11:` in `costs.yaml`, with the control's numbers beside it.
+
+#### 3. Derived, and what stays on E1
+
+`tier0_usd_per_1k_sunk` **1.189724e-05** (was 1.4750e-05); Sonnet-5-to-Tier-0 ratio
+**36,656×** (was 29,567×); local **$0.00087881**/1k (was $0.00095968). Tariff is **still
+assumed** (§3ac) and every figure here inherits that.
+
+> **E6, THE FRONTIER AND V\* ARE NOT REBUILT and stay on E1 as registered.** No Pareto
+> point, break-even volume or frontier figure has been recomputed. §3bh group C already
+> records that V\* is precision-independent to ~0.01%, so nothing is pending.
+
+#### 4. The live pricing bug §3bh flagged is FIXED
+
+`local_usd_per_request()` is **precision-keyed**: it reads the served precision's own
+`per_tier_throughput` row and **raises `MeasurementUnavailable`** for a precision whose
+energy is unmeasured rather than borrowing the other row's (hard rule 11). The INT8 path
+reproduces **$0.00095968** exactly, which is the control that says the refactor moved
+nothing.
+
+> **§3bh's own estimate of the bug was wrong in sign.** It said `/classify` "understates by
+> ~15%". The INT8 figure it was quoting **overstated** by 9.2%. Corrected rather than
+> quietly dropped — and per §2 above, that 9.2% is itself cross-session and not a precision
+> effect.
+
+#### 5. ORT telemetry — answered, not fixed
+
+`bench_local` **does** route through `src.ort_runtime.import_onnxruntime()`, so §a7dcf59's
+disable **is applied** on this path. The `telemetry.cc … Failed to persist telemetry device
+ID` line is emitted by ORT's **native library load**, which happens at `import onnxruntime`
+— *before* `disable_telemetry_events()` can be called — and it appears only under `sudo`,
+where the device-ID path is not writable as root. It is **not** the exit-time
+`recursive_mutex` crash the disable exists to prevent, and that crash did not occur: all
+runs exited 0. **Not fixed:** suppressing a message emitted during dylib load is not a
+one-line change, and the disable is doing its actual job.
+
 ### 3bk. SERVED MODEL SWAPPED to E1b seed 1 FP32 — registered under §3bc (2026-09-11)
 
 **NOT AN EXPERIMENT, NO ACCEPT RULE.** A deployment change, registered because §3bc exists
@@ -1812,15 +1962,31 @@ rather than add to them.
 
 #### What needs restating, in three groups
 
-**A. BLOCKED ENTIRELY on the FP32 energy measurement.** These are *pure marginal energy* —
-there is no capital term to fall back on, so no bound can be given at all:
+**A.** ~~**BLOCKED ENTIRELY on the FP32 energy measurement.**~~ **✅ UNBLOCKED 2026-09-11
+— the FP32 energy is MEASURED (§3bl).** `sudo powermetrics` was obtained and the bench ran
+on the **served** artefact, 3 runs, no run excluded.
 
-| figure | INT8 value |
-|---|---|
-| `tier0_usd_per_1k_sunk` | 1.4750e-05 |
-| Sonnet-5-to-Tier-0 cost ratio | **29,567×** |
-| E6's **sunk** curve and its Pareto points | all points |
-| `costs.yaml` energy_note's "1/30,395 of $0.4483" | also cites the superseded $0.4483 (§3ac fixed it to $0.43610) |
+| figure | ~~INT8 value~~ superseded for the served row | **FP32, measured** |
+|---|---|---|
+| `energy_joules_per_request` | ~~0.6269~~ | **0.505668 ± 0.008813** |
+| `power_draw_soc_watts_marginal` | ~~17.7546~~ | **15.6350 ± 0.5710** |
+| `tier0_usd_per_1k_sunk` | ~~1.4750e-05~~ | **1.189724e-05** |
+| Sonnet-5-to-Tier-0 cost ratio | ~~**29,567×**~~ | **36,656×** |
+| local $/1k (capital + energy) | ~~0.00095968~~ | **0.00087881** |
+| E6's **sunk** curve and its Pareto points | **NOT REBUILT — E6 stays on E1 as registered** | — |
+| `costs.yaml` energy_note's "1/30,395 of $0.4483" | superseded twice over | rewritten against $0.43610 |
+
+> **THE INT8 ROW ITSELF IS UNTOUCHED.** It remains exactly as measured and remains the
+> basis of every published E6 number. "Superseded" above means *superseded as the basis
+> for the **served** row*, not withdrawn.
+>
+> **AND THE DIRECTION IS THE OPPOSITE OF WHAT GROUP B PREDICTED — do not read it as a
+> finding.** These numbers say FP32 is both faster and ~8.4% CHEAPER than INT8, against
+> group B's projected +15% to +20%. **That reversal is not supported**: the two rows come
+> from different sessions, and §3bl's interleaved control measured the *same artefact*
+> moving **19.95%** between sessions — larger than the gap. The precision penalty on this
+> host is **UNMEASURED**, and settling it needs an interleaved INT8-vs-FP32 run that has
+> not been done.
 
 **B. COMPUTABLE from today's throughput; only the last ~1.5% waits on energy.** The capital
 term dominates: energy is **1.54%** of the INT8 local per-request cost.
@@ -1832,11 +1998,14 @@ term dominates: energy is **1.54%** of the INT8 local per-request cost.
 | local $/1k | $0.00095968 | **$0.0011043 – $0.0011486** (+15% to +20%), the range spanning FP32 energy from 1× to 4× INT8 |
 | `tier0_usd_per_1k_greenfield` at V=1e6 | 0.63388 | restate with the above |
 
-> **LIVE AND CURRENTLY WRONG-PRECISION:** `src/serve/pricing.local_usd_per_request()` reads
-> the INT8-derived `assumed_lifetime_requests` and `energy_joules_per_request`, so **every
-> `/classify` response's `estimated_cost_usd` is an INT8 figure while the service runs
-> FP32.** It understates by ~15%. Not corrected here because correcting it means writing an
-> unmeasured energy term into the billing path, which hard rule 11 forbids.
+> ~~**LIVE AND CURRENTLY WRONG-PRECISION:**~~ **✅ FIXED 2026-09-11 (§3bl).**
+> `local_usd_per_request()` is now **precision-keyed**: it reads the served precision's own
+> `per_tier_throughput` row and **raises `MeasurementUnavailable`** for a precision whose
+> energy is unmeasured, rather than borrowing the other one's. `/classify` now reports
+> **$8.788115e-07 per request ($0.00087881 per 1k)** with an FP32 basis string.
+> The old prediction that it "understates by ~15%" was **wrong in sign**: the INT8 figure
+> it was quoting **over**stated by 9.2%. See the caveat above — that gap is cross-session,
+> not a precision effect. A regression test pins the served precision into the response.
 
 **C. ESSENTIALLY UNCHANGED — and this is the one that matters most.**
 
@@ -2202,6 +2371,11 @@ in a config file with no provenance. The deployed service is `src/serve/`
 (**E4b-A**: Tier 0 INT8 → Claude Sonnet 5, no Tier 1).
 
 ---
+
+> **⚠ ESCALATION IS NOW OFF — see §3bm (2026-09-12).** `tier2.enabled: false`. The router
+> still runs and flags low-margin rows (`low_confidence` / `needs_review`); nothing is
+> escalated, and a flagged row is **not** an `escalation_skipped` row. The threshold,
+> spend cap and Tier 2 code are unchanged and re-enableable by config alone.
 
 > **⚠ THE SERVED ARTEFACT AND ITS CANARY NUMBER HAVE CHANGED — see §3bk (2026-09-11).**
 > Tier 0 now serves **`models/onnx_ce10ep_1_fp32`** (E1b seed 1), canary **191/200 =
