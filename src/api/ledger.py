@@ -293,9 +293,24 @@ class SpendLedger:
                     raise ValueError(f"{self.path}:{lineno}: unreadable entry: {exc}") from exc
         return rows
 
-    def cumulative_usd(self) -> float:
-        """Total ACTUAL spend recorded. Estimate rows are excluded — they are not money."""
-        return sum(e.cost_usd for e in self.entries() if e.kind == "actual")
+    def cumulative_usd(self, run_id: str | None = None) -> float:
+        """Total ACTUAL spend recorded. Estimate rows are excluded — they are not money.
+
+        ``run_id`` scopes the total to ONE producer. Two different limits read this
+        ledger and they are not the same question:
+
+        * the **$15 hard stop** (hard rule 8) governs ALL spend on this project, so it
+          reads the whole file — ``run_id=None``;
+        * a **per-service cap** governs only what that service spent, so it must read
+          only that service's rows.
+
+        Conflating them is not a rounding error, it is a silent outage: the deployed
+        service's $1.00 cap was compared against $3.58 of *experiment* spend, so the cap
+        was permanently "reached" and every request returned
+        ``escalation_skipped=true`` — a service that looks healthy and never escalates.
+        """
+        return sum(e.cost_usd for e in self.entries()
+                   if e.kind == "actual" and (run_id is None or e.run_id == run_id))
 
     @property
     def hard_stop_usd(self) -> float:

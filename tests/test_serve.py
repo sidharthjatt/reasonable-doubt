@@ -829,3 +829,158 @@ def test_an_absolute_threshold_file_is_refused(tmp_path):
     bad.write_text(json.dumps(d))
     with pytest.raises(ValueError, match="PERCENTILE"):
         RouterThreshold.load(bad)
+
+
+# ---------------------------------- the serve cap and the project hard stop are separate
+
+
+def _actual_row(run_id, usd):
+    return {"timestamp_utc": "2026-09-11T00:00:00+00:00", "run_id": run_id,
+            "provider": "anthropic", "model": "claude-sonnet-5", "batch_id": None,
+            "input_tokens": 1, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0, "output_tokens": 1, "cost_usd": usd,
+            "cumulative_usd": usd, "kind": "actual", "estimated_usd": None,
+            "n_requests": 1, "notes": None}
+
+
+def _ledger_with(tmp_path, rows):
+    from src.api.ledger import SpendLedger
+
+    # NOT "spend_ledger.jsonl": make_tier2() creates a throwaway ledger at exactly that
+    # name under the same tmp_path and truncates it, which silently emptied these rows.
+    path = tmp_path / "seeded_ledger.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return SpendLedger(path)
+
+
+def test_experiment_spend_does_not_consume_the_serve_cap(tmp_path, monkeypatch):
+    """THE OUTAGE THIS FIXES. The serve cap read the WHOLE ledger, so $1.00 was compared
+    against $3.58 of experiment spend: the cap was permanently reached, every escalation
+    refused, and every response came back escalation_skipped=true looking perfectly
+    normal. Experiment rows must not count against a limit on SERVING."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    ledger = _ledger_with(tmp_path, [
+        _actual_row("stage1_claude-sonnet-5", 3.20),
+        _actual_row("rung2_claude-sonnet-5", 0.381478),
+    ])
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, 1.00
+
+    assert ledger.cumulative_usd() == pytest.approx(3.581478)
+    assert t.spent_usd() == 0.0, "no serving spend has been recorded"
+    assert t.cap_reached() is False
+    t.classify("a clause")          # must not raise SpendCapReached
+
+
+def test_the_serve_cap_counts_only_this_services_own_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    ledger = _ledger_with(tmp_path, [
+        _actual_row("stage1_claude-sonnet-5", 9.00),      # huge, but not serving
+        _actual_row("serve_tier0_sonnet5", 0.40),
+        _actual_row("some_other_service", 5.00),          # also not ours
+    ])
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, 1.00
+
+    assert t.spent_usd() == pytest.approx(0.40)
+    assert t.cap_reached() is False
+
+
+def test_the_serve_cap_fires_on_this_services_own_spend(tmp_path, monkeypatch):
+    from src.serve.tier2 import SpendCapReached
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    ledger = _ledger_with(tmp_path, [_actual_row("serve_tier0_sonnet5", 1.50)])
+    client = FakeAnthropicClient()
+    t = make_tier2(tmp_path, client)
+    t.ledger, t.spend_cap_usd = ledger, 1.00
+
+    assert t.spent_usd() == pytest.approx(1.50)
+    with pytest.raises(SpendCapReached, match="run_id"):
+        t.classify("a clause")
+    assert len(client.calls) == 0
+
+
+def test_changing_the_run_id_rescopes_the_cap(tmp_path, monkeypatch):
+    """Documented footgun: a new run id is a new accounting bucket, so prior serving
+    spend stops counting. Pinned so the behaviour is deliberate, not discovered."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
+    ledger = _ledger_with(tmp_path, [_actual_row("serve_tier0_sonnet5", 1.50)])
+    t = make_tier2(tmp_path)
+    t.ledger, t.spend_cap_usd = ledger, 1.00
+
+    assert t.cap_reached() is True
+    t.run_id = "serve_tier0_sonnet5_v2"
+    assert t.spent_usd() == 0.0 and t.cap_reached() is False
+
+
+def test_the_hard_stop_still_reads_every_run_id(tmp_path):
+    """The $15 project limit governs ALL spend and must NOT be scoped to one producer."""
+    from src.api.ledger import BudgetExceeded
+
+    ledger = _ledger_with(tmp_path, [
+        _actual_row("stage1_claude-sonnet-5", 9.00),
+        _actual_row("serve_tier0_sonnet5", 5.00),
+    ])
+    assert ledger.cumulative_usd() == pytest.approx(14.00)
+    assert ledger.cumulative_usd(run_id="serve_tier0_sonnet5") == pytest.approx(5.00)
+    assert ledger.remaining_usd() == pytest.approx(1.00)
+
+    ledger.assert_within_budget(0.50)              # inside the hard stop
+    with pytest.raises(BudgetExceeded, match="hard stop"):
+        ledger.assert_within_budget(2.00)          # 14.00 + 2.00 > 15.00
+
+
+def test_serving_spend_does_count_toward_the_hard_stop(tmp_path):
+    """The scoping is one-directional: experiment spend is invisible to the serve cap,
+    but serving spend is NOT invisible to the project budget."""
+    ledger = _ledger_with(tmp_path, [_actual_row("serve_tier0_sonnet5", 14.60)])
+    from src.api.ledger import BudgetExceeded
+
+    with pytest.raises(BudgetExceeded):
+        ledger.assert_within_budget(0.50)
+
+
+def test_estimate_rows_are_money_for_neither_limit(tmp_path):
+    est = dict(_actual_row("serve_tier0_sonnet5", 7.00), kind="estimate",
+               cost_usd=0.0, estimated_usd=7.00)
+    ledger = _ledger_with(tmp_path, [est, _actual_row("serve_tier0_sonnet5", 0.25)])
+    assert ledger.cumulative_usd() == pytest.approx(0.25)
+    assert ledger.cumulative_usd(run_id="serve_tier0_sonnet5") == pytest.approx(0.25)
+
+
+def test_every_refusal_check_precedes_the_confirmed_banner():
+    """`require_confirmation` prints "CONFIRMED — projected cumulative: $X" on its way
+    out, so any refusal placed after it prints a refusal UNDER a line saying the run was
+    confirmed. That is how the smoke test first read: CONFIRMED, then the cap refusal.
+    Order is asserted by AST rather than by reading, so it cannot quietly regress."""
+    import ast
+
+    src = (ROOT / "scripts" / "smoke_live_tier2.py").read_text()
+    tree = ast.parse(src)
+    main = next(n for n in tree.body
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+
+    cap_lines, confirm_lines = [], []
+    for node in ast.walk(main):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "cap_reached":
+            cap_lines.append(node.lineno)
+        if isinstance(node.func, ast.Name) and node.func.id == "require_confirmation":
+            confirm_lines.append(node.lineno)
+
+    assert cap_lines, "the smoke test must check the serve cap"
+    assert confirm_lines, "the smoke test must gate on require_confirmation"
+    assert min(cap_lines) < min(confirm_lines), (
+        f"the serve-cap refusal (line {min(cap_lines)}) must run BEFORE "
+        f"require_confirmation (line {min(confirm_lines)}), which prints CONFIRMED")
+
+
+def test_the_smoke_test_gates_on_the_serve_cap_as_well_as_the_hard_stop():
+    """Two limits, both checked. The hard stop comes via require_confirmation; the serve
+    cap has to be checked explicitly because require_confirmation knows nothing about it."""
+    src = (ROOT / "scripts" / "smoke_live_tier2.py").read_text()
+    assert "cumulative_usd(run_id=" in src, \
+        "the serve cap must read the ledger SCOPED to this service's run id"
+    assert "tier2_spend_cap_usd" in src and "require_confirmation" in src

@@ -106,12 +106,25 @@ class Tier2Claude:
         return self.api_key_present()
 
     def spent_usd(self) -> float:
-        """Real money recorded so far, read from the ledger on every call.
+        """Money THIS SERVICE has spent, read from the ledger on every call.
+
+        SCOPED TO `run_id`, and that scoping is load-bearing. The ledger also holds the
+        offline experiment runs — $3.58 of Stage 1 and friends — and the serve cap is a
+        limit on SERVING, not on the project. Comparing a $1.00 serve cap against the
+        whole ledger made the cap permanently reached, so every escalation was refused
+        and every response came back `escalation_skipped=true`: a service that looks
+        completely healthy and silently never escalates. The $15 project hard stop is a
+        different limit and still reads the whole file (see SpendLedger.cumulative_usd).
+
+        CHANGING `tier2.run_id` IN serve.yaml RESETS THIS CAP, because spend recorded
+        under the old tag no longer matches. That is deliberate — a new run id is a new
+        accounting bucket — but it is a real footgun, so the id is not something to
+        change casually.
 
         Not cached in memory: the ledger is append-only and may be written by another
         process, and a stale in-memory total would let the cap be overrun silently.
         """
-        return self.ledger.cumulative_usd()
+        return self.ledger.cumulative_usd(run_id=self.run_id)
 
     def cap_reached(self) -> bool:
         if self.spend_cap_usd is None:
@@ -124,9 +137,11 @@ class Tier2Claude:
         spent = self.spent_usd()
         if spent >= self.spend_cap_usd:
             raise SpendCapReached(
-                f"SPEND CAP REACHED: ${spent:.4f} recorded in "
-                f"results/spend_ledger.jsonl against a cap of "
+                f"SPEND CAP REACHED: ${spent:.4f} recorded under run_id "
+                f"{self.run_id!r} in results/spend_ledger.jsonl against a cap of "
                 f"${self.spend_cap_usd:.2f} (tier2.spend_cap_usd in configs/serve.yaml). "
+                f"This counts SERVING spend only; the project's $15 hard stop is separate "
+                f"and reads the whole ledger. "
                 f"Escalation is REFUSED; the Tier 0 answer is returned unescalated. "
                 f"This is a stop, not a throttle — raise the cap deliberately or let "
                 f"the service keep answering from Tier 0.")

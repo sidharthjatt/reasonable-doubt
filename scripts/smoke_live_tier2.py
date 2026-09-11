@@ -187,23 +187,46 @@ def main() -> int:
         expected_output_tokens=config.tier2_max_output_tokens,
         batch=config.tier2_batch, cache_ttl="1h")
 
-    spent_before = ledger.cumulative_usd()
-    print(f"\nLEDGER BEFORE : ${spent_before:.6f} cumulative "
+    # TWO LIMITS, TWO TOTALS, AND THEY ARE NOT THE SAME NUMBER.
+    #   project hard stop ($15) -> the WHOLE ledger, every run id (hard rule 8)
+    #   serve spend cap  ($1)   -> ONLY rows this service wrote, under its run id
+    # Reading the whole ledger for the serve cap compared $1.00 against $3.58 of
+    # experiment spend, so the cap was permanently reached and the service could never
+    # escalate — every response `escalation_skipped=true`, all of it looking normal.
+    spent_all = ledger.cumulative_usd()
+    spent_serve = ledger.cumulative_usd(run_id=config.tier2_run_id)
+    print(f"\nLEDGER BEFORE")
+    print(f"  whole ledger (all run ids) : ${spent_all:.6f} "
           f"({len(ledger.entries())} entries)")
-    print(f"  remaining to hard stop : ${ledger.remaining_usd():.4f} "
-          f"of ${ledger.hard_stop_usd:.2f}")
-    print(f"  serve cap headroom     : "
-          f"${config.tier2_spend_cap_usd - spent_before:.6f}")
+    print(f"    -> hard stop ${ledger.hard_stop_usd:.2f}, "
+          f"remaining ${ledger.remaining_usd():.4f}")
+    print(f"  this service ({config.tier2_run_id}) : ${spent_serve:.6f}")
+    print(f"    -> serve cap ${config.tier2_spend_cap_usd:.2f}, "
+          f"headroom ${config.tier2_spend_cap_usd - spent_serve:.6f}")
 
-    # Gates on the PESSIMISTIC bound and refuses over the hard stop BEFORE it checks
-    # --confirm, so a budget breach is refused even when confirmed (hard rule 8).
-    require_confirmation(estimate, ledger, confirm=args.confirm)
-
+    # EVERY REFUSAL CHECK RUNS BEFORE ANYTHING PRINTS "CONFIRMED". The serve cap is
+    # checked here, ahead of require_confirmation, because require_confirmation prints
+    # the CONFIRMED banner on its way out — so a cap refusal after it would follow a
+    # line saying the run was confirmed.
     if tier2.cap_reached():
         raise SystemExit(
             f"\nREFUSING: the serve spend cap ${config.tier2_spend_cap_usd:.2f} is "
-            f"already reached (${spent_before:.6f} recorded). Raise "
+            f"already reached — ${spent_serve:.6f} recorded under run id "
+            f"{config.tier2_run_id!r}. (The whole ledger holds ${spent_all:.6f}, but "
+            f"that is project spend and is governed by the $"
+            f"{ledger.hard_stop_usd:.2f} hard stop, not by this cap.) Raise "
             f"tier2.spend_cap_usd deliberately, or let the service answer from Tier 0.")
+
+    if spent_serve + estimate.gating_usd > config.tier2_spend_cap_usd:
+        raise SystemExit(
+            f"\nREFUSING: this run's pessimistic estimate ${estimate.gating_usd:.6f} "
+            f"plus ${spent_serve:.6f} already spent by this service would exceed the "
+            f"serve cap ${config.tier2_spend_cap_usd:.2f}.")
+
+    # Gates on the PESSIMISTIC bound and refuses over the hard stop BEFORE it checks
+    # --confirm, so a budget breach is refused even when confirmed (hard rule 8). This
+    # runs LAST of the refusal checks, because it is the one that prints CONFIRMED.
+    require_confirmation(estimate, ledger, confirm=args.confirm)
 
     # ------------------------------------------------------------------- send
     print("\n" + "-" * 74)
@@ -240,20 +263,24 @@ def main() -> int:
                         "usage": u.as_dict(), "cost_usd": cost.usd})
 
     # ------------------------------------------------------------------ after
-    spent_after = ledger.cumulative_usd()
+    after_all = ledger.cumulative_usd()
+    after_serve = ledger.cumulative_usd(run_id=config.tier2_run_id)
     print("\n" + "=" * 74)
-    print(f"LEDGER AFTER  : ${spent_after:.6f} cumulative "
+    print("LEDGER AFTER")
+    print(f"  whole ledger (all run ids) : ${after_all:.6f} "
           f"({len(ledger.entries())} entries)")
-    print(f"DELTA         : ${spent_after - spent_before:.6f}  "
+    print(f"    -> hard stop ${ledger.hard_stop_usd:.2f}, "
+          f"remaining ${ledger.remaining_usd():.4f}")
+    print(f"  this service ({config.tier2_run_id}) : ${after_serve:.6f}")
+    print(f"    -> serve cap ${config.tier2_spend_cap_usd:.2f}, "
+          f"headroom ${config.tier2_spend_cap_usd - after_serve:.6f}, "
+          f"reached={tier2.cap_reached()}")
+    print(f"\nDELTA         : ${after_all - spent_all:.6f}  "
           f"<- real money spent by this run")
     print(f"  estimate was : ${estimate.gating_usd:.6f} pessimistic / "
           f"${estimate.optimistic_usd:.6f} optimistic")
-    print(f"  serve cap    : ${config.tier2_spend_cap_usd:.2f}, "
-          f"headroom now ${config.tier2_spend_cap_usd - spent_after:.6f}, "
-          f"reached={tier2.cap_reached()}")
-    print(f"  hard stop    : ${ledger.hard_stop_usd:.2f}, "
-          f"remaining ${ledger.remaining_usd():.4f}")
     print("=" * 74)
+    spent_before, spent_after = spent_all, after_all
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({
@@ -264,10 +291,15 @@ def main() -> int:
         "per_request_input_tokens_count_tokens": per_request,
         "estimate_pessimistic_usd": estimate.gating_usd,
         "estimate_optimistic_usd": estimate.optimistic_usd,
-        "ledger_before_usd": spent_before,
-        "ledger_after_usd": spent_after,
-        "ledger_delta_usd": spent_after - spent_before,
+        "ledger_before_usd_all_run_ids": spent_all,
+        "ledger_after_usd_all_run_ids": after_all,
+        "ledger_delta_usd": after_all - spent_all,
+        "serve_spend_before_usd": spent_serve,
+        "serve_spend_after_usd": after_serve,
         "spend_cap_usd": config.tier2_spend_cap_usd,
+        "spend_cap_scope": (
+            f"run_id={config.tier2_run_id!r} only; the $"
+            f"{ledger.hard_stop_usd:.2f} hard stop reads every run id"),
         "responses": records,
     }, indent=2) + "\n")
     print(f"\nwrote {args.out}")
