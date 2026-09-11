@@ -179,7 +179,7 @@ this does not change any conclusion, but the number must be what it says it is.
 | E1 | Tier 0: DeBERTa-v3-base, CE baseline, 3 seeds | **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8 artefact**, FP32 reported alongside. Anchored to LexGLUE Table 3 (DeBERTa m-F1 83.1) | planned |
 | E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **NOT ACCEPTED (§3bi): 0.798744 ± 0.007018, short by 0.0013 = 0.18σ. Undertraining supported by the ONE-VARIABLE within-host comparison — +0.0385 vs the 3-epoch host baseline, n = 1 (§3ak/§3at) — without reaching the bar. The cross-host +0.0465 / 8.31σ is DESCRIPTIVE ONLY. Seed 1 breaches E3's 0.01 quantisation tolerance at −0.0137** |
 | E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
-| E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | **still `planned` / unscored.** Scope settled 2026-09-11 (§3bi): **artefact-general across Tier 0, not E1-scoped**. Tolerance stands at 0.01 (C3 `seed_sd = 0.003195`). **E1b seed 1 BREACHES at −0.013668**; E1 max was \|0.0083\| |
+| E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired — **the text names NO seed aggregation (§3bj.1)** | **MEASURED on both Tier 0 families; VERDICT WITHHELD pending the statistic (§3bj, §4).** Scope: **artefact-general across Tier 0, not E1-scoped** (§3bi). Tolerance stands at 0.01 (C3 `seed_sd = 0.003195`). **E1** −0.005378 / −0.008317 / −0.000693, mean −0.004796 — **passes under both readings**. **E1b** −0.013668 / −0.001751 / −0.007598, mean −0.007672 — **FAILS per-seed, PASSES on the mean** |
 | E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04** = **0.7923** (E1 INT8 0.7523, §3ar) | **seed 1: 0.7254 — misses by 0.0669 = 12× test_3000 σ** |
 | E4b | Two-tier `Tier 0 → Claude` fallback | E6's rule with Tier 1 removed. **Registered before E4 runs** | **SUPERSEDED BY MEASUREMENT (E4b-A, §3av)** — the E6 frontier IS this configuration; no Tier 1 experiment remains |
 | E5 | Routing signal: margin vs max-softmax vs entropy | best **AUROC ≥ 0.75** AND **≥ 0.05** above worst, on `dev_2000` only | planned |
@@ -372,18 +372,32 @@ this does not change any conclusion, but the number must be what it says it is.
   artefact against **itself** rather than restricting which artefact is eligible.
   **E3 is artefact-general across every Tier 0 artefact, not scoped to E1.** Consequences,
   recorded either way as §3bi required:
-  - **E1b's artefacts are in scope, and E1b seed 1 BREACHES the tolerance at −0.013668**
-    (seeds: −0.013668 / −0.001751 / −0.007598, mean −0.007672). E1's largest was
-    **|0.0083|**. This is the first measured breach.
+  - **E1b's artefacts are in scope.** Seeds: −0.013668 / −0.001751 / −0.007598, mean
+    **−0.007672**; E1's largest was **|0.0083|** (E1 per seed: −0.005378 / −0.008317 /
+    −0.000693, mean −0.004796). **⚠ AMENDED — see §3bj.1.** "Seed 1 BREACHES" and "the
+    first measured breach" **assume a per-seed reading that E3's text does not state**.
+    Under the 3-seed-mean reading E1b **passes** and there has been **no breach**. Both
+    readings are recorded; **neither is adopted**, because choosing now means choosing
+    after seeing which one fails.
   - **The tolerance is NOT loosened.** 0.01 was registered **[C3-gated]** against the risk
     that seed sd ≈ 0.03 would void it; C3 measured **0.003195**, so the gate lifts in
-    favour of 0.01 standing. Substituting now — after a number breached it — is exactly
+    favour of 0.01 standing. Substituting now — after a number came near it — is exactly
     what the gate's ordering forbids.
+- **THE STATISTIC IS UNSPECIFIED, and this rule's own text is the evidence (§3bj.1).**
+  The accept rule reads `|INT8 − FP32| ≤ 0.01 … paired` and **never names a seed
+  aggregation** — not per-seed, not mean, not a seed count. Per seed, E1b seed 1 **fails**
+  at 0.013668; on the 3-seed mean, E1b **passes** at 0.007672. E1 passes either way, which
+  is why the divergence surfaces only now. **NEITHER READING IS ADOPTED**: choosing after
+  seeing which one fails is the ordering hard rule 6 exists to prevent. **Resolution is a
+  registration act owed BEFORE the next INT8-vs-FP32 number is opened**, and it belongs in
+  this rule's text, not in a result entry.
   - **The falsification clause does not bind the running service today:** no E1b artefact
     is deployed (§3bg serves `fp32_ce_1`, an E1 artefact). It binds on any decision to
     serve an E1b artefact at INT8, on top of §3bc's recalibration gate.
-  - **E3 itself remains UNSCORED.** The above is a measured delta recorded against E3's
-    rule, not E3's result entry.
+  - ~~**E3 itself remains UNSCORED.**~~ **⚠ WITHDRAWN — see §3bj.2.** E3 has been
+    **measured on both Tier 0 families** and its numbers are already load-bearing (§3bc's
+    canary floor). Corrected status: **MEASURED, VERDICT WITHHELD pending the statistic.**
+    Result entry filed in §4.
 
 ### E4 — Tier 1 QLoRA
 
@@ -1390,6 +1404,80 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bj. E3's STATISTIC IS AMBIGUOUS, and E3 is NOT unscored — two corrections to §3bi (2026-09-11)
+
+**§3bi claimed "the first measured breach" and "E3 itself remains UNSCORED". Both are
+wrong as stated.** Corrected here rather than by editing §3bi, per the append-only rule.
+
+#### 1. THE RULE, QUOTED VERBATIM — and it does not say which statistic
+
+> **Accept rule:** **|INT8 − FP32| ≤ 0.01 macro-F1**, paired. **[C3-gated]**
+>
+> **Metric / split:** macro-F1 of both precisions on `test_3000`, **paired on identical
+> rows** — same model, same rows, so the row draw cancels entirely.
+
+**There is no seed language anywhere in E3.** Not "per seed", not "mean over seeds", not a
+seed count. §3bi silently read it **per seed**, which is what produced the breach claim.
+**That reading was picked, not derived**, and this project has a registered name for
+picking a number and presenting it as anchored (§3e).
+
+**BOTH READINGS ARE DEFENSIBLE. Neither is adopted here.**
+
+| | **reading A — PER SEED** | **reading B — 3-SEED MEAN** |
+|---|---|---|
+| textual basis | *"same model"* is **singular** — it identifies **one artefact** paired against itself. The stated variance — *"the only variance is quantisation-induced prediction flips"* — is a **within-artefact** quantity, and averaging three *different* quantisations reintroduces the across-seed variance the pairing exists to remove | **hard rule 2**: *"Every model result reports mean ± std over ≥ 3 seeds. Never a single best run."* Every other Tier 0 rule (E1, E1b) binds on the 3-seed mean; reading E3 per seed makes it the **only** Tier 0 rule with a different aggregation, and §2 lists it beside them |
+| consequence basis | E3's falsification is *"the **deployed** system is not the measured system"*, and **what deploys is always one artefact, never a mean** | E3's metric line names `test_3000`, the same split the 3-seed rules use, and gives no other unit |
+| **E1 (arm64)** | max \|−0.008317\| — **PASSES** | −0.004796 — **PASSES** |
+| **E1b** | **\|−0.013668\| — FAILS** | **−0.007672 — PASSES** |
+
+**E1, per seed, arm64, computed for this entry:** −0.005378 / −0.008317 / −0.000693, mean
+**−0.004796**, max **\|0.008317\|** — which reproduces the **0.0083** figure §3bc and §3bi
+both cite, so the two experiments are on a common basis.
+
+> ### THE BREACH EXISTS ONLY UNDER READING A.
+>
+> Under **A**, E1b seed 1 is the **first and only** measured breach and §3bi's claim stands.
+> Under **B**, **no Tier 0 artefact has ever breached E3**, E1b included, and §3bi's claim
+> is simply false. **E1 passes under both**, so the readings have never diverged before and
+> nothing earlier in the project decides between them.
+
+**A NOTE THAT CUTS AGAINST READING A, recorded because it is against the reading §3bi
+used.** A per-seed breach rule fires on the **single worst** of three runs. Hard rule 2
+forbids reporting the single **best** run; it does not literally address the worst, but a
+max-over-seeds rule is that prohibition's mirror image and inherits its problem —
+**3 draws from a distribution have a worse maximum than 1 draw**, so reading A's effective
+tolerance tightens as seed count rises, with no compensation registered anywhere.
+
+**NOT RESOLVED HERE, AND THE REASON MATTERS.** Choosing now means choosing **after** seeing
+which reading breaches, on the one artefact family where they disagree. That is the
+ordering hard rule 6 exists to prevent, and it is the same failure §3bi's own
+[C3-gated]-tolerance paragraph refuses three lines further down. **The ambiguity is the
+finding.** Resolving it is a registration act that must happen **before** the next
+INT8-vs-FP32 number is opened, and it must state its statistic in E3's own text.
+
+**WHAT IS TRUE UNDER BOTH READINGS, so the deployment decision does not wait on this:**
+E1b seed 1's INT8 artefact carries a **measured \|delta\| of 0.013668**, the largest this
+project has recorded. §3bk serves that seed at **FP32**, so no INT8 delta sits in the
+served path at all; E3's falsification consequence is **not engaged by the swap** under
+either reading.
+
+#### 2. E3 IS MEASURED, NOT PLANNED — §2's status was wrong
+
+§3bi wrote *"E3 itself remains UNSCORED"* and left §2's status at `planned`. **E3 has been
+measured twice**: on E1 (arm64, all 3 seeds, max \|0.0083\|) and now on E1b (all 3 seeds).
+Its numbers have been **in use** — §3bc's canary-floor reasoning is built on E3's largest
+delta. Carrying `planned` beside numbers the project already depends on is §3ax's class
+exactly: **a status that no longer describes the thing it labels.**
+
+**Corrected status: MEASURED on both Tier 0 families; VERDICT WITHHELD pending the
+statistic (§3bj.1).** The measurement is complete; what is missing is which function of it
+the rule reads. A results-log entry is filed with both readings and no verdict, and §2 now
+says so.
+
+**Why not simply score it under reading B and be done:** B is the reading under which E3
+passes. Adopting the passing reading at the moment the other one fails is the choice this
+entry exists to refuse.
+
 ### 3bi. E1b VERDICT — NOT ACCEPTED, by 0.0013. The near-miss is reported as a near-miss (2026-09-11)
 
 **THE REGISTERED RULE, quoted before the number:** *"macro-F1 ≥ 0.80 on `test_3000`,
@@ -1482,9 +1570,14 @@ and a 20-epoch run is a new experiment requiring its own registration and its ow
 | 3 | 0.806321 | 0.813919 | −0.007598 |
 | **mean** | 0.798744 | 0.806416 | **−0.007672** |
 
-> **Seed 1's |−0.013668| EXCEEDS E3's registered tolerance of 0.01.** E1's largest was
-> |0.0083|, so this is the **first Tier 0 artefact this project has measured to breach
-> it**, and it breaches on the artefact family the near-miss belongs to.
+> **Seed 1's |−0.013668| exceeds 0.01; the 3-seed mean of |−0.007672| does not.** E1's
+> largest was |0.0083| and its mean −0.004796, so E1 sits under 0.01 **both ways**.
+>
+> **⚠ AMENDED — see §3bj.1.** This entry originally called seed 1 "the first measured
+> breach". **That assumes a per-seed reading which E3's registered text does not state.**
+> Under the 3-seed-mean reading **E1b passes and no Tier 0 artefact has ever breached E3.**
+> Both readings are recorded in §3bj and in §4's E3 entry; **neither is adopted**, because
+> adopting one now means adopting it after seeing which one fails.
 
 **IS E3 SCOPED TO E1, OR TO EVERY TIER 0 ARTEFACT? CHECKED RATHER THAN ASSUMED — and the
 answer is the one that costs us something.** E3's registration **names no run**: its
@@ -1493,7 +1586,9 @@ metric is *"macro-F1 of both precisions on `test_3000`, paired on identical rows
 model, same rows"*, where "same model" pairs **each artefact against itself** rather than
 restricting which artefact; and §2's E3 row reads *"INT8 vs FP32 **at the deployed
 precision**"*. **E3 is artefact-general across Tier 0, not E1-scoped.** E1b's artefacts are
-therefore in scope, and **seed 1 fires E3's falsification clause.**
+therefore in scope. **Whether seed 1 fires E3's falsification clause depends on a
+statistic the rule never specifies — see §3bj.1.** It fires under a per-seed reading and
+does not fire on the 3-seed mean.
 
 **What that does and does not mean, against E3's own falsification text** — *"delta > 0.01
 ⇒ the deployed system is not the measured system. Report the INT8 number as the headline
@@ -1512,9 +1607,12 @@ prohibited."*
   **`seed_sd = 0.003195`**, so the gate lifts **in favour of 0.01 standing**. No
   substitution was ever due under the gate, and none is made now that a number has
   breached it — that ordering is the whole point of the gate.
-- **E3 REMAINS UNSCORED AS AN EXPERIMENT.** This records one artefact family's measured
-  delta against E3's rule. It is **not** E3's result entry, and E3's §2 status stays
-  `planned`. Recorded here either way, as the scope check required.
+- ~~**E3 REMAINS UNSCORED AS AN EXPERIMENT.**~~ **⚠ WITHDRAWN — see §3bj.2.** E3 has been
+  **measured on both Tier 0 families** (E1 arm64, all 3 seeds; E1b, all 3 seeds) and its
+  numbers are already load-bearing — §3bc's canary floor is built on E3's largest delta.
+  Calling it `planned` beside figures the project depends on is §3ax's class. **Corrected
+  status: MEASURED, VERDICT WITHHELD pending the statistic.** Result entry filed in §4
+  with both readings and no verdict.
 
 **THE MISS IS SMALLER THAN THE QUANTISATION COST — stated, and explicitly not a rescue.**
 FP32 clears 0.80 at **0.806416**. The shortfall is **0.001256**. The mean INT8−FP32 penalty
@@ -5011,6 +5109,54 @@ experiment id. Never edit a past entry — add a correcting entry instead.
   1.53×); Tier 0 first-1000 vs rest-2000 over 95 common classes **+0.0143, 3/3 sign-consistent**.
 - **Cost:** $0.00.
 - **Accept rule met?** n/a — instrumentation under C3's remit.
+
+### E3 — INT8 vs FP32, both Tier 0 families *(2026-09-11)*
+
+- **Experiment id:** E3 (registered pre-signing; scope settled §3bi, statistic ambiguity
+  §3bj.1)
+- **Date:** 2026-09-11
+- **Commit:** `e6edcb6` + this entry
+- **Config / command:** every INT8 figure from `scripts/score_int8_local.py` on **arm64**
+  under ORT 1.29.0 — the ISA that deploys, per §3ah. FP32 figures are the Kaggle run JSONs'
+  `test_3000_fp32`, which §3bi verified reproduce locally through the registered scorer
+  with the `test_3000_indices` guard to **0 delta** at n=3000 for the E1b family. Paired:
+  same artefact, same 3,000 rows, `manifest_sha256 e719c110…`.
+- **Seeds:** 1 / 2 / 3 for **both** families.
+- **Result — `INT8 − FP32` macro-F1 on `test_3000`:**
+
+  | seed | **E1** INT8 | E1 FP32 | **delta** | **E1b** INT8 | E1b FP32 | **delta** |
+  |---|---|---|---|---|---|---|
+  | 1 | 0.758213 | 0.763591 | −0.005378 | 0.797443 | 0.811111 | **−0.013668** |
+  | 2 | 0.751423 | 0.759740 | **−0.008317** | 0.792468 | 0.794219 | −0.001751 |
+  | 3 | 0.747119 | 0.747812 | −0.000693 | 0.806321 | 0.813919 | −0.007598 |
+  | **mean** | 0.752252 | 0.757048 | **−0.004796** | 0.798744 | 0.806416 | **−0.007672** |
+
+- **Cost:** **$0.00.** No API call; nothing appended to `results/spend_ledger.jsonl`.
+- **Manifest:** `test_3000`, `text_sha256 e719c110…`; n=3000, 0 unmatched,
+  `classes_averaged=100` on every run.
+- **Accept rule met? — NO VERDICT. WITHHELD, and that is this entry's substance.**
+
+  | reading | E1 | E1b | rule met? |
+  |---|---|---|---|
+  | **per seed** (max \|delta\|) | 0.008317 ≤ 0.01 | **0.013668 > 0.01** | E1 yes, **E1b NO** |
+  | **3-seed mean** | 0.004796 ≤ 0.01 | 0.007672 ≤ 0.01 | **both yes** |
+
+  **E3's registered text names no seed aggregation (§3bj.1).** The readings agree on E1 and
+  disagree on E1b, so the project never had to choose — and cannot choose now without
+  choosing *after* seeing which one fails. **Both recorded; neither adopted.** A verdict is
+  owed once the statistic is written into E3's own text, which must happen **before** the
+  next INT8-vs-FP32 number is opened.
+- **Notes.**
+  - **Kaggle's own `e3_int8_minus_fp32_macro_f1` is unusable and is NOT the source above.**
+    E1's run JSONs record **−0.7599 / −0.7567 / −0.7455** — near-total collapse — because
+    Kaggle evaluates INT8 on non-VNNI x86 where the kernels degrade silently (§3ah, §3as).
+    Every delta here is arm64.
+  - **Supersedes and rescues nothing.** E1b's verdict is unchanged (§3bi: **NOT ACCEPTED**
+    at 0.798744), and E3's FP32-as-headline prohibition is untouched.
+  - §3bc's canary-floor margin cites E3's largest delta; that figure moved 0.0083 →
+    0.013668 and was corrected in place at `e6edcb6` (≈12× → ≈7.3×, **floor unchanged**).
+  - **Not engaged by the §3bk swap:** the served path is **FP32**, so no INT8 delta sits in
+    it under either reading.
 
 ### _(template — copy per run)_
 
