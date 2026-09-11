@@ -1373,6 +1373,90 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bg. DEPLOYMENT DECISION — serve FP32 ONNX, not INT8 (2026-09-11)
+
+**Not an experiment. A deployment decision, with the verification that licensed it.**
+§3bf established that INT8 is qualified on no Linux target. FP32 ONNX was then checked on
+the same two platforms, with the same metrics, before anything was built on it.
+
+#### 1. FP32 across macOS-arm64 and Linux-aarch64 — the §3bf comparison, repeated
+
+Exported from `fp32_ce_1` through the export path the §3be control validated byte-for-byte
+(`transformers 4.57.6`, `optimum 2.1.0`, `optimum-onnx 0.1.0`, `onnx 1.22.0`), then scored
+on the 200 frozen canary rows on both platforms under `onnxruntime 1.29.0`.
+
+| metric | INT8 (§3bf) | **FP32** |
+|---|---|---|
+| host accuracy (macOS arm64) | 0.9000 | **0.9150** |
+| container accuracy (Linux aarch64) | **0.6400** | **0.9150** |
+| prediction disagreements | 60/200 | **0/200** |
+| logit correlation | 0.8660 | **0.99969** |
+| median \|Δlogit\| | 0.5171 | **0.000002** |
+| rows with max \|Δlogit\| > 2.0 | 118/200 | **0/200** |
+| rows with max \|Δlogit\| < 0.5 | 3/200 | **194/200** |
+
+**FP32 is platform-stable where INT8 is not, and it is also more accurate** — 0.9150
+against 0.9000 on the host. The FP32 residual is not zero (max \|Δ\| 1.08 on one row), so
+this is "no prediction moved", not "bit-identical".
+
+#### 2. The only x86 evidence, from E3's discriminator arm
+
+Two runs recorded the ONNX-FP32 arm; E1's three seeds predate it. Both on Kaggle's
+Intel Xeon — `avx512f` and `avx2` present, **`avx512_vnni` absent**:
+
+| run | torch FP32 | ONNX FP32 | ONNX INT8 | argmax agree (torch↔onnx FP32) | argmax agree (onnx FP32↔INT8) |
+|---|---|---|---|---|---|
+| host baseline (3 ep) | 0.763862 | 0.764108 | **0.000777** | **99.93%** | **1.2%** |
+| E1b seed 1 (10 ep) | 0.811111 | 0.811466 | **0.000166** | **99.97%** | **0.57%** |
+
+**On the one x86 host this project has measured, ONNX-FP32 tracks torch FP32 to within
++0.0004 macro-F1 at ~99.95% argmax agreement, while INT8 collapses to chance on the same
+machine, in the same process, with no error raised.** The export step is not the problem;
+quantisation is.
+
+> **Both conditions held, so the decision proceeds.** Stated precisely: FP32 ONNX is
+> verified on **two** platforms directly and on a **third** (x86) only against torch FP32
+> from the same run. HF Spaces x86 is still unqualified as a *serving* host — the canary
+> is what would qualify it, and it now runs on FP32 numbers.
+
+#### 3. What is now keyed by precision
+
+`configs/serve.yaml` carries `tier0.precision` (`fp32` | `int8`), and **every
+precision-dependent artefact is keyed by it**: the model directory, the router threshold
+file, and the canary's measured accuracy and floor. A bare unkeyed value is **refused** —
+sharing one would silently serve one precision's calibration to the other.
+
+**The threshold is calibrated on dev logits of the SERVED precision**, which is not a
+formality: at the same registered 4.056% escalation rate the thresholds are
+
+| precision | threshold | dev logits |
+|---|---|---|
+| fp32 | **0.134668** | `results/dev_logits_fp32_local_ce_seed1.npz` (fp32 / arm64_local) |
+| int8 | 0.115365 | `results/dev_logits_int8_local_ce_seed1.npz` (int8 / arm64_local) |
+
+`ServiceConfig` refuses to start when the threshold's recorded precision differs from the
+served one. **The INT8 floor stays at 0.80** (§3bf) and the INT8 arm remains fully
+configured — it is not deleted, it is not selected.
+
+#### 4. Container measurements
+
+| | |
+|---|---|
+| image size | **1.01 GB** — model NOT included |
+| model, mounted | **715 MB** FP32 (against 244 MB INT8) |
+| startup | canary 183/200 = **0.9150** in-container, matching the host reference exactly |
+| latency, n=60, end-to-end HTTP | mean **167 ms**, p50 **136 ms**, p95 **459 ms**, min 38 / max 874 |
+
+Median clause 612 characters. **The FP32 cost is size and latency, not accuracy**: p50
+136 ms against the INT8 encoder's 25.4 ms p50 measured bare-metal on the host
+(`configs/costs.yaml`), though those two numbers are not comparable — one is end-to-end
+HTTP inside a VM, the other is in-process inference on the host. A like-for-like FP32
+latency measurement has **not** been taken.
+
+**Fixed in passing:** `/health` reported `architecture: "tier0_int8 -> claude"` as a
+hardcoded string and kept saying so while serving FP32 — a health endpoint describing a
+different system than the one answering. It now reads the served precision.
+
 ### 3bf. THE CANARY FIRED IN A CONTAINER — INT8 diverges macOS-arm64 vs Linux-aarch64 (2026-09-11)
 
 **Not an experiment. A deployment measurement, and the §3bc canary doing exactly what it

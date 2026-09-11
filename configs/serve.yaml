@@ -9,19 +9,41 @@
 # (hard rule 5); this file only names which model's rate card to read.
 
 tier0:
+  # PRECISION IS THE DEPLOYMENT DECISION, and it is fp32 by measurement (3bg).
+  # INT8 is qualified on NO Linux target: it diverges between macOS-arm64 and
+  # Linux-aarch64 (60/200 predictions differ, logit correlation 0.866, accuracy
+  # 0.9000 -> 0.6400, see 3bf) and collapses to chance on Kaggle's non-VNNI x86
+  # (macro-F1 0.000166 against torch FP32's 0.8111). FP32 ONNX shows 0/200
+  # disagreements across the same two platforms and matches torch FP32 on x86 at
+  # 99.97% argmax agreement. The cost is size and latency, not accuracy: FP32 scores
+  # 0.9150 on the canary against INT8's 0.9000.
+  #
+  # EVERYTHING PRECISION-DEPENDENT IS KEYED BY IT below — the artefact, the router
+  # threshold and the canary's measured accuracy. They are not interchangeable: FP32
+  # and INT8 have different margin distributions (thresholds 0.1347 vs 0.1154 at the
+  # same 4.056% escalation rate), so a threshold from the wrong precision yields an
+  # escalation rate nobody chose.
+  precision: fp32          # fp32 | int8
+
   # CONFIGURED, NOT HARDCODED. E1b may replace this with a 10-epoch artefact
   # (fp32_ce10ep_1 -> int8_ce10ep_1). Changing the weights REQUIRES re-running
   # scripts/calibrate_router_threshold.py: the margin distribution moves with the
   # weights, and router_threshold.json records which artefact it was calibrated on so
   # a mismatch is refused at startup rather than served.
-  model_dir: models/int8_ce_1
+  model_dir:
+    fp32: models/onnx_ce_1_fp32
+    int8: models/int8_ce_1
   max_length: 512
 
 router:
   # Loaded from a file produced by dev_2000 calibration (hard rule 1). NEVER computed
   # at request time — a threshold fitted to live traffic is fitted to the wrong
   # distribution and drifts with no record.
-  threshold_file: configs/router_threshold.json
+  # Keyed by precision, and ServiceConfig REFUSES a threshold whose recorded precision
+  # does not match the served one.
+  threshold_file:
+    fp32: configs/router_threshold_fp32.json
+    int8: configs/router_threshold_int8.json
   signal: margin
 
 tier2:
@@ -73,8 +95,22 @@ canary:
   #
   # These are TRAIN rows the model was fitted on, so 0.9000 is NOT comparable to the
   # test_3000 accuracy of 0.8563 and must never be reported as an accuracy result.
+  # The ROW SET is precision-independent (the same 200 frozen TRAIN rows); the measured
+  # accuracy is not, so it is keyed.
   row_set: configs/canary_200.json
-  measured_accuracy: 0.9000
-  measured_on: "arm64_local (Apple Silicon), models/int8_ce_1, 2026-09-10"
-  min_accuracy: 0.80
+  measured_accuracy:
+    # MEASURED ON BOTH PLATFORMS and identical on each: 183/200 on macOS-arm64 AND on
+    # Linux-aarch64, 0/200 prediction disagreements (3bg).
+    fp32: 0.9150
+    # macOS-arm64 only. 0.6400 on Linux-aarch64 — which is why INT8 is not served.
+    int8: 0.9000
+  measured_on:
+    fp32: "arm64_local + linux/aarch64 container, models/onnx_ce_1_fp32, 2026-09-11"
+    int8: "arm64_local (Apple Silicon) ONLY, models/int8_ce_1, 2026-09-10"
+  min_accuracy:
+    # Both floors sit ~0.10-0.115 below their measured value, the 3bc construction.
+    # The INT8 floor STAYS at 0.80 (3bf): a floor moved to accommodate a failing
+    # platform stops measuring health.
+    fp32: 0.80
+    int8: 0.80
   enabled: true

@@ -193,7 +193,7 @@ def create_app(config: ServiceConfig | None = None, *, tier2=None,
         "ran": False, "reason": "explicitly skipped by the caller"}
 
     app = FastAPI(
-        title="Reasonable Doubt — Tier 0 INT8 -> Claude Sonnet 5",
+        title="Reasonable Doubt — Tier 0 -> Claude Sonnet 5",
         description="Deployed two-tier cascade (E4b-A). No Tier 1: see PREREGISTRATION.")
 
     @app.get("/health")
@@ -201,8 +201,13 @@ def create_app(config: ServiceConfig | None = None, *, tier2=None,
         from src.serve.canary import cpu_isa_flags, onnxruntime_version
         return {
             "status": "ok",
-            "architecture": "tier0_int8 -> claude (no tier1; E4b-A)",
+            # Reads the SERVED precision. It was hardcoded "tier0_int8" and kept
+            # saying so while the service served FP32 — a health endpoint describing a
+            # different system than the one answering.
+            "architecture": (f"tier0_{cascade.config.tier0_precision} -> "
+                             f"{cascade.config.tier2_model} (no tier1; E4b-A)"),
             "tier0": {**cascade.tier0.describe(),
+                      "precision": cascade.config.tier0_precision,
                       "model_dir_from_env": cascade.config.tier0_model_dir_from_env},
             "tier2": cascade.tier2.describe(),
             "router": cascade.config.threshold.as_dict(),

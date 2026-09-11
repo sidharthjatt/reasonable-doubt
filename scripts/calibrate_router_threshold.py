@@ -46,7 +46,6 @@ OUT_PATH = Path(__file__).resolve().parents[1] / "configs" / "router_threshold.j
 # calibrate a threshold for a margin distribution the service never sees. The FP32 npz
 # happens to carry no `provenance` key at all, so pointing this script at it would crash
 # — but that is luck, not a guard, and luck is not a control.
-REQUIRED_PRECISION = "int8"
 REQUIRED_ISA = "arm64_local"
 
 VERDICT_NOTE = (
@@ -64,20 +63,30 @@ VERDICT_NOTE = (
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, required=True)
+    ap.add_argument("--precision", required=True, choices=("fp32", "int8"),
+                    help="THE SERVED precision. The threshold must be calibrated on dev "
+                         "logits of the precision that will actually answer requests: "
+                         "FP32 and INT8 have different margin distributions, so an INT8 "
+                         "threshold applied to FP32 gives an escalation rate nobody chose.")
     ap.add_argument("--signal", default="margin")
     ap.add_argument("--target-escalation", type=float, required=True,
                     help="fraction, e.g. 0.040556 for §3aq's 4.056%%")
     ap.add_argument("--logits", type=Path, default=None,
                     help="defaults to results/dev_logits_int8_local_ce_seed<N>.npz")
-    ap.add_argument("--out", type=Path, default=OUT_PATH)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="defaults to configs/router_threshold_<precision>.json")
     args = ap.parse_args()
+    if args.out is None:
+        args.out = (Path(__file__).resolve().parents[1] / "configs"
+                    / f"router_threshold_{args.precision}.json")
 
     if not 0.0 < args.target_escalation < 1.0:
         raise SystemExit(f"--target-escalation must be a fraction in (0,1), "
                          f"got {args.target_escalation}")
 
-    npz_path = args.logits or Path(
-        f"results/dev_logits_int8_local_ce_seed{args.seed}.npz")
+    default_npz = {"int8": f"results/dev_logits_int8_local_ce_seed{args.seed}.npz",
+                   "fp32": f"results/dev_logits_fp32_local_ce_seed{args.seed}.npz"}
+    npz_path = args.logits or Path(default_npz[args.precision])
     d = np.load(npz_path, allow_pickle=True)
     if "provenance" not in d.files:
         raise SystemExit(
@@ -89,12 +98,12 @@ def main() -> int:
     assert_threshold_split(split)          # hard rule 1, enforced not remembered
 
     # Item 2's guard, made explicit rather than inherited from luck.
-    if prov["precision"] != REQUIRED_PRECISION or prov["isa"] != REQUIRED_ISA:
+    if prov["precision"] != args.precision or prov["isa"] != REQUIRED_ISA:
         raise SystemExit(
             f"REFUSING: logits are precision={prov['precision']!r} isa={prov['isa']!r}, "
-            f"but the service deploys {REQUIRED_PRECISION!r} on {REQUIRED_ISA!r}. "
-            f"Calibrating on FP32 or on Kaggle's x86 INT8 would fit a threshold to a "
-            f"margin distribution the service never sees.")
+            f"but --precision says {args.precision!r} on {REQUIRED_ISA!r}. Calibrating "
+            f"on the wrong precision, or on Kaggle's x86 logits, would fit a threshold "
+            f"to a margin distribution the service never sees.")
     if prov["seed"] != args.seed:
         raise SystemExit(f"npz is seed {prov['seed']}, --seed says {args.seed}")
 

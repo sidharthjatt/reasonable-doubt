@@ -321,17 +321,17 @@ def test_no_price_is_hardcoded_in_the_service():
 
 def test_tier0_model_dir_comes_from_config_not_code(config):
     """E1b may replace int8_ce_1; a baked-in path would keep serving old weights."""
-    assert config.tier0_model_dir.name == "int8_ce_1"
+    assert config.tier0_model_dir.name == "onnx_ce_1_fp32"
     src = (ROOT / "src" / "serve" / "app.py").read_text()
     assert "int8_ce" not in src, "the artefact name must not appear in code"
 
 
 def test_threshold_is_loaded_from_a_dev_calibrated_file(config):
-    d = json.loads((ROOT / "configs" / "router_threshold.json").read_text())
+    d = json.loads((ROOT / "configs" / "router_threshold_fp32.json").read_text())
     assert config.threshold.threshold == pytest.approx(d["threshold"])
     assert d["calibrated_on"] == "dev_2000"          # hard rule 1
     assert d["signal"] == "margin"
-    assert config.threshold.artefact.endswith("int8_ce_1")
+    assert config.threshold.artefact.endswith("onnx_ce_1_fp32")
 
 
 def test_the_router_never_computes_a_threshold_at_request_time(config):
@@ -380,7 +380,7 @@ def test_serving_weights_the_threshold_was_not_calibrated_on_is_refused(tmp_path
     """The margin distribution is a property of the weights. Swapping in E1b's 10-epoch
     artefact without recalibrating must fail loudly, not shift the escalation rate."""
     serve = yaml.safe_load((ROOT / "configs" / "serve.yaml").read_text())
-    serve["tier0"]["model_dir"] = "models/int8_ce10ep_1"
+    serve["tier0"]["model_dir"]["fp32"] = "models/int8_ce10ep_1"
     cfg = tmp_path / "serve.yaml"
     cfg.write_text(yaml.safe_dump(serve))
 
@@ -436,7 +436,7 @@ def test_health_exposes_ort_version_and_isa_flags(config, fastapi_client):
     for v in flags.values():
         assert v is None or isinstance(v, bool)   # null == unreadable, never False
 
-    assert body["architecture"].startswith("tier0_int8 -> claude")
+    assert body["architecture"].startswith(f"tier0_{config.tier0_precision} -> ")
     assert body["escalation_enabled"] is False
     assert body["router"]["calibrated_on"] == "dev_2000"
 
@@ -840,18 +840,19 @@ def test_the_real_ledger_holds_exactly_the_recorded_live_run():
 
 
 def test_threshold_is_percentile_calibrated_at_the_registered_rate(config):
-    d = json.loads((ROOT / "configs" / "router_threshold.json").read_text())
+    d = json.loads((ROOT / "configs" / "router_threshold_fp32.json").read_text())
     assert d["calibration_mode"] == "percentile"
+    assert d["precision"] == "fp32", "the served precision"
     assert d["target_escalation_rate"] == pytest.approx(0.040556)
-    assert d["source_npz"].endswith("dev_logits_int8_local_ce_seed1.npz")
-    assert d["precision"] == "int8" and d["isa"] == "arm64_local"
+    assert d["source_npz"].endswith("dev_logits_fp32_local_ce_seed1.npz")
+    assert d["isa"] == "arm64_local"
     assert "NOT AN ACCURACY CLAIM" in d["verdict_note"]
     assert d["achieved_escalation_rate_on_dev"] == pytest.approx(0.0406, abs=0.005)
 
 
 def test_an_absolute_threshold_file_is_refused(tmp_path):
     """§3aq: absolute thresholds span 1.49x across seeds and do not transfer."""
-    d = json.loads((ROOT / "configs" / "router_threshold.json").read_text())
+    d = json.loads((ROOT / "configs" / "router_threshold_fp32.json").read_text())
     d["calibration_mode"] = "absolute"
     bad = tmp_path / "t.json"
     bad.write_text(json.dumps(d))
@@ -1012,3 +1013,78 @@ def test_the_smoke_test_gates_on_the_serve_cap_as_well_as_the_hard_stop():
     assert "cumulative_usd(run_id=" in src, \
         "the serve cap must read the ledger SCOPED to this service's run id"
     assert "tier2_spend_cap_usd" in src and "require_confirmation" in src
+
+
+# --------------------------------- precision is the deployment decision (3bg)
+
+
+def test_the_served_precision_is_fp32():
+    """INT8 is qualified on NO Linux target: 0.9000 -> 0.6400 between macOS-arm64 and
+    Linux-aarch64 (3bf), and macro-F1 0.000166 on Kaggle's non-VNNI x86."""
+    serve = yaml.safe_load((ROOT / "configs" / "serve.yaml").read_text())
+    assert serve["tier0"]["precision"] == "fp32"
+
+
+def test_threshold_precision_must_match_the_served_precision(tmp_path):
+    """FP32 and INT8 have different margin distributions — 0.1347 vs 0.1154 at the same
+    4.056% target — so the wrong one yields an escalation rate nobody chose."""
+    from src.serve.config import PrecisionMismatch
+
+    serve = yaml.safe_load((ROOT / "configs" / "serve.yaml").read_text())
+    serve["router"]["threshold_file"]["fp32"] = "configs/router_threshold_int8.json"
+    cfg = tmp_path / "serve.yaml"
+    cfg.write_text(yaml.safe_dump(serve))
+    with pytest.raises(PrecisionMismatch, match="calibrated on 'int8'"):
+        ServiceConfig.load(cfg, root=ROOT)
+
+
+def test_a_bare_unkeyed_value_is_refused(tmp_path):
+    """A scalar shared across precisions would silently serve one precision's
+    calibration to the other."""
+    serve = yaml.safe_load((ROOT / "configs" / "serve.yaml").read_text())
+    serve["canary"]["min_accuracy"] = 0.80
+    cfg = tmp_path / "serve.yaml"
+    cfg.write_text(yaml.safe_dump(serve))
+    with pytest.raises(ValueError, match="must be keyed by precision"):
+        ServiceConfig.load(cfg, root=ROOT)
+
+
+def test_both_precisions_resolve_to_their_own_artefacts(monkeypatch):
+    monkeypatch.setenv("TIER0_PRECISION", "int8")
+    c8 = ServiceConfig.load()
+    monkeypatch.setenv("TIER0_PRECISION", "fp32")
+    c32 = ServiceConfig.load()
+
+    assert c8.tier0_model_dir.name == "int8_ce_1"
+    assert c32.tier0_model_dir.name == "onnx_ce_1_fp32"
+    assert c8.threshold.precision == "int8" and c32.threshold.precision == "fp32"
+    assert c8.threshold.threshold != c32.threshold.threshold
+    assert c8.canary_measured_accuracy == 0.9000
+    assert c32.canary_measured_accuracy == 0.9150
+
+
+def test_the_int8_canary_floor_did_not_move():
+    """3bf: a floor moved to accommodate a failing platform stops measuring health."""
+    serve = yaml.safe_load((ROOT / "configs" / "serve.yaml").read_text())
+    assert serve["canary"]["min_accuracy"]["int8"] == 0.80
+
+
+def test_fp32_threshold_was_calibrated_on_fp32_dev_logits():
+    d = json.loads((ROOT / "configs" / "router_threshold_fp32.json").read_text())
+    assert d["precision"] == "fp32" and d["isa"] == "arm64_local"
+    assert d["calibrated_on"] == "dev_2000"
+    assert d["source_npz"].endswith("dev_logits_fp32_local_ce_seed1.npz")
+    assert d["target_escalation_rate"] == pytest.approx(0.040556)
+
+
+def test_health_architecture_reports_the_served_precision(config, fastapi_client):
+    """It was hardcoded "tier0_int8" and kept saying so while FP32 was served — a health
+    endpoint describing a different system than the one answering requests."""
+    from src.serve.app import create_app
+
+    app = create_app(config, tier2=FakeTier2(available=False), run_canary_on_start=False)
+    body = fastapi_client(app).get("/health").json()
+    assert config.tier0_precision in body["architecture"]
+    assert body["tier0"]["precision"] == config.tier0_precision
+    if config.tier0_precision == "fp32":
+        assert "int8" not in body["architecture"]

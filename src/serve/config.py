@@ -30,7 +30,14 @@ DEFAULT_SERVE_CONFIG = PROJECT_ROOT / "configs" / "serve.yaml"
 # works for a local run, and so the threshold/artefact cross-check below still applies to
 # whatever the override points at.
 TIER0_MODEL_DIR_ENV = "TIER0_MODEL_DIR"
+TIER0_PRECISION_ENV = "TIER0_PRECISION"
 SERVE_CONFIG_ENV = "SERVE_CONFIG"
+
+PRECISIONS = ("fp32", "int8")
+
+
+class PrecisionMismatch(RuntimeError):
+    """A precision-keyed artefact does not match the precision being served."""
 
 
 class ThresholdArtefactMismatch(RuntimeError):
@@ -43,6 +50,7 @@ class RouterThreshold:
 
     signal: str
     threshold: float
+    precision: str
     calibration_mode: str
     percentile: float
     calibrated_on: str
@@ -74,6 +82,7 @@ class RouterThreshold:
                 f"would move with the weights.")
         return cls(
             signal=d["signal"], threshold=float(d["threshold"]),
+            precision=d["precision"],
             calibration_mode=d["calibration_mode"],
             percentile=float(d["percentile"]),
             calibrated_on=d["calibrated_on"], artefact=d["artefact"],
@@ -86,6 +95,7 @@ class RouterThreshold:
 
     def as_dict(self) -> dict[str, Any]:
         return {"signal": self.signal, "threshold": self.threshold,
+                "precision": self.precision,
                 "calibration_mode": self.calibration_mode,
                 "percentile": self.percentile,
                 "calibrated_on": self.calibrated_on, "artefact": self.artefact,
@@ -99,6 +109,7 @@ class RouterThreshold:
 
 @dataclass(frozen=True)
 class ServiceConfig:
+    tier0_precision: str
     tier0_model_dir: Path
     tier0_max_length: int
     threshold: RouterThreshold
@@ -126,7 +137,35 @@ class ServiceConfig:
         root = root or PROJECT_ROOT
         d = yaml.safe_load(path.read_text())
 
-        threshold = RouterThreshold.load(root / d["router"]["threshold_file"])
+        precision = (os.environ.get(TIER0_PRECISION_ENV, "").strip()
+                     or d["tier0"]["precision"])
+        if precision not in PRECISIONS:
+            raise ValueError(f"tier0.precision must be one of {PRECISIONS}, got "
+                             f"{precision!r}")
+
+        def keyed(section: dict, field: str):
+            """Read a precision-keyed field. A bare scalar is refused rather than shared
+            across precisions: FP32 and INT8 do not have interchangeable thresholds,
+            artefacts or canary numbers, and a single value would silently serve one
+            precision's calibration to the other."""
+            v = section[field]
+            if not isinstance(v, dict):
+                raise ValueError(
+                    f"configs/serve.yaml: {field!r} must be keyed by precision "
+                    f"({'/'.join(PRECISIONS)}), not a bare value. FP32 and INT8 are not "
+                    f"interchangeable here.")
+            if precision not in v:
+                raise ValueError(f"{field!r} has no entry for precision {precision!r}")
+            return v[precision]
+
+        threshold = RouterThreshold.load(root / keyed(d["router"], "threshold_file"))
+        if threshold.precision != precision:
+            raise PrecisionMismatch(
+                f"REFUSING TO START. Serving precision {precision!r} but the router "
+                f"threshold was calibrated on {threshold.precision!r} logits. The margin "
+                f"distribution differs by precision, so this threshold would produce an "
+                f"escalation rate nobody chose. Re-run "
+                f"scripts/calibrate_router_threshold.py --precision {precision}.")
 
         # Env wins over the file, and says so on startup. An absolute override is used
         # as-is (the container mount case); a relative one resolves against the repo root
@@ -137,7 +176,7 @@ class ServiceConfig:
             if not model_dir.is_absolute():
                 model_dir = root / model_dir
         else:
-            model_dir = root / d["tier0"]["model_dir"]
+            model_dir = root / keyed(d["tier0"], "model_dir")
 
         # The cross-check. Compare on the artefact's basename: the calibration npz
         # records a repo-relative path, serve.yaml may name a different prefix, but the
@@ -159,6 +198,7 @@ class ServiceConfig:
                 f"was calibrated for {threshold.signal!r}")
 
         return cls(
+            tier0_precision=precision,
             tier0_model_dir=model_dir,
             tier0_max_length=int(d["tier0"]["max_length"]),
             threshold=threshold,
@@ -173,8 +213,8 @@ class ServiceConfig:
                                  else float(d["tier2"]["spend_cap_usd"])),
             tier2_run_id=str(d["tier2"]["run_id"]),
             canary_row_set=root / d["canary"]["row_set"],
-            canary_min_accuracy=float(d["canary"]["min_accuracy"]),
-            canary_measured_accuracy=float(d["canary"]["measured_accuracy"]),
+            canary_min_accuracy=float(keyed(d["canary"], "min_accuracy")),
+            canary_measured_accuracy=float(keyed(d["canary"], "measured_accuracy")),
             canary_enabled=bool(d["canary"]["enabled"]),
             tier0_model_dir_from_env=bool(override),
             raw=d,

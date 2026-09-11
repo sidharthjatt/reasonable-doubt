@@ -10,8 +10,13 @@
 # decides. Mount it and point TIER0_MODEL_DIR at the mount:
 #
 #   docker run --rm -p 8000:8000 \
-#     -v "$PWD/models:/models:ro" -e TIER0_MODEL_DIR=/models/int8_ce_1 \
+#     -v "$PWD/models:/models:ro" -e TIER0_MODEL_DIR=/models/onnx_ce_1_fp32 \
 #     reasonable-doubt:local
+#
+# PRECISION IS FP32 (3bg). INT8 is qualified on no Linux target: it diverges between
+# macOS-arm64 and Linux-aarch64 and collapses to chance on non-VNNI x86, so this image
+# serves the FP32 ONNX export. TIER0_PRECISION selects which precision's threshold and
+# canary numbers apply, and the config refuses a threshold from the other precision.
 #
 # THE STARTUP CANARY RUNS INSIDE THE CONTAINER, and that is the point of running it at
 # all: Kaggle's non-VNNI x86 scored these exact weights at macro-F1 0.0037 — chance —
@@ -28,7 +33,8 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    TIER0_MODEL_DIR=/models/int8_ce_1 \
+    TIER0_MODEL_DIR=/models/onnx_ce_1_fp32 \
+    TIER0_PRECISION=fp32 \
     HF_HOME=/tmp/hf
 
 WORKDIR /app
