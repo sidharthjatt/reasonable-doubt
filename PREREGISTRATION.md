@@ -177,7 +177,7 @@ this does not change any conclusion, but the number must be what it says it is.
 |----|-------------|-------------|--------|
 | C3 | Measure seed-variance and paired-bootstrap floors | descriptive — no accept rule; **gates E2, E3, E7** | planned |
 | E1 | Tier 0: DeBERTa-v3-base, CE baseline, 3 seeds | **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8 artefact**, FP32 reported alongside. Anchored to LexGLUE Table 3 (DeBERTa m-F1 83.1) | planned |
-| E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **registered — see E1b below** |
+| E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **NOT ACCEPTED (§3bi): 0.798744 ± 0.007018, short by 0.0013 = 0.18σ. Undertraining confirmed as the dominant cause (+0.0465 = 8.31× E1's sd) without reaching the bar** |
 | E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
 | E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | planned **[C3-gated]** |
 | E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04** = **0.7923** (E1 INT8 0.7523, §3ar) | **seed 1: 0.7254 — misses by 0.0669 = 12× test_3000 σ** |
@@ -1372,6 +1372,78 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 `test_3000_onnx_fp32` 4 ULP, `selection` exact) — the §3ay summation-order signature.
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
+
+### 3bi. E1b VERDICT — NOT ACCEPTED, by 0.0013. The near-miss is reported as a near-miss (2026-09-11)
+
+**THE REGISTERED RULE, quoted before the number:** *"macro-F1 ≥ 0.80 on `test_3000`,
+measured on the ONNX-INT8 artefact, mean over seeds 1/2/3 … the same bar as E1,
+deliberately not a bar chosen to match what 10 epochs is expected to reach. If E1b lands
+at, say, 0.79, that is a **near-miss to be reported as a near-miss, not a rule to be
+relaxed afterwards**."*
+
+#### The result
+
+| seed | E1b INT8 `test_3000` (arm64) | E1 INT8 (arm64) |
+|---|---|---|
+| 1 | 0.797443 | 0.758213 |
+| 2 | 0.792468 | 0.751423 |
+| 3 | **0.806321** | 0.747119 |
+| **mean ± sd** | **0.798744 ± 0.007018** | 0.752252 ± 0.005593 |
+
+> ## VERDICT: **NOT ACCEPTED.** 0.798744 < 0.80.
+>
+> Shortfall **0.001256** — **0.18×** E1b's own seed sd. **1 of 3** seeds clears the bar
+> individually. The rule is not relaxed, not re-anchored, and not restated to fit.
+
+**AND THE HYPOTHESIS IS SUBSTANTIALLY SUPPORTED ANYWAY — these are different questions.**
+E1b was registered to test whether E1's shortfall is caused by **undertraining**. Against
+E1 the gain is **+0.046492**, which is **8.31× E1's seed sd**. That is not a marginal
+effect; undertraining was a real and dominant cause of E1's shortfall. What the rule
+records is that **fixing it does not, by itself, reach 0.80.**
+
+> Stated without hedging: *undertraining accounts for most of E1's gap and does not
+> account for all of it.* A report that said only "E1b failed" would be as wrong as one
+> that said "E1b confirmed undertraining".
+
+**THE EPOCH BUDGET IS STILL BINDING, which bears directly on the near-miss.** Selection
+best was **epoch 10 — the last one — for seeds 2 and 3** (0.8151 / 0.8153), and epoch 9
+for seed 1. For two of three seeds the run was **still improving when it hit the cap**, so
+10 epochs is plausibly still undertrained. **This is an observation, not a result, and it
+does NOT rescue the verdict**: no rule permits inferring where the curve would have gone,
+and a 20-epoch run is a new experiment requiring its own registration and its own quota.
+
+**FP32, REPORTED ALONGSIDE AND EXPLICITLY NOT THE RULE.**
+
+| | E1b FP32 | E1 FP32 |
+|---|---|---|
+| mean ± sd | **0.806416 ± 0.010656** | 0.757048 ± 0.008227 |
+| per seed | 0.811111 / 0.794219 / 0.813919 | — |
+
+> **FP32 CLEARS 0.80 AND THAT IS NOT THE RULE.** The accept rule names the ONNX-INT8
+> artefact, and §3ar correction 1 exists *precisely because* an FP32 figure was once
+> quoted against an INT8 rule. Reporting 0.8064 as "E1b met its bar" would repeat that
+> error with the direction that flatters the project. It did not.
+>
+> All three FP32 values were recomputed locally from `logits_ce10ep_seed*.npz` through the
+> registered scorer with the `test_3000_indices` guard, and reproduce Kaggle's recorded
+> figures to **0 delta** at n=3000.
+
+**PROVENANCE, CHECKED RATHER THAN ASSUMED.** Seeds 2 and 3 were quantised under the
+**pinned** toolchain — `onnxruntime 1.29.0`, `optimum 2.1.0`, `optimum-onnx 0.1.0`,
+`onnx 1.22.0`, `transformers 4.57.6`, with `quantiser_versions_complete: true`, the first
+runs to record optimum at all (§3bd's capture fix, working). **Seed 1 predates the pin**
+and was quantised under **ORT 1.30.0** with optimum/onnx unrecorded. **The 3-seed mean
+therefore mixes two toolchains.** That is licensed by §3be, which measured 1.29.0 against
+1.30.0 on this exact model as **byte-identical across all 376 initializers** — but it is
+stated here rather than left for a reader to discover.
+
+All three scored on arm64 under ORT 1.29.0 through `scripts/score_int8_local.py`, n=3000,
+0 unmatched, `classes_averaged=100`.
+
+**What does NOT follow from this verdict:** that Tier 0 is unfit to deploy. §3bg's serving
+decision rests on FP32 platform-stability and the canary, not on E1b's accept rule, and
+the deployed artefact is still E1 seed 1. Swapping to an E1b artefact remains a separate
+decision requiring recalibration (§3bc).
 
 ### 3bh. FP32 Tier 0 BENCHED; which published numbers need restating (2026-09-11)
 
