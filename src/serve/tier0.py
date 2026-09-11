@@ -78,7 +78,22 @@ class Tier0Encoder:
             confidence=float(margin_signal(lg)[0]),
             tier=self.name,
             is_stub=False,
+            top_k=self.top_k(lg),
         )
+
+    def top_k(self, logits: np.ndarray, k: int = 3) -> tuple[tuple[str, float], ...]:
+        """Top-k (label, softmax score) for display.
+
+        THE SCORE IS NOT A CALIBRATED PROBABILITY and nothing routes on it — routing uses
+        the MARGIN, which is what the threshold was calibrated against (hard rule 1). This
+        is a display quantity, computed here rather than in the UI so the labels and the
+        ordering come from the same place as the prediction.
+        """
+        row = np.asarray(logits)[0].astype(np.float64)
+        e = np.exp(row - row.max())
+        p = e / e.sum()
+        order = np.argsort(p)[::-1][:k]
+        return tuple((self.labels[int(i)], float(p[int(i)])) for i in order)
 
     def describe(self) -> dict:
         return {"model_dir": str(self.model_dir), "onnx": self._onnx_path.name,

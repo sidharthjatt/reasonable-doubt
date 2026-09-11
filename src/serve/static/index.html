@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reasonable Doubt — contract clause classifier</title>
+<style>
+  :root {
+    --bg:#fbfaf8; --fg:#1a1a1a; --muted:#6b6b6b; --line:#e2ddd5;
+    --card:#fff; --accent:#7a5c2e; --warn-bg:#fdf6e3; --warn-line:#d9b667;
+    --warn-fg:#6b4e10; --bar:#cdbfa6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#16151a; --fg:#ececec; --muted:#a0a0a0; --line:#33313a;
+      --card:#1e1d23; --accent:#d6b77a; --warn-bg:#2a2415; --warn-line:#7a6428;
+      --warn-fg:#e5cd91; --bar:#5b5340;
+    }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; padding:40px 20px 72px }
+  h1 { font-size:1.45rem; margin:0 0 4px; letter-spacing:-.01em }
+  .sub { color:var(--muted); margin:0 0 28px; font-size:.92rem }
+  textarea { width:100%; min-height:170px; padding:13px 14px; resize:vertical;
+             border:1px solid var(--line); border-radius:9px; background:var(--card);
+             color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace }
+  textarea:focus { outline:2px solid var(--accent); outline-offset:-1px }
+  .row { display:flex; gap:12px; align-items:center; margin-top:11px; flex-wrap:wrap }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:9px 20px; font-size:.92rem; font-weight:550; cursor:pointer }
+  button:disabled { opacity:.5; cursor:default }
+  .count { color:var(--muted); font-size:.82rem; margin-left:auto;
+           font-variant-numeric:tabular-nums }
+  .count.over { color:#b4402c; font-weight:600 }
+  .card { margin-top:26px; border:1px solid var(--line); border-radius:11px;
+          background:var(--card); padding:20px 22px }
+  .lbl { font-size:.72rem; letter-spacing:.09em; text-transform:uppercase;
+         color:var(--muted); margin-bottom:5px }
+  .answer { font-size:1.3rem; font-weight:600; letter-spacing:-.01em }
+  .flag { margin-top:16px; background:var(--warn-bg); border:1px solid var(--warn-line);
+          border-left-width:3px; color:var(--warn-fg);
+          border-radius:7px; padding:11px 14px; font-size:.9rem }
+  .flag b { font-weight:650 }
+  table { width:100%; border-collapse:collapse; margin-top:8px }
+  td { padding:7px 0; border-bottom:1px solid var(--line); vertical-align:middle }
+  tr:last-child td { border-bottom:0 }
+  td.n { width:58px; text-align:right; color:var(--muted);
+         font-variant-numeric:tabular-nums; font-size:.86rem }
+  td.b { width:132px }
+  .bar { height:7px; border-radius:4px; background:var(--bar); min-width:2px }
+  .meta { margin-top:22px; color:var(--muted); font-size:.8rem; line-height:1.7 }
+  .meta code { font-size:.94em }
+  .err { margin-top:26px; border:1px solid #d99; background:#fdf0ee; color:#8c2f1c;
+         border-radius:9px; padding:13px 15px; font-size:.9rem }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .err { background:#2c1a17; border-color:#7a3a2c;
+                                           color:#f0b4a5 }
+  }
+  a { color:var(--accent) }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Reasonable Doubt</h1>
+  <p class="sub">Contract clause classifier — 100 LEDGAR provision types. Paste a clause.</p>
+
+  <textarea id="t" placeholder="This Agreement shall be governed by and construed in accordance with the laws of the State of New York, without regard to its conflict of laws principles."></textarea>
+  <div class="row">
+    <button id="go">Classify</button>
+    <span class="count" id="c">0 / 20,000</span>
+  </div>
+
+  <div id="out"></div>
+
+  <p class="meta">
+    Serves a DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32 —
+    macro-F1 <b>0.8091</b> on a 3,000-row test sample, <b>single seed</b>.
+    Scores are softmax outputs, not calibrated probabilities; routing uses the margin.
+    <b>Research artefact — not legal advice.</b><br>
+    <a href="https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar">Model card</a>
+    · <a href="/health">/health</a> · <a href="/docs">API</a>
+  </p>
+</div>
+
+<script>
+const MAX = 20000;
+const t = document.getElementById('t'), go = document.getElementById('go');
+const out = document.getElementById('out'), c = document.getElementById('c');
+const fmt = n => n.toLocaleString('en-US');
+
+function count() {
+  const n = t.value.length;
+  c.textContent = fmt(n) + ' / ' + fmt(MAX);
+  c.classList.toggle('over', n > MAX);
+  go.disabled = n === 0 || n > MAX;
+}
+t.addEventListener('input', count); count();
+
+const esc = s => String(s).replace(/[&<>"']/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+async function classify() {
+  const text = t.value;
+  if (!text || text.length > MAX) return;
+  go.disabled = true; go.textContent = 'Classifying…';
+  out.innerHTML = '';
+  try {
+    const r = await fetch('/classify', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text})
+    });
+    if (!r.ok) {
+      let d = ''; try { d = JSON.stringify(await r.json()); } catch (e) {}
+      throw new Error('HTTP ' + r.status + (d ? ' — ' + d : ''));
+    }
+    render(await r.json());
+  } catch (e) {
+    out.innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+  } finally {
+    go.disabled = false; go.textContent = 'Classify'; count();
+  }
+}
+go.addEventListener('click', classify);
+t.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') classify();
+});
+
+function render(d) {
+  const top = d.top_3 || [];
+  const max = top.length ? Math.max(...top.map(x => x.score)) : 1;
+  const rows = top.map(x => {
+    const pct = (x.score * 100).toFixed(1) + '%';
+    const w = Math.max(2, Math.round((x.score / max) * 100));
+    return '<tr><td>' + esc(x.label) + '</td>' +
+           '<td class="b"><div class="bar" style="width:' + w + '%"></div></td>' +
+           '<td class="n">' + pct + '</td></tr>';
+  }).join('');
+
+  const flag = d.needs_review
+    ? '<div class="flag"><b>Needs review</b> — ' +
+      esc(d.needs_review_meaning || 'low confidence — human review recommended') +
+      '</div>'
+    : '';
+
+  out.innerHTML =
+    '<div class="card">' +
+      '<div class="lbl">Predicted provision type</div>' +
+      '<div class="answer">' + esc(d.label) + '</div>' +
+      flag +
+      (rows ? '<div class="lbl" style="margin-top:20px">Top 3</div>' +
+              '<table>' + rows + '</table>' : '') +
+    '</div>';
+}
+</script>
+</body>
+</html>

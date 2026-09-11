@@ -62,3 +62,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Deploy staging dirs — copies of the 715MB artefact, rebuilt by the upload scripts.
+/deploy/_model_upload/
+/deploy/_space_upload/

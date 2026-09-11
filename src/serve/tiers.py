@@ -35,6 +35,10 @@ class TierResult:
     # spent serving it. The dollar figure still reflects what the call cost when it was
     # actually made, so the two facts are reported separately rather than netted.
     api_cache_hit: bool | None = None
+    # Top-k (label, score) for the UI, score = softmax over the tier's own logits.
+    # None means THIS TIER DOES NOT PRODUCE ONE, not "empty": the API tier returns a
+    # label with no distribution behind it, and a `[]` would read as "no candidates".
+    top_k: tuple[tuple[str, float], ...] | None = None
 
 
 @runtime_checkable

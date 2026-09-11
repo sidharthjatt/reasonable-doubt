@@ -41,7 +41,11 @@ class FakeTier0:
 
     def classify(self, text):
         label, margin = self._by_text.get(text, (self._label, self._margin))
-        return TierResult(label=label, confidence=margin, tier="tier0", is_stub=False)
+        # A top_k shaped like the real encoder's: top_1 IS the predicted label and the
+        # scores descend. Without this the demo-surface test would skip, which is a hole
+        # rather than a pass.
+        return TierResult(label=label, confidence=margin, tier="tier0", is_stub=False,
+                          top_k=((label, 0.71), ("Governing Laws", 0.19), ("Terms", 0.10)))
 
     def describe(self):
         return {"model_dir": "fake"}
@@ -1201,3 +1205,96 @@ def test_local_pricing_refuses_a_precision_with_no_measured_energy():
     hw["per_tier_throughput"]["tier0_encoder_onnx_fp32"]["energy_joules_per_request"] = None
     with pytest.raises(MeasurementUnavailable, match="energy_joules_per_request"):
         local_usd_per_request(hw=hw, precision="fp32")
+
+
+# ------------------------------------------------ the public demo surface (§3bn)
+
+
+def test_classify_returns_top_3_with_scores(config):
+    """The UI needs candidates, and they must come from the tier that predicted."""
+    out = make_cascade(config, tier0=FakeTier0(margin=0.9)).classify("a clause")
+    top = out["top_3"]
+    assert top is not None, "the served tier must expose its candidates"
+    assert len(top) == 3
+    assert [t["label"] for t in top][0] == out["label"], "top_1 must be the answer"
+    scores = [t["score"] for t in top]
+    assert scores == sorted(scores, reverse=True), "top_3 must be ordered"
+    assert all(0.0 <= s <= 1.0 for s in scores)
+
+
+def test_real_encoder_top_k_is_a_softmax_over_its_own_logits(ledgar):
+    """Scores are a DISPLAY quantity; they must still be the model's own distribution."""
+    import numpy as np
+
+    from src.data.labels import load_labels
+    from src.serve.tier0 import Tier0Encoder
+
+    cfg = ServiceConfig.load()
+    enc = Tier0Encoder(model_dir=cfg.tier0_model_dir, labels=load_labels(),
+                       max_length=cfg.tier0_max_length)
+    lg = enc.logits("This Agreement shall be governed by the laws of the State of New York.")
+    top = enc.top_k(lg)
+    assert len(top) == 3
+    assert top[0][0] == enc.labels[int(np.asarray(lg)[0].argmax())]
+    assert [s for _, s in top] == sorted([s for _, s in top], reverse=True)
+    row = np.asarray(lg)[0].astype(np.float64)
+    e = np.exp(row - row.max())
+    assert top[0][1] == pytest.approx(float((e / e.sum()).max()))
+
+
+def test_classify_rejects_input_over_the_cap():
+    """A public endpoint must not be handed a novel to tokenise. 422, not a silent trim."""
+    from fastapi.testclient import TestClient
+
+    from src.serve.app import MAX_INPUT_CHARS, create_app
+
+    client = TestClient(create_app(run_canary_on_start=False))
+    r = client.post("/classify", json={"text": "x" * (MAX_INPUT_CHARS + 1)})
+    assert r.status_code == 422
+    assert "20000" in r.text or "max_length" in r.text
+    ok = client.post("/classify", json={"text": "x" * 50})
+    assert ok.status_code == 200, "a normal clause must still be accepted"
+
+
+def test_classify_rejects_empty_input():
+    from fastapi.testclient import TestClient
+
+    from src.serve.app import create_app
+
+    client = TestClient(create_app(run_canary_on_start=False))
+    assert client.post("/classify", json={"text": ""}).status_code == 422
+
+
+def test_index_page_is_served_and_names_the_flag_meaning():
+    """The one-line meaning is a product requirement, so it is pinned here."""
+    from fastapi.testclient import TestClient
+
+    from src.serve.app import create_app
+
+    r = TestClient(create_app(run_canary_on_start=False)).get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "low confidence — human review recommended" in r.text
+    assert "not legal advice" in r.text.lower()
+
+
+def test_needs_review_meaning_is_present_only_when_flagged(config):
+    below = config.threshold.threshold - 0.05
+    flagged = make_cascade(config, tier0=FakeTier0(margin=below)).classify("ambiguous")
+    assert flagged["needs_review_meaning"] == "low confidence — human review recommended"
+    clear = make_cascade(config, tier0=FakeTier0(margin=0.99)).classify("clear")
+    assert clear["needs_review_meaning"] is None
+
+
+def test_health_separates_escalation_CONFIGURED_from_key_availability():
+    """Reporting only availability said 'false' for a missing key and for §3bm alike."""
+    from fastapi.testclient import TestClient
+
+    from src.serve.app import create_app
+
+    h = TestClient(create_app(run_canary_on_start=False)).get("/health").json()
+    e = h["escalation"]
+    assert e["configured"] is False, "§3bm: off by configuration"
+    assert set(e) == {"configured", "tier2_available", "effective", "note"}
+    assert e["effective"] is False
+    assert "did not improve accuracy" in e["note"]

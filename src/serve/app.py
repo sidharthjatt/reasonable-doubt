@@ -20,9 +20,10 @@ WHAT THIS SERVICE WILL NOT DO
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.serve.config import ServiceConfig
 from src.serve.pricing import CostEstimate, api_usd_for_result, local_usd_per_request
@@ -30,6 +31,16 @@ from src.serve.tier2 import Tier2Unavailable
 from src.serve.tiers import TierResult
 
 __all__ = ["Cascade", "ClassifyRequest", "MarginRouter", "build_cascade", "create_app"]
+
+
+# INPUT CAP. A clause is a paragraph; 512 tokens is roughly 2-4k characters and anything
+# past that is truncated by the tokenizer anyway. The cap exists so a public endpoint
+# cannot be handed a novel and made to tokenise it: the work is bounded BEFORE the
+# tokenizer runs, not after. Exceeding it is a 422 naming the limit, never a silent trim.
+MAX_INPUT_CHARS = 20_000
+
+# The one-page demo UI. Served from disk so the page is editable without touching Python.
+INDEX_HTML_PATH = Path(__file__).resolve().parent / "static" / "index.html"
 
 
 class ClassifyRequest(BaseModel):
@@ -43,7 +54,7 @@ class ClassifyRequest(BaseModel):
     the cascade itself works fine.
     """
 
-    text: str
+    text: str = Field(min_length=1, max_length=MAX_INPUT_CHARS)
 
 
 @dataclass(frozen=True)
@@ -134,6 +145,15 @@ class Cascade:
             # so the flag is the useful part even with escalation off.
             "low_confidence": low_confidence,
             "needs_review": low_confidence,
+            "needs_review_meaning": (
+                "low confidence — human review recommended"
+                if low_confidence else None),
+            # Tier 0's own distribution, always — not the answering tier's. With
+            # escalation off these are the same; with it on, the API tier returns a
+            # label and no distribution, and showing an empty list would read as "no
+            # candidates" rather than "this tier does not produce one".
+            "top_3": ([{"label": lbl, "score": sc} for lbl, sc in t0.top_k]
+                      if t0.top_k is not None else None),
             "escalation_enabled": escalation_enabled,
             "escalation_selected": wants_escalation,
             "escalation_skipped": escalation_skipped,
@@ -207,6 +227,7 @@ def create_app(config: ServiceConfig | None = None, *, tier2=None,
                run_canary_on_start: bool = True):
     """Build the FastAPI app. The canary runs HERE, so a failure prevents startup."""
     from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse
 
     cascade = build_cascade(config, tier2=tier2)
     canary = run_startup_canary(cascade) if run_canary_on_start else {
@@ -241,11 +262,33 @@ def create_app(config: ServiceConfig | None = None, *, tier2=None,
                 # should not phone home regardless (src/ort_runtime.py).
                 "ort_telemetry_disabled": telemetry_disabled(),
             },
-            "escalation_enabled": cascade.tier2.available,
+            # TWO DIFFERENT FACTS, kept apart. `configured` is the operator's
+            # decision (§3bm turned it off); `tier2_available` is whether a key is
+            # present at all. Reporting only the latter, as this did, said
+            # "escalation_enabled: false" for a missing key and for a deliberate
+            # architecture alike.
+            "escalation": {
+                "configured": cascade.config.tier2_enabled,
+                "tier2_available": cascade.tier2.available,
+                "effective": cascade.config.tier2_enabled and cascade.tier2.available,
+                "note": ("escalation is OFF by configuration (§3bm): at the served "
+                         "operating point it did not improve accuracy "
+                         "(+0.0008 macro-F1, 95% CI [-0.0060, +0.0072]). Low-confidence "
+                         "rows are FLAGGED instead."
+                         if not cascade.config.tier2_enabled else None),
+            },
+            "escalation_enabled": cascade.config.tier2_enabled and cascade.tier2.available,
         }
 
     @app.post("/classify")
     def classify(req: ClassifyRequest) -> dict:
         return cascade.classify(req.text)
+
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> str:
+        # Read per request, not cached at import: the page is a few KB, and a module
+        # constant would mean a missing file fails at IMPORT time — i.e. before the
+        # canary — turning a cosmetic problem into a startup failure of the API.
+        return INDEX_HTML_PATH.read_text(encoding="utf-8")
 
     return app
