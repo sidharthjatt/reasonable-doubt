@@ -1,0 +1,16 @@
+{
+  "tier": "tier0_encoder_onnx_int8",
+  "artefact": "models/tier0_arch_probe/int8",
+  "n_requests": 300,
+  "batch_size": 8,
+  "wall_seconds": 27.373766083008377,
+  "throughput_rps": 10.959398100001225,
+  "p50_latency_ms": 79.97179162339307,
+  "p95_latency_ms": 163.20640625053784,
+  "p99_latency_ms": 164.5362968738482,
+  "idle_watts": null,
+  "load_watts": null,
+  "marginal_watts": null,
+  "joules_per_request": null,
+  "complete_for_e6": false
+}

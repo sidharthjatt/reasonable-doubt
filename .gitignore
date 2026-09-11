@@ -66,3 +66,25 @@ dist/
 # Deploy staging dirs — copies of the 715MB artefact, rebuilt by the upload scripts.
 /deploy/_model_upload/
 /deploy/_space_upload/
+
+# ---------------------------------------------------------------------------------
+# SMALL RESULT SUMMARIES REPORT.md CITES. Tracked so a reader can check any number in
+# the report without rerunning anything. These negations MUST stay below `results/*`:
+# git applies the LAST matching pattern. Raw logits (.npz), the API response dumps and
+# every model artefact stay ignored — they are large and reproducible.
+!results/cost_per_1k.json
+!results/isa_matrix.json
+!results/stage1_scored_test3000.json
+!results/served_config_escalation.json
+!results/fp32_local_onnx_ce10ep_seed1.json
+!results/int8_local_seed?.json
+!results/int8_local_ce10ep_seed?.json
+!results/int8_local_hostB_seed1.json
+!results/tier0_ce_seed?.json
+!results/tier1_seed1.json
+!results/c2_c4.json
+!results/e5_sweep_fp32_aggregate.json
+!results/e5_sweep_int8_aggregate.json
+!results/e6_frontier.json
+!results/e6_cascade_paired.json
+!results/bench_*.json

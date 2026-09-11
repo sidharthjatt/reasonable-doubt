@@ -1,0 +1,194 @@
+{
+  "experiment": "E5 (exploratory, AGGREGATE)",
+  "status": "NOT the router result",
+  "precision": "int8",
+  "isa": "arm64_local",
+  "n_seeds": 3,
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "aurocs": {
+    "margin": {
+      "mean": 0.8602098905394716,
+      "sd": 0.004245146203073839,
+      "per_seed": [
+        0.8565033272837266,
+        0.8648411764705882,
+        0.8592851678640999
+      ],
+      "per_seed_rank": [
+        2,
+        3,
+        3
+      ]
+    },
+    "max_softmax": {
+      "mean": 0.8636112160552318,
+      "sd": 0.004750784043814037,
+      "per_seed": [
+        0.8589372857430934,
+        0.8684352941176471,
+        0.8634610683049551
+      ],
+      "per_seed_rank": [
+        1,
+        2,
+        1
+      ]
+    },
+    "neg_entropy": {
+      "mean": 0.8621391793208766,
+      "sd": 0.006767529385271874,
+      "per_seed": [
+        0.855095785440613,
+        0.868592156862745,
+        0.8627295956592718
+      ],
+      "per_seed_rank": [
+        3,
+        1,
+        2
+      ]
+    },
+    "trained_difficulty": {
+      "mean": 0.8564363552724185,
+      "sd": 0.002747319139930583,
+      "per_seed": [
+        0.8534402097197016,
+        0.8588372549019608,
+        0.8570316011955931
+      ],
+      "per_seed_rank": [
+        4,
+        4,
+        4
+      ]
+    }
+  },
+  "best_signal_by_mean": "max_softmax",
+  "spread_of_means": 0.007174860782813375,
+  "rule_auroc_ge_0.75": true,
+  "rule_spread_ge_0.05": false,
+  "rank_stable": {
+    "margin": false,
+    "max_softmax": false,
+    "neg_entropy": false,
+    "trained_difficulty": true
+  },
+  "holds_rank_1_every_seed": [],
+  "sweeps_mean_over_seeds": {
+    "margin": {
+      "0.05": {
+        "escalation_mean": 0.05,
+        "retained_accuracy_mean": 0.8773684210526316,
+        "retained_accuracy_sd": 0.0027850013800680114
+      },
+      "0.10": {
+        "escalation_mean": 0.1,
+        "retained_accuracy_mean": 0.9001851851851852,
+        "retained_accuracy_sd": 0.003394500514782065
+      },
+      "0.15": {
+        "escalation_mean": 0.15,
+        "retained_accuracy_mean": 0.9188235294117647,
+        "retained_accuracy_sd": 0.0017647058823528905
+      },
+      "0.20": {
+        "escalation_mean": 0.2,
+        "retained_accuracy_mean": 0.9354166666666667,
+        "retained_accuracy_sd": 0.0009547032697825069
+      },
+      "0.30": {
+        "escalation_mean": 0.3,
+        "retained_accuracy_mean": 0.9530952380952381,
+        "retained_accuracy_sd": 0.0008247860988423324
+      },
+      "0.40": {
+        "escalation_mean": 0.4,
+        "retained_accuracy_mean": 0.9644444444444444,
+        "retained_accuracy_sd": 0.0004811252243246992
+      },
+      "0.50": {
+        "escalation_mean": 0.5,
+        "retained_accuracy_mean": 0.9756666666666667,
+        "retained_accuracy_sd": 0.0020816659994661348
+      }
+    },
+    "max_softmax": {
+      "0.05": {
+        "escalation_mean": 0.05,
+        "retained_accuracy_mean": 0.8791228070175439,
+        "retained_accuracy_sd": 0.0016079212964757456
+      },
+      "0.10": {
+        "escalation_mean": 0.1,
+        "retained_accuracy_mean": 0.9014814814814814,
+        "retained_accuracy_sd": 0.00115648111081453
+      },
+      "0.15": {
+        "escalation_mean": 0.15,
+        "retained_accuracy_mean": 0.9198039215686274,
+        "retained_accuracy_sd": 0.001224509411450646
+      },
+      "0.20": {
+        "escalation_mean": 0.2,
+        "retained_accuracy_mean": 0.9354166666666667,
+        "retained_accuracy_sd": 0.0003608439182435084
+      },
+      "0.30": {
+        "escalation_mean": 0.3,
+        "retained_accuracy_mean": 0.9545238095238096,
+        "retained_accuracy_sd": 0.0016495721976846007
+      },
+      "0.40": {
+        "escalation_mean": 0.4,
+        "retained_accuracy_mean": 0.9663888888888889,
+        "retained_accuracy_sd": 0.0004811252243246992
+      },
+      "0.50": {
+        "escalation_mean": 0.5,
+        "retained_accuracy_mean": 0.9766666666666667,
+        "retained_accuracy_sd": 0.0020816659994661348
+      }
+    },
+    "neg_entropy": {
+      "0.05": {
+        "escalation_mean": 0.05,
+        "retained_accuracy_mean": 0.8789473684210526,
+        "retained_accuracy_sd": 0.0010526315789473606
+      },
+      "0.10": {
+        "escalation_mean": 0.1,
+        "retained_accuracy_mean": 0.9001851851851852,
+        "retained_accuracy_sd": 0.0025051387515682764
+      },
+      "0.15": {
+        "escalation_mean": 0.15,
+        "retained_accuracy_mean": 0.918235294117647,
+        "retained_accuracy_sd": 0.0015563243006262411
+      },
+      "0.20": {
+        "escalation_mean": 0.2,
+        "retained_accuracy_mean": 0.935,
+        "retained_accuracy_sd": 0.0
+      },
+      "0.30": {
+        "escalation_mean": 0.3,
+        "retained_accuracy_mean": 0.9542857142857143,
+        "retained_accuracy_sd": 0.0014285714285714457
+      },
+      "0.40": {
+        "escalation_mean": 0.4,
+        "retained_accuracy_mean": 0.9666666666666667,
+        "retained_accuracy_sd": 0.0014433756729740977
+      },
+      "0.50": {
+        "escalation_mean": 0.5,
+        "retained_accuracy_mean": 0.9766666666666667,
+        "retained_accuracy_sd": 0.004725815626252613
+      }
+    }
+  }
+}

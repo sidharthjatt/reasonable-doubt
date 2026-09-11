@@ -1,0 +1,40 @@
+{
+  "experiment": "E6 best-Pareto-point paired test",
+  "cost_usd": 0.0,
+  "escalation_rate_target": 0.04055555555555555,
+  "escalation_rate_applied_per_seed": [
+    0.04,
+    0.03233333333333333,
+    0.04933333333333333
+  ],
+  "signal": "margin",
+  "calibrated_on": "dev_2000",
+  "applied_to": "test_3000",
+  "threshold_held_fixed_under_resampling": true,
+  "macro_f1_per_seed": {
+    "tier0": {
+      "1": 0.7582129449546755,
+      "2": 0.7514233124426812,
+      "3": 0.7471190385812302
+    },
+    "cascade": {
+      "1": 0.7567199569006747,
+      "2": 0.7563573210659752,
+      "3": 0.7624538436941305
+    }
+  },
+  "delta": 0.006258608560731238,
+  "across_seed_sd_tier0": 0.005593160134561244,
+  "across_seed_sd_is_the_wrong_yardstick": "paired comparison: same rows, same seeds, differing only in escalation",
+  "bootstrap_seed": 20260909,
+  "bootstrap": {
+    "delta": 0.006258608560731016,
+    "lo": -0.00042705113966400303,
+    "hi": 0.010276210734580184,
+    "ci": 0.95,
+    "n_resamples": 10000,
+    "n_rows": 3000,
+    "p_sign": 0.0756
+  },
+  "verdict": "the cascade's gain over Tier 0 alone is NOT distinguishable from zero"
+}

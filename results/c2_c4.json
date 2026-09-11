@@ -1,0 +1,61 @@
+{
+  "cost_usd": 0.0,
+  "model": "claude-sonnet-5",
+  "n_rows": 1000,
+  "rows": "test_3000 manifest.indices[:1000] \u2014 POSITIONAL",
+  "C2": {
+    "registered": "sd ratio <= 0.5 AND mode within 0.02 of 0.9",
+    "zero_shot_sd": 0.15982730638995285,
+    "few_shot_sd": 0.14124539022658494,
+    "sd_ratio": 0.8837375378270405,
+    "zero_shot_mean": 0.8513700000000001,
+    "few_shot_mean": 0.8442999999999999,
+    "zero_shot_mode": 0.98,
+    "few_shot_mode": 0.85,
+    "zero_shot_distinct": 31,
+    "few_shot_distinct": 26,
+    "sd_clause_pass": false,
+    "mode_clause_pass": false,
+    "pass": false
+  },
+  "C4": {
+    "form": "ratio",
+    "form_fixed_in": "\u00a73am, before few-shot was read",
+    "three_x_class": "Governing Laws",
+    "zero_shot_rate": 0.058,
+    "few_shot_rate": 0.059,
+    "ratio": 1.0172413793103448,
+    "shift": 0.000999999999999994,
+    "one_x": {
+      "Compliance With Laws": {
+        "zero_shot": 0.023,
+        "few_shot": 0.022,
+        "shift": -0.0010000000000000009
+      },
+      "Organizations": {
+        "zero_shot": 0.003,
+        "few_shot": 0.008,
+        "shift": 0.005
+      },
+      "Remedies": {
+        "zero_shot": 0.005,
+        "few_shot": 0.009,
+        "shift": 0.003999999999999999
+      },
+      "Solvency": {
+        "zero_shot": 0.007,
+        "few_shot": 0.007,
+        "shift": 0.0
+      },
+      "Waivers": {
+        "zero_shot": 0.003,
+        "few_shot": 0.011,
+        "shift": 0.008
+      }
+    },
+    "max_one_x_shift": 0.008,
+    "ratio_clause_pass": false,
+    "exceeds_clause_pass": false,
+    "pass": false
+  }
+}

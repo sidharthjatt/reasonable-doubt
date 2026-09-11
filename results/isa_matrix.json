@@ -1,0 +1,52 @@
+{
+  "what": "INT8 vs FP32 across every ISA measured. TWO METRICS \u2014 do not mix them.",
+  "test_3000_macro_f1": {
+    "metric": "macro-F1 on test_3000 (3000 rows)",
+    "artefact": "E1b seed 1",
+    "rows": [
+      {
+        "isa": "macOS arm64",
+        "int8": 0.7974432989743074,
+        "fp32": 0.8090515439998669,
+        "avx512_vnni": null,
+        "note": "ARM; AVX-512 not applicable",
+        "source": "results/int8_local_ce10ep_seed1.json, results/fp32_local_onnx_ce10ep_seed1.json"
+      },
+      {
+        "isa": "Linux x86 (Kaggle Xeon)",
+        "int8": 0.000166,
+        "fp32": 0.8114655856105638,
+        "avx512_vnni": false,
+        "note": "avx512f=true, avx2=true, avx512_vnni=FALSE",
+        "source": "tier0_ce10ep_seed1.json (Kaggle run JSON): test_3000_int8, test_3000_onnx_fp32, e3_discriminator.onnx_env"
+      }
+    ]
+  },
+  "canary_accuracy_200_train_rows": {
+    "metric": "accuracy on the 200 frozen canary rows \u2014 NOT comparable to test_3000",
+    "rows": [
+      {
+        "isa": "macOS arm64",
+        "int8": 0.9,
+        "fp32": 0.915,
+        "artefact": "E1 seed 1",
+        "source": "PREREGISTRATION \u00a73bf/\u00a73bg"
+      },
+      {
+        "isa": "Linux aarch64 (container)",
+        "int8": 0.64,
+        "fp32": 0.915,
+        "artefact": "E1 seed 1",
+        "source": "PREREGISTRATION \u00a73bf/\u00a73bg"
+      },
+      {
+        "isa": "Linux x86 (emulated, local)",
+        "int8": null,
+        "fp32": 0.955,
+        "artefact": "E1b seed 1",
+        "note": "avx512_vnni=false, avx512f=false, avx2=true; emulated on Apple Silicon",
+        "source": "PREREGISTRATION \u00a73bn"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "tier": "tier0_encoder_onnx_fp32",
+  "artefact": "models/onnx_ce_2_fp32",
+  "n_requests": 500,
+  "batch_size": 1,
+  "wall_seconds": 19.676198000001023,
+  "throughput_rps": 25.41141332283676,
+  "p50_latency_ms": 27.856041997438297,
+  "p95_latency_ms": 112.14966599800391,
+  "p99_latency_ms": 193.64012499863748,
+  "idle_soc_watts": null,
+  "load_soc_watts": null,
+  "marginal_soc_watts": null,
+  "joules_per_request": null,
+  "power_scope": "soc_package_cpu_gpu_ane_excludes_ram_ssd_psu_fans",
+  "code_commit": "23ecd4dd365ed8d81a4aa9e0a83cdaf8763cbd74",
+  "code_dirty": true,
+  "run_index": 1,
+  "complete_for_e6": false
+}

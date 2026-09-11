@@ -1,0 +1,29 @@
+{
+  "model": "microsoft/deberta-v3-base",
+  "loss_arm": "ce",
+  "seed": 1,
+  "max_length": 512,
+  "epochs": 3,
+  "lr": 2e-05,
+  "selection_split": "train_holdout_3000",
+  "test_manifest": "test_3000",
+  "test_manifest_sha256": "e719c1109069f8b6cc98f2a8612dc07522d83102bc78447e60d7e279aa58c35c",
+  "selection": {
+    "macro_f1": 0.7647223619714575,
+    "accuracy": 0.8566666666666667
+  },
+  "test_3000_fp32": {
+    "macro_f1": 0.7635909027071933,
+    "accuracy": 0.8596666666666667
+  },
+  "test_3000_int8": {
+    "macro_f1": 0.00370900618317889,
+    "accuracy": 0.017333333333333333
+  },
+  "test_full10k_fp32": {
+    "macro_f1": 0.766746699957091,
+    "accuracy": 0.8622
+  },
+  "int8_dir": "int8_ce_1",
+  "e3_int8_minus_fp32_macro_f1": -0.7598818965240144
+}

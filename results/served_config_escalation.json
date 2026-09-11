@@ -1,0 +1,42 @@
+{
+  "what": "served-config escalation check (\u00a73bk artefact); DESCRIPTIVE, not E6",
+  "cost_usd": 0.0,
+  "is_e6_rebuild": false,
+  "in_sample": true,
+  "in_sample_reason": "\u00a73bc: the 4.056% escalation RATE was selected on test_3000; the threshold VALUE is dev_2000-calibrated (hard rule 1).",
+  "seeds": 1,
+  "artefact": "models/onnx_ce10ep_1_fp32",
+  "precision": "fp32",
+  "isa": "arm64_local",
+  "threshold": 0.5288638472557068,
+  "threshold_file": "configs/router_threshold_fp32.json",
+  "escalation_rule": "margin < threshold",
+  "n_rows": 3000,
+  "n_escalated": 129,
+  "escalation_rate": 0.043,
+  "macro_f1": {
+    "tier0": 0.8090515439998669,
+    "cascade": 0.8098735340696961
+  },
+  "delta": 0.0008219900698291926,
+  "bootstrap_seed": 20260911,
+  "bootstrap": {
+    "delta": 0.0008219900698291926,
+    "lo": -0.005993397148057919,
+    "hi": 0.007201040321879485,
+    "ci": 0.95,
+    "n_resamples": 10000,
+    "n_rows": 3000,
+    "p_sign": 0.8572
+  },
+  "mcnemar_escalated_rows": {
+    "api_right_tier0_wrong": 28,
+    "tier0_right_api_wrong": 21,
+    "net": 7,
+    "p_exact_two_sided": 0.3916029105474905,
+    "tier0_accuracy": 0.3488372093023256,
+    "api_accuracy": 0.40310077519379844,
+    "metric": "accuracy on escalated rows, NOT macro-F1"
+  },
+  "verdict": "the cascade does NOT beat Tier 0 alone at the served operating point: the paired interval includes 0"
+}

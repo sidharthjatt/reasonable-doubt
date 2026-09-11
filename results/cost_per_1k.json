@@ -1,0 +1,33 @@
+{
+  "what": "USD per 1,000 clauses",
+  "source": "API: results/spend_ledger.jsonl, stage1_* rows, kind=actual. Local: configs/costs.yaml via src.serve.pricing (\u00a73bl).",
+  "api_is_batch_with_caching": true,
+  "local_tier0_fp32": {
+    "usd_per_1k": 0.0008788115222574201,
+    "basis": "fp32: capital 633.86 USD / 731,170,832 lifetime requests (at 30.9137 req/s) + marginal energy 0.505668 J/req at 0.0847 USD/kWh",
+    "tariff_is_assumed": true,
+    "is_estimate": true
+  },
+  "api": {
+    "claude-haiku-4-5-20251001": {
+      "usd_per_1k": 0.5264169999999999,
+      "cost_usd": 1.579251,
+      "n_requests": 3000,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "input_tokens": 2797272,
+      "output_tokens": 72246,
+      "batch_id": "msgbatch_014FYs1h3L4cVNYDke9hnXvn"
+    },
+    "claude-sonnet-5": {
+      "usd_per_1k": 0.43610433333333337,
+      "cost_usd": 1.308313,
+      "n_requests": 3000,
+      "cache_read_input_tokens": 3240000,
+      "cache_creation_input_tokens": 0,
+      "input_tokens": 641463,
+      "output_tokens": 68570,
+      "batch_id": "msgbatch_014FYs1h3L4cVNYDke9hnXvn"
+    }
+  }
+}

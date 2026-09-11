@@ -1,0 +1,20 @@
+{
+  "tier": "tier0_encoder_onnx_int8",
+  "artefact": "models/int8_ce_1",
+  "n_requests": 300,
+  "batch_size": 1,
+  "wall_seconds": 10.960489666002104,
+  "throughput_rps": 27.37103990258371,
+  "p50_latency_ms": 26.44891598902177,
+  "p95_latency_ms": 106.08075000345707,
+  "p99_latency_ms": 172.62516700429842,
+  "idle_soc_watts": 0.3973,
+  "load_soc_watts": 18.1369,
+  "marginal_soc_watts": 17.7396,
+  "joules_per_request": 0.6481156749300364,
+  "power_scope": "soc_package_cpu_gpu_ane_excludes_ram_ssd_psu_fans",
+  "code_commit": "8c5a5ed4164feea45c89242dbdfcc46a5d4ae0da",
+  "code_dirty": false,
+  "run_index": 2,
+  "complete_for_e6": true
+}

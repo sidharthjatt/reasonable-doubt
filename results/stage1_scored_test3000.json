@@ -1,0 +1,21 @@
+{
+  "what": "Stage 1 zero-shot API answers scored on ALL 3000 test_3000 rows",
+  "source": "results/stage1_results.json + results/test_logits_fp32_local_ce10ep_seed1.npz",
+  "scorer": "src.eval.metrics.score",
+  "classes_averaged": 100,
+  "note": "NOT the same scope as \u00a74's E8 entry, which scores the FIRST 1000 rows over the 97 classes present there. The two must not be compared.",
+  "models": {
+    "claude-haiku-4-5-20251001": {
+      "macro_f1": 0.5728399591389934,
+      "accuracy": 0.721,
+      "n": 3000,
+      "parse_failures": 0
+    },
+    "claude-sonnet-5": {
+      "macro_f1": 0.6148376610577307,
+      "accuracy": 0.7486666666666667,
+      "n": 3000,
+      "parse_failures": 0
+    }
+  }
+}
