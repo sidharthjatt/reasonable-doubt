@@ -4,13 +4,13 @@
 # Tier 2 is an API call. torch is NOT installed — the service loads ONNX through
 # onnxruntime and never touches the training stack.
 #
-# THE MODEL IS NOT IN THIS IMAGE. models/ is gitignored, 244 MB per artefact, and the
-# served one is going to change (E1b seed 1 replaces int8_ce_1 once seeds 2-3 land).
+# THE MODEL IS NOT IN THIS IMAGE. models/ is gitignored, 715 MB for the served FP32
+# artefact, and the served one HAS changed once already (E1b seed 1 replaced E1's, §3bc).
 # Baking it would make the image the source of truth for something configs/serve.yaml
 # decides. Mount it and point TIER0_MODEL_DIR at the mount:
 #
 #   docker run --rm -p 8000:8000 \
-#     -v "$PWD/models:/models:ro" -e TIER0_MODEL_DIR=/models/onnx_ce_1_fp32 \
+#     -v "$PWD/models:/models:ro" -e TIER0_MODEL_DIR=/models/onnx_ce10ep_1_fp32 \
 #     reasonable-doubt:local
 #
 # PRECISION IS FP32 (3bg). INT8 is qualified on no Linux target: it diverges between
@@ -33,7 +33,7 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    TIER0_MODEL_DIR=/models/onnx_ce_1_fp32 \
+    TIER0_MODEL_DIR=/models/onnx_ce10ep_1_fp32 \
     TIER0_PRECISION=fp32 \
     HF_HOME=/tmp/hf
 

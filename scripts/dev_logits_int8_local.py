@@ -1,6 +1,15 @@
-"""Produce dev_2000 INT8 logits ON THE MAC (arm64), for E5 on the deployed precision.
+"""Produce dev_2000 logits ON THE MAC (arm64), for E5 on the deployed precision.
 
-    python scripts/dev_logits_int8_local.py --int8-dir models/int8_ce_1 --seed 1
+    python scripts/dev_logits_int8_local.py --model-dir models/int8_ce_1 \
+        --precision int8 --seed 1
+    python scripts/dev_logits_int8_local.py --model-dir models/onnx_ce10ep_1_fp32 \
+        --precision fp32 --seed 1 --out results/dev_logits_fp32_local_ce10ep_seed1.npz
+
+**`--precision` IS REQUIRED AND HAS NO DEFAULT.** It is written into the npz's provenance
+block, which `scripts/calibrate_router_threshold.py` asserts against. This script used to
+hardcode `"int8"`, so pointing it at an FP32 artefact produced FP32 logits LABELLED int8 —
+a threshold calibrated on those would be refused for the wrong reason, or accepted for the
+wrong reason. A default would reintroduce exactly that, so there is none (hard rule 11).
 
 **This is inference, not a re-score, and the distinction matters.** The
 `dev_logits_int8_ce_seed*.npz` produced by the Kaggle dev run were computed by the same
@@ -37,14 +46,20 @@ from src.router.calibrate import assert_threshold_split  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--int8-dir", type=Path, required=True)
+    ap.add_argument("--model-dir", "--int8-dir", dest="model_dir", type=Path,
+                    required=True,
+                    help="any directory holding one *.onnx (INT8 or FP32)")
+    ap.add_argument("--precision", required=True, choices=("int8", "fp32"),
+                    help="the precision of --model-dir. REQUIRED, no default: it is "
+                         "recorded in the npz provenance and asserted by the calibrator.")
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--manifest", default="dev_2000")
     ap.add_argument("--max-length", type=int, default=512)
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
-    out = args.out or Path(f"results/dev_logits_int8_local_ce_seed{args.seed}.npz")
+    out = args.out or Path(f"results/dev_logits_{args.precision}_local_ce_"
+                           f"seed{args.seed}.npz")
 
     # The split guard runs on the NAME before any data is touched, so this script cannot
     # be pointed at test_3000 or train_holdout_3000 to manufacture a reporting number.
@@ -64,12 +79,13 @@ def main() -> int:
     labels = np.array([int(x) for x in split.select(man.indices)["label"]])
     absent = np.array(sorted(set(range(len(names))) - set(labels.tolist())), dtype=int)
 
-    tok = AutoTokenizer.from_pretrained(str(args.int8_dir))
-    sess = ort.InferenceSession(str(next(args.int8_dir.glob("*.onnx"))),
+    tok = AutoTokenizer.from_pretrained(str(args.model_dir))
+    sess = ort.InferenceSession(str(next(args.model_dir.glob("*.onnx"))),
                                 providers=["CPUExecutionProvider"])
     wanted = {i.name for i in sess.get_inputs()}
     print(f"manifest {man.name} sha={man.text_sha256[:16]}… ({len(texts)} rows)")
-    print(f"artefact {args.int8_dir}  providers={sess.get_providers()}")
+    print(f"artefact {args.model_dir} [{args.precision}]  "
+          f"providers={sess.get_providers()}")
 
     chunks = []
     for i in range(0, len(texts), args.batch_size):
@@ -90,13 +106,14 @@ def main() -> int:
         # Provenance travels IN the artefact. A filename can be copied or renamed; this
         # cannot be separated from the numbers it describes.
         provenance=np.array(json.dumps({
-            "precision": "int8", "isa": "arm64_local",
-            "artefact": str(args.int8_dir), "seed": args.seed,
+            "precision": args.precision, "isa": "arm64_local",
+            "artefact": str(args.model_dir), "seed": args.seed,
             "manifest": man.name, "manifest_sha256": man.text_sha256,
             "max_length": args.max_length, "batch_size": args.batch_size,
         })),
     )
-    print(f"\nwrote {out}  [precision=int8, isa=arm64_local, {len(logits)} rows]")
+    print(f"\nwrote {out}  [precision={args.precision}, isa=arm64_local, "
+          f"{len(logits)} rows]")
     print("NO macro-F1 printed: dev_2000 is calibration-only (hard rule 1).")
     return 0
 

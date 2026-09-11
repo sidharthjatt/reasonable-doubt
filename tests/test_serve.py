@@ -321,7 +321,7 @@ def test_no_price_is_hardcoded_in_the_service():
 
 def test_tier0_model_dir_comes_from_config_not_code(config):
     """E1b may replace int8_ce_1; a baked-in path would keep serving old weights."""
-    assert config.tier0_model_dir.name == "onnx_ce_1_fp32"
+    assert config.tier0_model_dir.name == "onnx_ce10ep_1_fp32"
     src = (ROOT / "src" / "serve" / "app.py").read_text()
     assert "int8_ce" not in src, "the artefact name must not appear in code"
 
@@ -331,7 +331,7 @@ def test_threshold_is_loaded_from_a_dev_calibrated_file(config):
     assert config.threshold.threshold == pytest.approx(d["threshold"])
     assert d["calibrated_on"] == "dev_2000"          # hard rule 1
     assert d["signal"] == "margin"
-    assert config.threshold.artefact.endswith("onnx_ce_1_fp32")
+    assert config.threshold.artefact.endswith("onnx_ce10ep_1_fp32")
 
 
 def test_the_router_never_computes_a_threshold_at_request_time(config):
@@ -844,7 +844,7 @@ def test_threshold_is_percentile_calibrated_at_the_registered_rate(config):
     assert d["calibration_mode"] == "percentile"
     assert d["precision"] == "fp32", "the served precision"
     assert d["target_escalation_rate"] == pytest.approx(0.040556)
-    assert d["source_npz"].endswith("dev_logits_fp32_local_ce_seed1.npz")
+    assert d["source_npz"].endswith("dev_logits_fp32_local_ce10ep_seed1.npz")
     assert d["isa"] == "arm64_local"
     assert "NOT AN ACCURACY CLAIM" in d["verdict_note"]
     assert d["achieved_escalation_rate_on_dev"] == pytest.approx(0.0406, abs=0.005)
@@ -1056,11 +1056,11 @@ def test_both_precisions_resolve_to_their_own_artefacts(monkeypatch):
     c32 = ServiceConfig.load()
 
     assert c8.tier0_model_dir.name == "int8_ce_1"
-    assert c32.tier0_model_dir.name == "onnx_ce_1_fp32"
+    assert c32.tier0_model_dir.name == "onnx_ce10ep_1_fp32"
     assert c8.threshold.precision == "int8" and c32.threshold.precision == "fp32"
     assert c8.threshold.threshold != c32.threshold.threshold
     assert c8.canary_measured_accuracy == 0.9000
-    assert c32.canary_measured_accuracy == 0.9150
+    assert c32.canary_measured_accuracy == 0.9550   # E1b seed 1, §3bc
 
 
 def test_the_int8_canary_floor_did_not_move():
@@ -1073,7 +1073,7 @@ def test_fp32_threshold_was_calibrated_on_fp32_dev_logits():
     d = json.loads((ROOT / "configs" / "router_threshold_fp32.json").read_text())
     assert d["precision"] == "fp32" and d["isa"] == "arm64_local"
     assert d["calibrated_on"] == "dev_2000"
-    assert d["source_npz"].endswith("dev_logits_fp32_local_ce_seed1.npz")
+    assert d["source_npz"].endswith("dev_logits_fp32_local_ce10ep_seed1.npz")
     assert d["target_escalation_rate"] == pytest.approx(0.040556)
 
 

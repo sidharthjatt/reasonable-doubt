@@ -25,13 +25,27 @@ tier0:
   # escalation rate nobody chose.
   precision: fp32          # fp32 | int8
 
-  # CONFIGURED, NOT HARDCODED. E1b may replace this with a 10-epoch artefact
-  # (fp32_ce10ep_1 -> int8_ce10ep_1). Changing the weights REQUIRES re-running
+  # SWAPPED TO E1b SEED 1 (§3bc, 2026-09-11). Previously models/onnx_ce_1_fp32 (E1).
+  #
+  # WHICH SEED, AND HOW IT WAS CHOSEN: by SELECTION macro-F1 on train_holdout_3000 —
+  # 0.819297 (seed 1) vs 0.815113 / 0.815256 — NOT by test_3000. Seed 1 is NOT the
+  # test-best of the three (seed 3 is, at FP32 0.813919 against seed 1's 0.811111), so
+  # the selection rule cost 0.0028 of test macro-F1 and was followed anyway. Choosing on
+  # test would have made test_3000 a selection split (hard rule 1).
+  #
+  # E1b DID NOT MEET ITS ACCEPT RULE (§3bi: INT8 3-seed mean 0.798744 < 0.80). That rule
+  # governs whether the EXPERIMENT is accepted, not which artefact is best to serve. On
+  # the served configuration — arm64 ONNX FP32, same scorer, same rows — E1b seed 1
+  # scores 0.809052 against E1 seed 1's 0.763053. Serving the worse artefact because the
+  # better one missed an INT8 bar would be a rule misapplied, not a rule respected.
+  #
+  # CONFIGURED, NOT HARDCODED. Changing the weights REQUIRES re-running
   # scripts/calibrate_router_threshold.py: the margin distribution moves with the
-  # weights, and router_threshold.json records which artefact it was calibrated on so
-  # a mismatch is refused at startup rather than served.
+  # weights — it moved 0.134668 -> 0.528864 here, 3.9x, at the SAME 4.056% escalation
+  # rate — and the threshold file records which artefact it was calibrated on so a
+  # mismatch is refused at startup rather than served.
   model_dir:
-    fp32: models/onnx_ce_1_fp32
+    fp32: models/onnx_ce10ep_1_fp32
     int8: models/int8_ce_1
   max_length: 512
 
@@ -93,22 +107,30 @@ canary:
   # failure it exists to catch: Kaggle's non-VNNI x86 scored these same weights at
   # macro-F1 0.0037, i.e. chance, WITH NO ERROR RAISED. HF Spaces is x86.
   #
-  # These are TRAIN rows the model was fitted on, so 0.9000 is NOT comparable to the
-  # test_3000 accuracy of 0.8563 and must never be reported as an accuracy result.
+  # These are TRAIN rows the model was fitted on, so the canary number is NOT comparable
+  # to any test_3000 accuracy and must never be reported as an accuracy result.
   # The ROW SET is precision-independent (the same 200 frozen TRAIN rows); the measured
   # accuracy is not, so it is keyed.
   row_set: configs/canary_200.json
   measured_accuracy:
-    # MEASURED ON BOTH PLATFORMS and identical on each: 183/200 on macOS-arm64 AND on
-    # Linux-aarch64, 0/200 prediction disagreements (3bg).
-    fp32: 0.9150
+    # E1b seed 1, MEASURED ON BOTH PLATFORMS: 191/200 on macOS-arm64 AND on
+    # Linux-aarch64 (§3bc, 2026-09-11).
+    # The E1 artefact re-measured on this host at 0.9150 = 183/200, reproducing §3bg's
+    # recorded value exactly — that is the control which says the harness did not move.
+    fp32: 0.9550
     # macOS-arm64 only. 0.6400 on Linux-aarch64 — which is why INT8 is not served.
     int8: 0.9000
   measured_on:
-    fp32: "arm64_local + linux/aarch64 container, models/onnx_ce_1_fp32, 2026-09-11"
+    fp32: "arm64_local + linux/aarch64 container, models/onnx_ce10ep_1_fp32, 2026-09-11"
     int8: "arm64_local (Apple Silicon) ONLY, models/int8_ce_1, 2026-09-10"
   min_accuracy:
-    # Both floors sit ~0.10-0.115 below their measured value, the 3bc construction.
+    # BOTH FLOORS STAY AT 0.80 ACROSS THE E1b SWAP, and the FP32 one is now SLACKER than
+    # §3bc's construction: that construction put a floor ~0.10-0.115 below measured,
+    # which at 0.9550 would give ~0.84-0.855. 0.80 sits 0.155 below. Held at 0.80
+    # deliberately so the swap changes ONE thing (the weights) and the refusal boundary
+    # is the same boundary §3bf and §3bg were measured against — but this is a CHOICE,
+    # not a derivation, and it makes the canary less sensitive than the construction
+    # would. Recorded rather than quietly re-derived; see §3bc.
     # The INT8 floor STAYS at 0.80 (3bf): a floor moved to accommodate a failing
     # platform stops measuring health.
     fp32: 0.80

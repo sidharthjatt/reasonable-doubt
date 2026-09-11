@@ -1404,6 +1404,135 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bk. SERVED MODEL SWAPPED to E1b seed 1 FP32 — registered under §3bc (2026-09-11)
+
+**NOT AN EXPERIMENT, NO ACCEPT RULE.** A deployment change, registered because §3bc exists
+so that every chosen serving value carries its basis. **Nothing here restates E6, H1 or
+E8 — those stay on E1 and were not rebuilt.**
+
+#### The choice of seed, made on SELECTION and not on test
+
+| seed | **selection** (`train_holdout_3000`) | test_3000 FP32 |
+|---|---|---|
+| **1** | **0.819297 ← chosen** | 0.811111 |
+| 2 | 0.815113 | 0.794219 |
+| 3 | 0.815256 | **0.813919 ← test-best** |
+
+> **THE SELECTION RULE COST 0.0028 OF TEST MACRO-F1 AND WAS FOLLOWED ANYWAY.** Seed 1 is
+> **not** the test-best; seed 3 is. Picking seed 3 would have turned `test_3000` into a
+> selection split (hard rule 1). That the two disagree is the only reason this is worth
+> recording: a selection rule that never costs anything has never been tested.
+
+**E1b DID NOT MEET ITS ACCEPT RULE (§3bi) AND THAT DOES NOT DECIDE THIS.** §3bi governs
+whether the *experiment* is accepted, on a 3-seed INT8 mean. This is a *deployment* choice
+between two artefacts, measured in the configuration that actually serves.
+
+#### What the served configuration measures — both artefacts, arm64 ONNX FP32, same scorer, same rows
+
+| | E1 seed 1 (served until now) | **E1b seed 1 (served now)** |
+|---|---|---|
+| `test_3000` macro-F1 | 0.763053 | **0.809052** |
+| canary, macOS-arm64 | 183/200 = 0.9150 | **191/200 = 0.9550** |
+| canary, Linux-aarch64 | 183/200 = 0.9150 | **191/200 = 0.9550** |
+| router threshold @ 4.056% | 0.134668 | **0.528864** |
+| retained Tier 0 acc on dev | 0.8775 | **0.9004** |
+
+**+0.045998 on the served configuration.** This is a **cross-host training** comparison and
+therefore **descriptive** under §3ak — but the question a deployment answers is *"what does
+the artefact score when served?"*, and both sides of this table were measured identically
+on this host, through the registered scorer, on the same rows.
+
+#### THE EXPORT PATH, CONTROLLED BEFORE IT WAS TRUSTED
+
+Kaggle **never ships** the FP32 ONNX (`kaggle_tier0.py` deletes it after the E3
+discriminator), so it must be exported locally. **The repo venv has drifted off the pin —
+`transformers 5.0.0` against the pinned `4.57.6` — and optimum's exporter does not import
+against it at all.** The pinned toolchain (`transformers 4.57.6`, `huggingface-hub 0.36.2`,
+`optimum 2.1.0`, `optimum-onnx 0.1.0`, `onnx 1.22.0`, `onnxruntime 1.29.0` — the exact
+line `kaggle_tier0.py` installs) was reconstructed to do the export.
+
+> **POSITIVE CONTROL, run before exporting anything new.** E1's `fp32_ce_1` was re-exported
+> through that reconstructed toolchain and compared against `models/onnx_ce_1_fp32` — the
+> bytes §3bg has been **serving**:
+>
+> `sha256 4363c460…f301` **both**. **BYTE-IDENTICAL.**
+>
+> So the export path used here reproduces the deployed artefact exactly, and the drift in
+> the repo venv did not touch the result. Without this control the new export would rest on
+> an environment nobody had validated.
+
+`scripts/export_fp32_onnx.py` is new and delegates to §3be's already-validated
+`export_fp32_onnx`, so the served export path and the validated export path cannot drift.
+It **refuses** to overwrite an existing export.
+
+#### A FINDING THAT GOES AGAINST THE SWAP, recorded in full
+
+§3bg established FP32 as platform-stable on **0/200** prediction disagreements for E1.
+**E1b seed 1 is measurably less stable:**
+
+| | E1 FP32 (§3bg) | **E1b FP32** |
+|---|---|---|
+| prediction disagreements, host vs container | **0/200** | **1/200** |
+| logit correlation | 0.99969 | **0.999144** |
+| median \|delta logit\| | 0.000002 | 0.00000286 |
+| max \|delta logit\| | 1.08 | **2.785** |
+| rows with max\|delta\| > 2.0 | 0/200 | **1/200** |
+
+**Deterministic, not flaky:** two container runs are **bit-identical** (max \|delta\|
+0.0000000000, 0/200), and the host-vs-container disagreement reproduces at exactly 1/200.
+
+**The divergent row, opened rather than summarised** — canary row 112, dataset index 30917,
+gold `Defined Terms`:
+
+| | prediction | margin |
+|---|---|---|
+| macOS-arm64 | `Representations` | **0.100370** |
+| Linux-aarch64 | `Definitions` | **0.572361** |
+
+- **Both platforms are WRONG on it**, which is why accuracy is identical at 191/200 on
+  each. Accuracy parity here is **not** evidence of prediction parity, and would have
+  hidden this entirely.
+- **IT STRADDLES THE ESCALATION THRESHOLD (0.528864), so the platform difference changes a
+  ROUTING decision, not just a label.** On the 200 canary rows the host escalates **3/200**
+  and the container **2/200** — that row is the whole difference.
+
+> **WHAT THIS DOES AND DOES NOT LICENSE.** It does not trip the canary floor, does not move
+> measured accuracy on either platform, and does not block the swap. It **does** mean
+> §3bg's *"FP32 shows 0/200 disagreements"* is a statement about **E1's artefact**, not a
+> general property of FP32, and it must not be carried forward as one. Whether a 1/200
+> cross-platform routing difference matters at the deployed escalation rate is **not
+> measured here** and is not claimed either way.
+
+#### Carried forward unchanged, and still wrong
+
+- **THE CANARY FLOOR STAYS AT 0.80, WHICH IS NOW SLACKER THAN §3bc'S CONSTRUCTION.** That
+  construction puts the floor ~0.10–0.115 below measured; at 0.9550 it would give
+  ~0.84–0.855. 0.80 sits **0.155** below. Held so the swap changes exactly one thing and
+  the refusal boundary stays the one §3bf/§3bg were measured against — **a choice, not a
+  derivation**, and it makes the canary less sensitive than the construction would.
+- **`estimated_cost_usd` IS STILL AN INT8 FIGURE** on every `/classify` response
+  (9.5968e-07 observed post-swap). §3bh's block is unchanged: correcting it requires an
+  unmeasured FP32 energy term in a billing path, which hard rule 11 forbids.
+- **E1's threshold is superseded, not archived** — `configs/router_threshold_fp32.json` was
+  overwritten and E1's calibration lives in git history, which is where a superseded
+  version-controlled config belongs. Unlike §3bg's precision rename there is no
+  unmarked-default risk: the file records its `artefact`, and `ServiceConfig` refuses at
+  startup when it does not match the served weights.
+
+#### Verified after the swap
+
+`/health` reports `tier0_fp32 → claude-sonnet-5`, `model_dir …/onnx_ce10ep_1_fp32`,
+canary `ran: true, accuracy 0.955, 191/200, floor 0.8, passed`. `/classify` with **no API
+key** answers `Governing Laws` at `tier_used=tier0`. Container built for `linux/arm64` and
+the startup canary fires inside it. **553 passed.** **No live Tier 2 call was made and
+nothing was appended to `results/spend_ledger.jsonl`.**
+
+#### Explicitly NOT done
+
+**E6, H1 and E8 were not rebuilt and still describe E1.** No frontier, break-even, gap or
+cost figure in this repository has been restated against E1b, and none may be read as
+having been.
+
 ### 3bj. E3's STATISTIC IS AMBIGUOUS, and E3 is NOT unscored — two corrections to §3bi (2026-09-11)
 
 **§3bi claimed "the first measured breach" and "E3 itself remains UNSCORED". Both are
@@ -2073,6 +2202,13 @@ in a config file with no provenance. The deployed service is `src/serve/`
 (**E4b-A**: Tier 0 INT8 → Claude Sonnet 5, no Tier 1).
 
 ---
+
+> **⚠ THE SERVED ARTEFACT AND ITS CANARY NUMBER HAVE CHANGED — see §3bk (2026-09-11).**
+> Tier 0 now serves **`models/onnx_ce10ep_1_fp32`** (E1b seed 1), canary **191/200 =
+> 0.9550** on macOS-arm64 *and* Linux-aarch64, router threshold **0.528864** at the same
+> registered 4.056%. **The floor below stays 0.80** and is now 0.155 under measured rather
+> than the ~0.10–0.115 this section constructs — held deliberately, recorded in §3bk. The
+> INT8 numbers in this section are unchanged and still describe `models/int8_ce_1`.
 
 #### 1. Tier 0 startup canary — floor **0.80**, from a measured **0.9000**
 
