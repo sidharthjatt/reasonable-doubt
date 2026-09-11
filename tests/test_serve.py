@@ -796,16 +796,32 @@ def test_spend_cap_is_configurable(config):
         "a serving cap at or above the project budget could consume the experiments"
 
 
-def test_the_real_ledger_holds_no_serving_entries():
-    """results/spend_ledger.jsonl is the record of REAL money (hard rule 12). No live
-    escalation has been made, so no serving run_id may appear in it. The suite-wide
-    tamper guard lives in conftest.py; this asserts the file's actual content."""
-    from src.api.ledger import DEFAULT_LEDGER_PATH
+def test_the_real_ledger_holds_exactly_the_recorded_live_run():
+    """results/spend_ledger.jsonl is the record of REAL money (hard rule 12).
 
-    for line in DEFAULT_LEDGER_PATH.read_text().splitlines():
-        if line.strip():
-            assert json.loads(line)["run_id"] != "serve_tier0_sonnet5", \
-                "a serving entry reached the real ledger; no live escalation has run"
+    The live smoke test made the service's first three real Claude calls on 2026-09-11:
+    input 145/221/479, the 1,080-token prefix written once then read twice, output
+    22/29/26, $0.007212 total. Pinned here so an accidental append or rewrite by this
+    suite shows up as a content failure, not just as the sha256 tamper guard in
+    conftest.py firing.
+    """
+    from src.api.ledger import SpendLedger
+
+    led = SpendLedger()
+    serving = [e for e in led.entries()
+               if e.run_id == "serve_tier0_sonnet5" and e.kind == "actual"]
+    assert len(serving) == 3
+    assert sum(e.cost_usd for e in serving) == pytest.approx(0.007212, abs=1e-9)
+
+    # hard rule 10: the three input fields are recorded separately, never summed
+    assert [e.input_tokens for e in serving] == [145, 221, 479]
+    assert [e.cache_creation_input_tokens for e in serving] == [1080, 0, 0]
+    assert [e.cache_read_input_tokens for e in serving] == [0, 1080, 1080]
+    assert [e.output_tokens for e in serving] == [22, 29, 26]
+
+    # and the serve cap sees only these, not the ~$3.58 of experiment spend
+    assert led.cumulative_usd(run_id="serve_tier0_sonnet5") == pytest.approx(0.007212)
+    assert led.cumulative_usd() > 3.5
 
 
 # ----------------------------------------------------- the recalibrated threshold

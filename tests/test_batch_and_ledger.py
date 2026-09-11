@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
 
 from src.api.batch import (
     CACHE_TTL,
@@ -600,3 +603,94 @@ def test_distinct_prefixes_make_multi_model_legs_safe(tmp_path):
     assert {parse_custom_id(i)[1] for i in ids} == {12, 45}
     client = BatchClient(FakeAPI(), state_dir=tmp_path)
     client.submit("s1", a + b, model="two", manifest_name="test_3000")
+
+
+# ------------------------------- a cache MISS is a cache WRITE, not plain input
+
+
+def test_pessimistic_bound_bills_every_missed_prefix_as_a_cache_write():
+    """THE BOUND WAS NOT AN UPPER BOUND. With `cache_control` on the system block a
+    request that misses WRITES the cache — 2.0x base input at 1h TTL — but the branch
+    billed the missed prefix at 1.0x, so the gating figure sat BELOW a full-miss run."""
+    kw = dict(provider="anthropic", model="claude-sonnet-5", n_requests=5,
+              system_tokens=1000, per_request_input_tokens=[100] * 5,
+              expected_output_tokens=20, cache_ttl="1h", batch=False)
+    p = estimate_run_cost("r", assume_cache_hits=False, **kw)
+
+    assert p.cache_write_tokens == 1000 * 5, "every request must write on a full miss"
+    assert p.cache_read_tokens == 0
+    assert p.input_tokens == 500, "the prefix must NOT be folded into plain input"
+
+    card = yaml.safe_load((ROOT / "configs" / "costs.yaml").read_text())
+    rate = card["providers"]["anthropic"]["models"]["claude-sonnet-5"]
+    write_mult = card["modifiers"]["cache_write_multipliers"]["1h"]
+    expected = (500 * rate["input"]
+                + 5 * 1000 * rate["input"] * write_mult
+                + 5 * 20 * rate["output"]) / 1_000_000
+    assert p.estimated_usd == pytest.approx(expected)
+
+    as_plain_input = (500 * rate["input"]
+                      + 5 * 1000 * rate["input"]
+                      + 5 * 20 * rate["output"]) / 1_000_000
+    assert p.estimated_usd > as_plain_input, \
+        "the old bound priced the missed prefix as plain input and was too low"
+
+
+def test_optimistic_bound_is_first_writes_rest_read():
+    p = estimate_run_cost(
+        "r", provider="anthropic", model="claude-sonnet-5", n_requests=5,
+        system_tokens=1000, per_request_input_tokens=[100] * 5,
+        expected_output_tokens=20, cache_ttl="1h", assume_cache_hits=True)
+    assert p.cache_write_tokens == 1000, "written once"
+    assert p.cache_read_tokens == 1000 * 4, "read by every later request"
+
+
+def test_the_5m_ttl_uses_its_own_write_multiplier():
+    """Write pricing is TTL-dependent (1.25x at 5m, 2.0x at 1h), so the bound must move
+    with the TTL rather than assuming the project default."""
+    kw = dict(provider="anthropic", model="claude-sonnet-5", n_requests=4,
+              system_tokens=1000, per_request_input_tokens=[50] * 4,
+              expected_output_tokens=10, assume_cache_hits=False)
+    short = estimate_run_cost("r", cache_ttl="5m", **kw)
+    long = estimate_run_cost("r", cache_ttl="1h", **kw)
+    assert long.estimated_usd > short.estimated_usd
+
+
+def test_the_bracket_contains_the_measured_live_run():
+    """Against the FIRST REAL Tier 2 calls, recorded in results/spend_ledger.jsonl:
+    input 145/221/479, prefix 1080 written once then read twice, output 22/29/26,
+    total $0.007212."""
+    est = estimate_run_cost_bracket(
+        "serve_tier0_sonnet5", provider="anthropic", model="claude-sonnet-5",
+        n_requests=3, system_tokens=1080, per_request_input_tokens=[145, 221, 479],
+        expected_output_tokens=40, batch=False, cache_ttl="1h")
+    actual = 0.007212
+    assert est.gating_usd > actual, "the gating figure must sit above what happened"
+    assert est.gating_usd == pytest.approx(0.015850, abs=1e-6)
+    assert est.optimistic_usd == pytest.approx(0.007642, abs=1e-6)
+
+
+def test_the_optimistic_model_reproduces_the_live_cost_exactly():
+    """Fed the OBSERVED output tokens rather than the 40-token budget, the
+    first-writes-rest-read model lands on the ledger's figure to the cent — so the model
+    is right and the only slack in the bracket is the output budget."""
+    from src.api.cost import compute_cost
+
+    usd = compute_cost("claude-sonnet-5", input_tokens=145 + 221 + 479,
+                       cache_write_tokens=1080, cache_read_tokens=2 * 1080,
+                       output_tokens=22 + 29 + 26, batch=False, cache_ttl="1h")
+    assert usd == pytest.approx(0.007212, abs=1e-9)
+
+
+def test_no_declared_prefix_says_so_instead_of_faking_a_bracket():
+    """scripts/submit_batch.py passes system_tokens=0 with the whole request folded into
+    per_request_input_tokens, so both bounds coincide and neither models cache-write
+    pricing. That must be stated, not presented as a bracket."""
+    est = estimate_run_cost_bracket(
+        "r", provider="anthropic", model="claude-sonnet-5", n_requests=3,
+        system_tokens=0, per_request_input_tokens=[1200] * 3,
+        expected_output_tokens=40, batch=True, cache_ttl="1h")
+    assert est.gating_usd == pytest.approx(est.optimistic_usd)
+    joined = " ".join(est.pessimistic.assumptions)
+    assert "NO CACHEABLE PREFIX DECLARED" in joined
+    assert "NOT an upper bound" in joined

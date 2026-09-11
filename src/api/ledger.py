@@ -175,13 +175,37 @@ def estimate_run_cost(
             "NOT be used to gate spend",
         ]
     else:
-        cache_write = 0
+        # A CACHE MISS IS A CACHE *WRITE*, NOT PLAIN INPUT — and that is why this branch
+        # was not an upper bound. Once `cache_control` is on the system block, every
+        # request that does not hit the cache WRITES it, billed at the write multiplier:
+        # 2.0x base input at 1h TTL, 1.25x at 5m. The old code billed the missed prefix
+        # at 1.0x, so the "pessimistic" figure was BELOW what a full-miss run actually
+        # costs — by a factor of 2 on the prefix at our 1h default.
+        #
+        # MEASURED, not argued. The first live Tier 2 call billed input=145,
+        # cache_creation=1080, output=22 for $0.004830. The same request priced as plain
+        # input is (145+1080)*2.0 + 22*10.0 = $0.002670 — the old bound would have been
+        # breached by 81% on a single request. Three requests only came in under it
+        # because two of them were cache READS at 0.1x, which is luck, not headroom.
+        cache_write = system_tokens * n_requests
         cache_read = 0
-        uncached_input = variable_input + system_tokens * n_requests
+        uncached_input = variable_input
         assumptions = [
-            "PESSIMISTIC bound: NO cache hits; prefix billed in full on every request",
+            "PESSIMISTIC bound: NO cache hits, so EVERY request WRITES the cacheable "
+            f"prefix (billed at the {cache_ttl} write multiplier, not at plain input)",
             "this is the figure that gates spend — it is what can actually happen",
         ]
+
+    if system_tokens == 0:
+        # Both branches collapse when no prefix is declared, and the caller may still be
+        # sending cache_control. Say so, loudly, rather than presenting two identical
+        # numbers as a bracket: scripts/submit_batch.py passes system_tokens=0 with the
+        # whole request folded into per_request_input_tokens, so its bounds coincide and
+        # NEITHER models cache-write pricing.
+        assumptions.append(
+            "NO CACHEABLE PREFIX DECLARED (system_tokens=0): both bounds collapse to "
+            "plain input and NEITHER models cache-write pricing. If this run actually "
+            "sends cache_control, the gating figure is NOT an upper bound.")
 
     estimated = compute_cost(
         model,
