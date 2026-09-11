@@ -111,6 +111,9 @@ Xeon, the INT8 export of the served weights scored macro-F1 **0.000166**. That i
 a 100-class problem. No error was raised anywhere. The same weights at FP32 scored 0.8115
 in the same process.
 
+That 0.8115 is the served model, scored on a different platform from the 0.8091 in section
+1. The FP32 cross-ISA accuracy gap is **0.0024**, measured, and not zero.
+
 ![INT8 vs FP32 by ISA](docs/figures/int8_vs_fp32_by_isa.png)
 *Left: macro-F1 on the same 3,000 rows, same weights. The Xeon has `avx512f` and `avx2` but
 no `avx512_vnni`. Right: a different metric, the 200-row startup canary, showing the
@@ -127,12 +130,32 @@ confirm the mechanism and do not claim it (§3bf).
 The startup canary caught this. It classifies 200 fixed rows before the server binds and
 refuses to start below a floor. It is the reason the service is FP32 today.
 
-FP32 reproduces its reference exactly on every platform tested: 191/200 on macOS arm64,
-Linux aarch64, and an emulated Linux x86 build, with a floor of 0.80.
+**FP32 never diverged in accuracy on any platform tested.** The served artefact scores
+191/200 on macOS arm64, on Linux aarch64, and on an emulated Linux x86 build, against a
+floor of 0.80.
+
+**It is not bit-identical across those platforms either.** E1's artefact showed 0/200
+prediction disagreements between host and container. The served E1b artefact shows
+**1/200**, deterministically: two container runs are bit-identical to each other, and the
+one disagreement reproduces every time. Logit correlation is 0.999144 and the largest
+single logit difference is 2.785.
+
+Accuracy was 191/200 on both sides, because the row in question is wrong on both. The two
+platforms just picked different wrong labels. What moved is the margin on that row, 0.1004
+on the host against 0.5724 in the container, which straddles the escalation threshold of
+0.5289. One platform would have flagged that clause for review and the other would not.
+
+This is the same hiding-in-plain-sight shape as the INT8 collapse, one order of magnitude
+quieter. An accuracy check would have called the two platforms identical. **That is why the
+canary compares predictions and not only the accuracy they add up to.** Whether a 1/200
+cross-platform routing difference matters in production is not measured and I do not claim
+either way (§3bk).
 
 ### The cheaper model costs more
 
-Haiku 4.5's published rates are half of Sonnet 5's. Per clause it cost **1.18× more**.
+Haiku 4.5's published rates are half of Sonnet 5's. Per clause it cost **1.21× more**
+($0.52642 against $0.43610, both measured). The pre-registered note at §3j says 1.18×; that
+was computed from projected costs before the batch ran, and 1.21× is what the ledger shows.
 
 Haiku's minimum cacheable prefix is 4,096 tokens and its prefix under this prompt is 793,
 short by 3,303. Sonnet 5's minimum is 1,024 and its prefix is 1,084, clearing by 60 tokens.
@@ -180,15 +203,16 @@ afterwards." That sentence existing before the number is the only reason this is
 rather than arguable.
 
 The hypothesis was still supported. On the one-variable comparison (same host, 3 epochs
-versus 10, both environments recorded) the gain is **+0.0386** at n = 1. Undertraining
+versus 10, both environments recorded) the gain is **+0.0386** at n = 1, computed from the
+two run files. (§3be reports +0.0385, the difference of two four-decimal rounded figures.) Undertraining
 explains most of E1's gap and not all of it. Selection best was the final epoch for two of
 three seeds, so 10 epochs is plausibly still short. That is an observation and not a
 rescue; a 20-epoch run is a new experiment needing its own registration.
 
 ### The FP32-versus-INT8 speed penalty is unresolved
 
-I measured FP32 throughput twice on the same artefact and got 24.2966 req/s and 29.1437
-req/s. An interleaved control settled which effect that was: alternating the two artefacts
+FP32 throughput on the same artefact came out at 24.2966 req/s in one session (9 runs
+across three artefacts) and 29.1437 req/s in a later one (3 runs). An interleaved control settled which effect that was: alternating the two artefacts
 in one session gives an artefact difference of +0.72 req/s, inside the within-session sd,
 while the same artefact across sessions moves **+19.95%**.
 
