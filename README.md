@@ -136,9 +136,10 @@ it is not a summary of the report; it is what the report is accountable to.
 
 ## Licence and attribution
 
-The model is a derivative of LEDGAR as distributed in LexGLUE (CC-BY-4.0) and of
-`microsoft/deberta-v3-base` (MIT), and is released under CC-BY-4.0. Citations and licence
-notices are on the
+**The code in this repository is MIT ([LICENSE](LICENSE)). The trained weights are
+CC-BY-4.0, which is a different licence with an attribution requirement.** The weights carry
+it because they derive from LEDGAR as distributed in LexGLUE (CC-BY-4.0) and from
+`microsoft/deberta-v3-base` (MIT). Citations and full licence notices are on the
 [model card](https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar).
 
 Research artefact, trained on 2016–2017 US SEC EDGAR filings and tested on 2019. Not legal
