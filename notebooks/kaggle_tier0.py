@@ -124,41 +124,63 @@ print("  PREFLIGHT: transformers version is inside optimum-onnx's supported rang
 # The budget and resume values are DERIVED from this declaration below rather than set
 # by hand, so the two cannot drift apart again.
 #
-# Seeds 2-3 are deliberately absent: they are armed only AFTER the E1b seed-1 gate is
-# read (3ar). Adding them here before the gate would pre-commit the spend the gate exists
-# to decide.
+# SEEDS 2-3 ARE ARMED as of 2026-09-11, after the seed-1 gate was read at 0.7974 INT8
+# against T = 0.7908 — ON TRACK (3ar, 3be). They were deliberately absent until then,
+# because arming them earlier would have pre-committed the spend the gate exists to decide.
+#
+# EACH ARM IS ONE KAGGLE NOTEBOOK. Seeds 2 and 3 run as SEPARATE notebooks in parallel, so
+# each has its OWN /kaggle/working and they cannot collide on disk. The only shared surface
+# is the attached notebook input, and the RESTORE block already refuses more than one
+# input carrying Tier 0 artefacts.
 RUN_ARM = None      # REQUIRED. See ARMS below for the permitted values.
 
+# arm -> mode, seeds, step budget, minimum resume step, description.
+# `seeds` is DERIVED from the arm rather than hand-set, for the same reason budget and
+# resume are: a seed list left over from another arm looks exactly like a correct one, and
+# would train the wrong seed into the right-looking filenames.
 ARMS = {
-    # arm -> (RUN_STEP_BUDGET, RESUME_FROM_STEP_AT_LEAST, description)
-    "e1b_commit1": (17815, 0,
-                    "E1b seed 1, steps 1-17,815 (epochs 1-5). RAN 2026-09-10."),
+    "e1b_commit1": {
+        "mode": "e1b", "seeds": [1], "budget": 17815, "resume": 0,
+        "desc": "E1b seed 1, steps 1-17,815 (epochs 1-5). RAN 2026-09-10."},
     # FULLY CORROBORATED BY THE KAGGLE LOG (3bd), not by this repo -- commit 2's arm was
     # set on the Kaggle copy and never came back here.
-    #   RESUME_FROM_STEP_AT_LEAST=17815 : "restored 1: ['ck_ce10ep_1']",
-    #       "=== seed 1 (RESUMING) ===", "[train] begin at step 17815 of 35630"
-    #   RUN_STEP_BUDGET=None            : the run ended "ALL SEEDS DONE" with NO
-    #       "COMMIT STEP BUDGET EXHAUSTED" line -- the budget never fired, which is the
-    #       only observable that distinguishes None from a budget that stopped it early
-    #       and left a partial seed reporting as complete.
-    "e1b_commit2": (None, 17815,
-                    "E1b seed 1, steps 17,815-35,630 (epochs 6-10). RAN 2026-09-11 on "
-                    "PRE-PIN code under onnxruntime 1.30.0. Fully corroborated by log."),
-    "host_baseline": (None, 0,
-                      "E1's own 3-epoch config on this host (3ak step 1). RAN 2026-09-10 "
-                      "under onnxruntime 1.29.0."),
+    #   resume=17815 : "restored 1: ['ck_ce10ep_1']", "=== seed 1 (RESUMING) ===",
+    #       "[train] begin at step 17815 of 35630"
+    #   budget=None  : ended "ALL SEEDS DONE" with NO "COMMIT STEP BUDGET EXHAUSTED" --
+    #       the only observable separating None from a budget that stopped it early and
+    #       left a partial seed reporting as complete.
+    "e1b_commit2": {
+        "mode": "e1b", "seeds": [1], "budget": None, "resume": 17815,
+        "desc": "E1b seed 1, steps 17,815-35,630 (epochs 6-10). RAN 2026-09-11 on "
+                "PRE-PIN code under onnxruntime 1.30.0. Fully corroborated by log."},
+
+    # ---- SEEDS 2 AND 3, same two-commit shape as seed 1 (3bb) -----------------------
+    # Artefacts are seed-keyed throughout (ck_ce10ep_<seed>, fp32_ce10ep_<seed>,
+    # int8_ce10ep_<seed>, tier0_ce10ep_seed<seed>.json, logits_ce10ep_seed<seed>.npz), so
+    # seed 2's and seed 3's outputs share no filename. EPOCHS stays 10 in every commit:
+    # num_train_epochs drives the LR schedule, and moving it would be a different
+    # experiment reported by nothing (3bb).
+    "e1b_s2_c1": {
+        "mode": "e1b", "seeds": [2], "budget": 17815, "resume": 0,
+        "desc": "E1b seed 2, steps 1-17,815 (epochs 1-5). Attach NO notebook input."},
+    "e1b_s2_c2": {
+        "mode": "e1b", "seeds": [2], "budget": None, "resume": 17815,
+        "desc": "E1b seed 2, steps 17,815-35,630 (epochs 6-10). Attach ONLY seed 2's "
+                "commit-1 output."},
+    "e1b_s3_c1": {
+        "mode": "e1b", "seeds": [3], "budget": 17815, "resume": 0,
+        "desc": "E1b seed 3, steps 1-17,815 (epochs 1-5). Attach NO notebook input."},
+    "e1b_s3_c2": {
+        "mode": "e1b", "seeds": [3], "budget": None, "resume": 17815,
+        "desc": "E1b seed 3, steps 17,815-35,630 (epochs 6-10). Attach ONLY seed 3's "
+                "commit-1 output."},
+
+    "host_baseline": {
+        "mode": "host_baseline", "seeds": [1], "budget": None, "resume": 0,
+        "desc": "E1's own 3-epoch config on this host (3ak step 1). RAN 2026-09-10 "
+                "under onnxruntime 1.29.0."},
 }
 
-# THE QUANTISER TOOLCHAIN IS ASSERTED, NOT PRINTED. The install cell pins it, but a pin
-# that did not take looks exactly like one that did -- and this notebook has already
-# shipped a PREFLIGHT that "passed" while running versions nothing introspected. The gate
-# compares INT8 artefacts ACROSS RUNS (E1b INT8 vs host baseline INT8, 3ar/3as), so every
-# component that can move the quantised bytes must be identical in every one of them.
-#
-# Versions are read from importlib.metadata -- the INSTALLED DISTRIBUTION -- not from a
-# module attribute. `optimum.__version__` does not exist and `optimum.onnx.__version__`
-# is None, so an attribute check would have silently skipped exactly the two packages
-# whose drift this guard exists to catch.
 _PINNED_TOOLCHAIN = {          # from the rd-tier0-hostb pip log; see the install cell
     "onnxruntime": "1.29.0",
     "optimum": "2.1.0",
@@ -195,12 +217,15 @@ if RUN_ARM is None:
         "here after commit 2 was armed elsewhere, and a blind re-upload would have "
         "silently repeated epochs 1-5 for ~4h).\n"
         f"Set RUN_ARM to one of: {sorted(ARMS)}\n"
-        + "\n".join(f"    {k}: budget={v[0]} resume_at_least={v[1]} — {v[2]}"
+        + "\n".join(f"    {k}: seeds={v['seeds']} budget={v['budget']} "
+                     f"resume_at_least={v['resume']} — {v['desc']}"
                      for k, v in sorted(ARMS.items())))
 if RUN_ARM not in ARMS:
     raise RuntimeError(f"RUN_ARM={RUN_ARM!r} is not a known arm; expected one of "
                        f"{sorted(ARMS)}")
-print(f"  PREFLIGHT: RUN_ARM={RUN_ARM!r} — {ARMS[RUN_ARM][2]}")
+_ARM = ARMS[RUN_ARM]
+print(f"  PREFLIGHT: RUN_ARM={RUN_ARM!r} seeds={_ARM['seeds']} "
+      f"budget={_ARM['budget']} resume_at_least={_ARM['resume']} — {_ARM['desc']}")
 print("PREFLIGHT — validating signatures before anything expensive")
 _require(TrainingArguments, ["output_dir","seed","num_train_epochs","learning_rate",
     "per_device_train_batch_size","per_device_eval_batch_size","eval_strategy",
@@ -270,9 +295,25 @@ assert not (E1B and HOST_BASELINE), (
     "E1B and HOST_BASELINE are different experiments and must not run in the same commit: "
     "they would share a RUN_TAG namespace decision and the second would overwrite the first")
 
+# THE ARM AND THE MODE FLAGS MUST AGREE. E1B/HOST_BASELINE are separate switches from
+# RUN_ARM, so they can disagree with it — and one of them has already been left True from a
+# previous run. The mutual-exclusion assert below would have caught that, but only at
+# runtime after a GPU slot was spent. This catches the arm/flag desync instead.
+_want_mode = ARMS[RUN_ARM]["mode"]
+_have_mode = ("e1b" if E1B else "host_baseline" if HOST_BASELINE else "plain")
+if _have_mode != _want_mode:
+    raise RuntimeError(
+        f"RUN_ARM={RUN_ARM!r} declares mode {_want_mode!r}, but the flags say "
+        f"{_have_mode!r} (E1B={E1B}, HOST_BASELINE={HOST_BASELINE}). Refusing: the arm "
+        f"and the flags select DIFFERENT experiments, and whichever ran would be named "
+        f"by the other.")
+
 RUN_TAG = LOSS_ARM
 if E1B:
-    EPOCHS, RUN_TAG, SEEDS = 10, f"{LOSS_ARM}10ep", [1]   # seed 1 GATES seeds 2-3 (E1b)
+    # SEEDS comes from the ARM, never hand-set: a seed list left over from another arm
+    # looks exactly like a correct one and would train the wrong seed into the
+    # right-looking filenames.
+    EPOCHS, RUN_TAG, SEEDS = 10, f"{LOSS_ARM}10ep", list(ARMS[RUN_ARM]["seeds"])
     print(f"E1b MODE: EPOCHS={EPOCHS}, RUN_TAG={RUN_TAG!r}, SEEDS={SEEDS} — "
           f"seed 1 is a GATE, not a result (hard rule 2 needs >=3 seeds)")
     print("GATE IS ON INT8 (PREREGISTRATION 3ar) AND THIS HOST CANNOT COMPUTE IT: "
@@ -280,7 +321,7 @@ if E1B:
           "Xeon. The INT8 figure below is E3's DIAGNOSTIC only. Download fp32_"
           f"{RUN_TAG}_1/ and score it on arm64 (3as steps 3-6) before the gate is read.")
 if HOST_BASELINE:
-    EPOCHS, RUN_TAG, SEEDS = 3, f"{LOSS_ARM}_hostB", [1]  # E1's config, this host, n=1
+    EPOCHS, RUN_TAG, SEEDS = 3, f"{LOSS_ARM}_hostB", list(ARMS[RUN_ARM]["seeds"])
     print(f"HOST BASELINE MODE: EPOCHS={EPOCHS}, RUN_TAG={RUN_TAG!r}, SEEDS={SEEDS} — "
           f"E1's config on THIS host. n=1, NO variance estimate; it is a host-effect "
           f"measurement (3ak step 1), not a replacement for E1.")
@@ -677,7 +718,8 @@ class FlushingLog(TrainerCallback):
 #   the failure class this project keeps paying for (3s) — so it is asserted, not trusted.
 # DERIVED FROM RUN_ARM, never set by hand. Hand-setting these is what let the committed
 # file and the executed run disagree after E1b commit 1.
-RUN_STEP_BUDGET, RESUME_FROM_STEP_AT_LEAST = ARMS[RUN_ARM][0], ARMS[RUN_ARM][1]
+RUN_STEP_BUDGET = ARMS[RUN_ARM]["budget"]
+RESUME_FROM_STEP_AT_LEAST = ARMS[RUN_ARM]["resume"]
 print(f"ARM {RUN_ARM!r}: RUN_STEP_BUDGET={RUN_STEP_BUDGET} "
       f"RESUME_FROM_STEP_AT_LEAST={RESUME_FROM_STEP_AT_LEAST}")
 _IN_NB = Path("/kaggle/input/notebooks")
@@ -779,6 +821,20 @@ for seed in SEEDS:
     resume = (not skip_training) and ckpt_dir.exists() and any(ckpt_dir.glob("checkpoint-*"))
     print(f"\n=== seed {seed} ("
           f"{'fp32 EXISTS, skipping training' if skip_training else ('RESUMING' if resume else 'fresh')}) ===")
+    # A CONTINUATION COMMIT MUST ACTUALLY CONTINUE. RESUME_FROM_STEP_AT_LEAST > 0 means
+    # this commit is a continuation, so `resume` must be True. The existing assert after
+    # train() compares the FINAL global_step, which for an UNBOUNDED continuation cannot
+    # tell a healthy resume from a silent restore failure: both end at 35,630. A fresh
+    # start here is not a wrong RESULT -- 10 epochs from scratch is still E1b -- but it is
+    # ~8.1-8.6h against a 9h cap instead of ~4.0-4.6h, so it would most likely die at the
+    # cap with nothing attachable, after burning the slot.
+    if RESUME_FROM_STEP_AT_LEAST and not (resume or skip_training):
+        raise RuntimeError(
+            f"seed {seed}: this arm ({RUN_ARM}) resumes from step "
+            f"{RESUME_FROM_STEP_AT_LEAST}, but no checkpoint was found in {ckpt_dir}. "
+            f"The restore did not carry the previous commit's checkpoint -- check that "
+            f"the RIGHT notebook input is attached (this seed's commit-1 output, and only "
+            f"that one). Refusing to silently retrain from scratch.")
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 

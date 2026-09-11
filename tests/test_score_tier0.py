@@ -119,20 +119,93 @@ def test_e1_headline_is_unaffected_by_the_convention_change():
     assert auth.report.classes_averaged == 100
 
 
-def test_npz_int8_is_scored_against_fp32_labels_with_a_length_check(tmp_path):
-    rng = np.random.default_rng(5)
-    labels = rng.integers(0, 100, 300)
-    p = tmp_path / "l.npz"
+def _realistic_npz(tmp_path, name="l.npz", *, n_full=10_000, n_split=3000, seed=5):
+    """The REAL Tier 0 npz layout: `test_logits` is the FULL test split, and
+    `test_3000_indices` selects the manifest rows out of it. INT8 arrays are already
+    stored at the split's size."""
+    rng = np.random.default_rng(seed)
+    labels = rng.integers(0, 100, n_full)
+    idx = np.sort(rng.choice(n_full, size=n_split, replace=False))
+    p = tmp_path / name
     np.savez_compressed(p, test_logits=logits_for(labels), test_labels=labels,
-                        test_3000_logits=logits_for(labels, seed=9))
-    s = score_npz(p, NAMES, split="test_3000", precision="int8")
-    assert s.precision == "int8" and s.report.n == 300
+                        test_3000_indices=idx,
+                        test_3000_logits=logits_for(labels[idx], seed=9))
+    return p, labels, idx
 
+
+def test_npz_int8_is_scored_against_fp32_labels_with_a_length_check(tmp_path):
+    p, labels, idx = _realistic_npz(tmp_path)
+    s = score_npz(p, NAMES, split="test_3000", precision="int8")
+    assert s.precision == "int8" and s.report.n == 3000
+
+    rng = np.random.default_rng(5)
     bad = tmp_path / "bad.npz"
     np.savez_compressed(bad, test_logits=logits_for(labels), test_labels=labels,
-                        test_3000_logits=logits_for(labels[:100], seed=9))
+                        test_3000_indices=idx,
+                        test_3000_logits=logits_for(labels[idx][:100], seed=9))
     with pytest.raises(ValueError, match="same rows in the same order"):
         score_npz(bad, NAMES, split="test_3000", precision="int8")
+
+
+# ------------------------------------------- the 10k-vs-3000 mix-up cannot recur
+
+
+def test_fp32_test_3000_is_subset_by_indices_not_scored_whole(tmp_path):
+    """`test_logits` is the FULL 10,000-row test split in EVERY Tier 0 npz. Scoring it
+    whole and labelling it test_3000 gives a plausible wrong number — on the real
+    logits_ce_seed1.npz it was 0.766747 over n=10,000 against 0.763591 over n=3,000."""
+    p, labels, idx = _realistic_npz(tmp_path)
+    s = score_npz(p, NAMES, split="test_3000", precision="fp32")
+    assert s.report.n == 3000, "fp32 test_3000 must be the manifest rows, not all 10,000"
+
+    whole = score_from_logits(logits_for(labels), labels, NAMES,
+                              split="test_3000", precision="fp32")
+    assert whole.report.n == 10_000
+    assert s.report.macro_f1 != pytest.approx(whole.report.macro_f1, abs=1e-9), \
+        "the subset and the whole split must not coincide, or this test proves nothing"
+
+
+def test_an_oversized_array_with_no_index_is_refused(tmp_path):
+    """No silent fallback to scoring whatever is there (hard rule 11)."""
+    from src.eval.score_tier0 import SplitRowCountError
+
+    rng = np.random.default_rng(7)
+    labels = rng.integers(0, 100, 10_000)
+    p = tmp_path / "noidx.npz"
+    np.savez_compressed(p, test_logits=logits_for(labels), test_labels=labels)
+    with pytest.raises(SplitRowCountError, match="No usable"):
+        score_npz(p, NAMES, split="test_3000", precision="fp32")
+
+
+def test_a_wrong_sized_index_array_is_refused(tmp_path):
+    from src.eval.score_tier0 import SplitRowCountError
+
+    rng = np.random.default_rng(8)
+    labels = rng.integers(0, 100, 10_000)
+    p = tmp_path / "badidx.npz"
+    np.savez_compressed(p, test_logits=logits_for(labels), test_labels=labels,
+                        test_3000_indices=np.arange(2500))
+    with pytest.raises(SplitRowCountError, match="2500 entries"):
+        score_npz(p, NAMES, split="test_3000", precision="fp32")
+
+
+def test_real_npz_matches_the_recorded_test_3000_figure():
+    """End to end against a committed artefact and its recorded metric."""
+    import json
+    from pathlib import Path
+
+    from src.data.labels import load_labels
+
+    root = Path(__file__).resolve().parents[1]
+    npz = root / "results" / "logits_ce_seed1.npz"
+    rec = root / "results" / "tier0_ce_seed1.json"
+    if not (npz.exists() and rec.exists()):
+        pytest.skip("E1 seed-1 artefacts not present")
+
+    s = score_npz(npz, load_labels(), split="test_3000", precision="fp32")
+    expected = json.loads(rec.read_text())["test_3000_fp32"]["macro_f1"]
+    assert s.report.n == 3000
+    assert s.report.macro_f1 == pytest.approx(expected, abs=1e-9)
 
 
 def test_scores_carry_their_provenance():

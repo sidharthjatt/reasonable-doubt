@@ -35,6 +35,59 @@ _FP32 = {"test_3000": ("test_logits", "test_labels"),
 _INT8 = {"test_3000": ("test_3000_logits", None),
          "dev_2000": ("dev_2000_logits", None)}
 
+# HOW MANY ROWS EACH SPLIT MUST HAVE, and how to get them if the array holds more.
+#
+# THIS EXISTS BECAUSE THE ARRAYS DO NOT ALL MEAN WHAT THEIR SPLIT NAME SAYS.
+# `test_logits` in every Tier 0 npz is the FULL 10,000-row test split, NOT the 3,000-row
+# `test_3000` manifest. Scoring it whole and labelling the answer `test_3000` yields a
+# plausible, wrong number: on logits_ce_seed1.npz it gives 0.766747 over n=10,000 against
+# the true test_3000 figure of 0.763591, a +0.0032 difference with nothing saying so. The
+# npz carries `test_3000_indices` precisely so the subset can be taken, and taking it is
+# now mandatory rather than remembered.
+#
+# `sel_logits` and `dev_logits` are already stored pre-subset at their split's size, so
+# they need no indices — but they are still row-count checked, because "already correct"
+# is a property of today's writer, not a guarantee.
+_EXPECTED_N = {"test_3000": 3000, "dev_2000": 2000, "train_holdout_3000": 3000}
+_INDEX_KEY = {"test_3000": "test_3000_indices", "dev_2000": "dev_2000_indices"}
+
+
+class SplitRowCountError(ValueError):
+    """An npz array did not hold the number of rows its split name claims."""
+
+
+def subset_to_split(logits, labels, z, *, split: str, precision: str):
+    """Return exactly the rows of ``split``, or raise. Never returns a superset.
+
+    Takes the index array when the stored array is larger than the split, and refuses
+    outright when the count cannot be reconciled — an approximation here would be a
+    differently-sized evaluation reported under the split's name (hard rule 11).
+    """
+    import numpy as _np
+
+    want = _EXPECTED_N.get(split)
+    if want is None or len(logits) == want:
+        return logits, labels
+
+    idx_key = _INDEX_KEY.get(split)
+    if len(logits) > want and idx_key and idx_key in z.files:
+        idx = _np.asarray(z[idx_key])
+        if len(idx) != want:
+            raise SplitRowCountError(
+                f"{split}/{precision}: {idx_key} has {len(idx)} entries but {split} is "
+                f"{want} rows; refusing to subset with an index array of the wrong size")
+        if idx.max() >= len(logits):
+            raise SplitRowCountError(
+                f"{split}/{precision}: {idx_key} indexes row {int(idx.max())} but the "
+                f"array has only {len(logits)} rows")
+        return logits[idx], (None if labels is None else labels[idx])
+
+    raise SplitRowCountError(
+        f"{split}/{precision}: array has {len(logits)} rows, but {split} is {want}. "
+        f"No usable {idx_key!r} is present to subset it.\n"
+        f"Scoring the array whole would report a differently-sized evaluation under this "
+        f"split's name — `test_logits` is the FULL 10,000-row test split, not test_3000.")
+
 
 @dataclass(frozen=True)
 class TierZeroScores:
@@ -105,6 +158,8 @@ def score_npz(npz_path: Path | str, names: list[str], *, split: str,
         logits = z[lk]
         if gk is not None:
             labels = z[gk]
+            logits, labels = subset_to_split(logits, labels, z, split=split,
+                                             precision=precision)
         else:
             # INT8 arrays carry no labels of their own — they are the SAME rows as the
             # FP32 arrays for that split, so the FP32 labels apply. Assert the shapes
@@ -114,12 +169,21 @@ def score_npz(npz_path: Path | str, names: list[str], *, split: str,
                 raise KeyError(f"{npz_path}: INT8 {split} logits present but no {fgk} "
                                f"to score them against")
             labels = z[fgk]
+            # The FP32 labels are stored at FULL-SPLIT size while the INT8 logits are
+            # already the split's rows, so the labels are subset to match before the
+            # shape agreement is asserted.
+            labels, _ = subset_to_split(labels, None, z, split=split, precision="fp32")
             if len(labels) != len(logits):
                 raise ValueError(
                     f"{split}: INT8 has {len(logits)} rows but FP32 labels have "
                     f"{len(labels)}. These must be the same rows in the same order; "
                     f"refusing to score one against the other."
                 )
+    want = _EXPECTED_N.get(split)
+    if want is not None and len(logits) != want:
+        raise SplitRowCountError(
+            f"{split}/{precision}: about to score {len(logits)} rows for a {want}-row "
+            f"split. This is the last guard before the number is produced.")
     return score_from_logits(logits, labels, names, split=split, precision=precision, **kw)
 
 
