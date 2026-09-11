@@ -2,7 +2,29 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Artefacts that are GITIGNORED by design and therefore absent from a clean checkout:
+#   models/         -> `/models/` — nothing tracked at all
+#   results/*       -> only .gitkeep and spend_ledger.jsonl are tracked
+# A test that needs one of these cannot run in CI. It must SKIP WITH A REASON THAT NAMES
+# THE ARTEFACT — never pass by accident, and never skip silently, because a silent skip
+# is indistinguishable from a test that ran.
+
+
+def require_artifact(path: Path | str, why: str) -> Path:
+    """Skip, loudly, when a gitignored artefact this test needs is not on disk."""
+    path = Path(path)
+    if not path.exists():
+        pytest.skip(
+            f"GITIGNORED ARTEFACT ABSENT: {path.relative_to(ROOT) if path.is_relative_to(ROOT) else path} "
+            f"— {why}. This test cannot run from a clean checkout; it is SKIPPED, not passed."
+        )
+    return path
 
 
 @pytest.fixture(scope="session")

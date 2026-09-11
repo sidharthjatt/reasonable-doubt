@@ -1,0 +1,47 @@
+# SECRETS FIRST. .env holds the live ANTHROPIC_API_KEY. A key baked into an image layer
+# survives `docker rm`, is readable by anyone who can pull the image, and cannot be
+# unbaked by deleting the file in a later layer.
+.env
+.env.*
+*.key
+
+# Real money and real results. results/ is gitignored except the spend ledger; neither
+# belongs in a serving image, and the ledger especially must not be copied in and then
+# written to inside a container where the writes are discarded on exit.
+results/
+
+# API response cache — may contain full prompts and responses (hard rule 3).
+cache/
+
+# Model weights are MOUNTED, never baked: 244 MB per artefact, gitignored, and the served
+# one changes (E1b seed 1 replaces int8_ce_1 after seeds 2-3). Baking it would make the
+# image the source of truth for something configs/serve.yaml is supposed to decide.
+models/
+*.onnx
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.ckpt
+
+# Training/eval material the service never touches.
+notebooks/
+data/
+*.npz
+*.parquet
+*.arrow
+
+# Local env and tooling
+.venv/
+venv/
+.git/
+.github/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/

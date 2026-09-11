@@ -199,8 +199,11 @@ def test_real_npz_matches_the_recorded_test_3000_figure():
     root = Path(__file__).resolve().parents[1]
     npz = root / "results" / "logits_ce_seed1.npz"
     rec = root / "results" / "tier0_ce_seed1.json"
-    if not (npz.exists() and rec.exists()):
-        pytest.skip("E1 seed-1 artefacts not present")
+    from tests.conftest import require_artifact
+
+    require_artifact(npz, "E1 seed-1 FP32 logits; results/* is gitignored so experiment "
+                          "outputs are absent from a clean checkout")
+    require_artifact(rec, "E1 seed-1 recorded metrics; results/* is gitignored")
 
     s = score_npz(npz, load_labels(), split="test_3000", precision="fp32")
     expected = json.loads(rec.read_text())["test_3000_fp32"]["macro_f1"]

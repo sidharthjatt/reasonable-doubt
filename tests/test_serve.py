@@ -400,8 +400,20 @@ def test_there_is_no_tier1_in_the_deployed_cascade(config):
 
 
 @pytest.fixture
-def fastapi_client():
+def fastapi_client(config):
+    """TestClient, but only when the real Tier 0 artefact is on disk.
+
+    `create_app()` goes through `build_cascade()`, which constructs a REAL Tier0Encoder
+    and loads a 244 MB ONNX model. models/ is gitignored in full, so on a clean checkout
+    these tests would ERROR with FileNotFoundError rather than skip — which reads as a
+    broken build instead of an absent artefact.
+    """
     pytest.importorskip("fastapi")
+    from tests.conftest import require_artifact
+
+    require_artifact(config.tier0_model_dir,
+                     "the served INT8 encoder; models/ is gitignored (`/models/`) so it "
+                     "is never present in CI. Fetch or mount the artefact to run these")
     from fastapi.testclient import TestClient
 
     return TestClient

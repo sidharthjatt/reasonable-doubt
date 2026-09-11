@@ -14,6 +14,7 @@ becomes whatever the new weights happen to produce. That is refused, not warned 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,14 @@ __all__ = ["PROJECT_ROOT", "RouterThreshold", "ServiceConfig", "ThresholdArtefac
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SERVE_CONFIG = PROJECT_ROOT / "configs" / "serve.yaml"
+
+# Env overrides. These exist for CONTAINERS: models/ is gitignored and 244 MB, so it is
+# never baked into an image — it is mounted, and the mount path is not knowable at build
+# time. The override is read here rather than in the Dockerfile so the same mechanism
+# works for a local run, and so the threshold/artefact cross-check below still applies to
+# whatever the override points at.
+TIER0_MODEL_DIR_ENV = "TIER0_MODEL_DIR"
+SERVE_CONFIG_ENV = "SERVE_CONFIG"
 
 
 class ThresholdArtefactMismatch(RuntimeError):
@@ -103,19 +112,32 @@ class ServiceConfig:
     canary_min_accuracy: float
     canary_measured_accuracy: float
     canary_enabled: bool
+    # True when TIER0_MODEL_DIR overrode configs/serve.yaml. Surfaced in /health so the
+    # served artefact's provenance is readable without shelling into the container.
+    tier0_model_dir_from_env: bool
     raw: dict[str, Any]
 
     @classmethod
-    def load(cls, path: Path | str = DEFAULT_SERVE_CONFIG,
+    def load(cls, path: Path | str | None = None,
              *, root: Path | None = None) -> "ServiceConfig":
         import yaml
 
-        path = Path(path)
+        path = Path(path or os.environ.get(SERVE_CONFIG_ENV) or DEFAULT_SERVE_CONFIG)
         root = root or PROJECT_ROOT
         d = yaml.safe_load(path.read_text())
 
         threshold = RouterThreshold.load(root / d["router"]["threshold_file"])
-        model_dir = root / d["tier0"]["model_dir"]
+
+        # Env wins over the file, and says so on startup. An absolute override is used
+        # as-is (the container mount case); a relative one resolves against the repo root
+        # exactly as the config value does.
+        override = os.environ.get(TIER0_MODEL_DIR_ENV, "").strip()
+        if override:
+            model_dir = Path(override)
+            if not model_dir.is_absolute():
+                model_dir = root / model_dir
+        else:
+            model_dir = root / d["tier0"]["model_dir"]
 
         # The cross-check. Compare on the artefact's basename: the calibration npz
         # records a repo-relative path, serve.yaml may name a different prefix, but the
@@ -154,5 +176,6 @@ class ServiceConfig:
             canary_min_accuracy=float(d["canary"]["min_accuracy"]),
             canary_measured_accuracy=float(d["canary"]["measured_accuracy"]),
             canary_enabled=bool(d["canary"]["enabled"]),
+            tier0_model_dir_from_env=bool(override),
             raw=d,
         )

@@ -95,9 +95,11 @@ def test_scorer_refuses_absent_classes():
 
 def test_e8_subset_divergence_is_real_and_recorded():
     """E8's own numbers: the registered scorer and sklearn's default differ materially."""
-    p = RESULTS / "e8_fewshot.json"
-    if not p.exists():
-        pytest.skip("E8 artefact not present")
+    from tests.conftest import require_artifact
+
+    p = require_artifact(RESULTS / "e8_fewshot.json",
+                         "E8's recorded few-shot metrics; results/* is gitignored so "
+                         "experiment outputs are absent from a clean checkout")
     d = json.loads(p.read_text())
     assert d["classes_averaged"] == 97, "E8 must record the label set it averaged over"
     for arm in ("fewshot", "zeroshot"):
@@ -228,7 +230,22 @@ def test_notebooks_no_longer_call_sklearn_directly_for_reported_metrics():
 
 
 def test_grandfathered_list_only_shrinks():
-    """Every grandfathered name must still exist — a stale entry hides a real gap."""
+    """Every grandfathered name must still exist — a stale entry hides a real gap.
+
+    SKIPS ONLY WHEN NONE ARE PRESENT. results/* is gitignored, so on a clean checkout
+    every name is absent and the check cannot tell a deliberately removed entry from one
+    that was never checked out. When SOME are present the artefacts clearly are on disk,
+    so a missing one is real staleness and still fails — the skip is scoped to the case
+    it cannot decide, not used to make the test disappear in CI.
+    """
+    present = [n for n in GRANDFATHERED if (RESULTS / n).exists()]
+    if not present:
+        pytest.skip(
+            f"GITIGNORED ARTEFACT ABSENT: none of the {len(GRANDFATHERED)} grandfathered "
+            f"files are in results/, which is gitignored (`results/*`). A clean checkout "
+            f"cannot distinguish a removed entry from one never fetched. SKIPPED, not "
+            f"passed."
+        )
     absent = [n for n in GRANDFATHERED if not (RESULTS / n).exists()]
     assert not absent, (
         f"GRANDFATHERED names no longer on disk: {absent}. Remove them, so the list "

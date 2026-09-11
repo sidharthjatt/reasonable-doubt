@@ -1373,6 +1373,74 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bf. THE CANARY FIRED IN A CONTAINER — INT8 diverges macOS-arm64 vs Linux-aarch64 (2026-09-11)
+
+**Not an experiment. A deployment measurement, and the §3bc canary doing exactly what it
+was registered to do.** The service image was built and run locally with
+`models/int8_ce_1` mounted. It **refused to start**:
+
+> `TIER 0 CANARY FAILED: accuracy 0.6400 on 200 frozen TRAIN rows is below the floor
+> 0.8000.` `machine: aarch64, system: Linux, onnxruntime 1.29.0`
+
+The same artefact scores **0.9000** on the host. Nothing was misconfigured — the container
+mounted the same weights, loaded the same `configs/`, and ran the same code.
+
+**RULED OUT, in order, rather than assumed.**
+
+| candidate | result |
+|---|---|
+| tokenizer version | container `transformers` **4.57.6** (the version that TRAINED the model), host 5.0.0 |
+| tokenization itself | **byte-identical** `input_ids` on the same text, all 25 tokens |
+| onnxruntime version | **1.29.0 in both** |
+| numpy version | **2.4.6 in both** |
+
+**IT IS THE INT8 KERNEL, and the divergence is broad rather than a few bad rows.** Over the
+200 canary rows:
+
+| | |
+|---|---|
+| host accuracy (macOS arm64) | **0.9000** (180/200) |
+| container accuracy (Linux aarch64) | **0.6400** (128/200) |
+| prediction disagreements | **60/200** |
+| logit correlation | **0.8660** |
+| rows with max \|Δlogit\| > 2.0 | **118/200** |
+| rows with max \|Δlogit\| < 0.5 | **3/200** |
+
+A few broken rows would leave correlation near 1.0 with a handful of outliers. 0.866 with
+118/200 rows moving more than 2 logits is **pervasive numeric divergence in the quantised
+kernel**, between two builds of the same onnxruntime version on the same physical CPU.
+
+**MECHANISM — HYPOTHESIS, NOT ESTABLISHED.** onnxruntime prints
+`cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 0` inside the container.
+If ORT cannot identify the CPU it cannot detect the ARM dot-product extensions
+(`dotprod`/`i8mm`) its INT8 kernels use, and would fall back to a generic accumulation
+path. That fits the evidence but has **not** been confirmed — confirming it means reading
+ORT's dispatch, not reading its warning.
+
+**CONSEQUENCES.**
+
+1. **The canary is vindicated as a refusal rather than a warning.** Without it this image
+   would have served 0.64-accuracy labels with plausible margins, and the margin signal —
+   which the router thresholds on — would have been computed from the same divergent
+   logits. Nothing else in the stack would have raised.
+2. **§3ah's finding is broader than "x86 without VNNI".** It was recorded as an x86
+   non-VNNI problem; it reproduces between two ARM platforms. Any statement of the form
+   "INT8 is fine on arm64" is now too coarse: it is fine on *this* host, measured.
+3. **Every INT8 number in this project is host-qualified.** The gate figure
+   **0.7974** (§3be) was measured on macOS-arm64 and is not transportable to a Linux
+   serving host without re-measurement. The gate verdict is unaffected — it compares E1b
+   against the host baseline *on the same machine* — but a deployed accuracy claim is not
+   established by it.
+4. **HF Spaces is x86 Linux**, i.e. a third platform, neither of the two measured here.
+   **No deployment target is currently qualified.** Qualifying one means running the canary
+   on it, which is exactly what the container refusing to start already demonstrates.
+
+**The floor was NOT lowered, and lowering it would be the error the floor exists to
+prevent.** 0.80 was derived in §3bc from a measured 0.9000 with ~12× the largest INT8
+delta this project had seen as headroom. A floor moved to accommodate a failing platform
+stops being a measurement of health and becomes a record of what that platform happens to
+produce.
+
 ### 3be. E1b SEED-1 GATE READ — ON TRACK; the ORT confound is CLOSED (2026-09-11)
 
 **THE CONFOUND REGISTERED OPEN IN §3bd IS NOW CLOSED BY MEASUREMENT, NOT BY ARGUMENT.**

@@ -1,0 +1,104 @@
+# pytest on push and PR. NO API KEY IS AVAILABLE TO THIS WORKFLOW, deliberately.
+#
+# Nothing here may spend money. The suite is designed for it: every Tier 2 test injects a
+# stubbed client, and the one script that can spend (scripts/smoke_live_tier2.py) is never
+# invoked. `ANTHROPIC_API_KEY` is not set, not read from secrets, and not referenced — so
+# a test that quietly started making real calls would fail on the missing key rather than
+# silently billing the project budget.
+#
+# GITIGNORED ARTEFACTS. models/ is entirely untracked (`/models/`) and results/ keeps only
+# .gitkeep and spend_ledger.jsonl, so a clean checkout has no encoder and no experiment
+# outputs. Tests needing them SKIP WITH A REASON THAT NAMES THE ARTEFACT (see
+# tests/conftest.py:require_artifact). `-rs` prints every skip, because a silent skip is
+# indistinguishable from a test that ran.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # Belt and braces: the dataset loader must never reach for an interactive login,
+      # and no provider key exists for any code path to pick up.
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime + test dependencies
+        # onnxruntime is PINNED to the quantiser version every INT8 artefact was produced
+        # under (3bd/3be). fastapi is required, not optional: without it the endpoint
+        # tests importorskip away and the service's only HTTP coverage disappears.
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "onnxruntime==1.29.0" \
+            "transformers>=4.44,<4.58" \
+            "sentencepiece>=0.2" "protobuf>=4.25" \
+            "numpy>=1.26" "pyyaml>=6.0" "pydantic>=2.7" \
+            "anthropic>=0.40" "python-dotenv>=1.0" \
+            "fastapi>=0.111" "uvicorn>=0.30" \
+            "datasets>=2.19" "scikit-learn>=1.5" \
+            "pytest>=8.2"
+
+      - name: Assert no API key is present
+        # If this ever fails, something added a key to the environment and the suite could
+        # start spending. Checked explicitly rather than assumed from "we didn't set one".
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "ANTHROPIC_API_KEY is set in CI. Refusing: this workflow must not be
+          able to spend." >&2
+            exit 1
+          fi
+          echo "no ANTHROPIC_API_KEY — real API calls are impossible in this job"
+
+      - name: pytest
+        # -rs lists every skip with its reason, so absent artefacts are visible in the log
+        # rather than hidden in a pass count.
+        run: pytest -q -rs
+
+      - name: Assert the spend ledger was not modified
+        # results/spend_ledger.jsonl is the record of real money (hard rule 12). The suite
+        # has a session guard for this too (tests/conftest.py), but CI checks the working
+        # tree independently — a guard and the thing it guards should not share a failure
+        # mode.
+        run: |
+          if ! git diff --quiet -- results/spend_ledger.jsonl; then
+            echo "TESTS MODIFIED results/spend_ledger.jsonl" >&2
+            git diff -- results/spend_ledger.jsonl >&2
+            exit 1
+          fi
+          echo "spend ledger unchanged"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build only. The image cannot be RUN here: the startup canary needs
+      # models/int8_ce_1, which is gitignored and absent from a clean checkout, so the
+      # container would correctly refuse to start. Running it is a local step with the
+      # model mounted.
+      - name: Build the service image
+        run: docker build -t reasonable-doubt:ci .
+
+      - name: Assert no secret was baked into the image
+        # .dockerignore excludes .env, but an ignore file is a claim; this checks the
+        # built layers.
+        run: |
+          if docker run --rm --entrypoint sh reasonable-doubt:ci -c 'ls -a /app' | grep -q '^\.env$'; then
+            echo ".env is present inside the image" >&2
+            exit 1
+          fi
+          echo "no .env in the image"
