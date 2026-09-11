@@ -177,9 +177,9 @@ this does not change any conclusion, but the number must be what it says it is.
 |----|-------------|-------------|--------|
 | C3 | Measure seed-variance and paired-bootstrap floors | descriptive — no accept rule; **gates E2, E3, E7** | planned |
 | E1 | Tier 0: DeBERTa-v3-base, CE baseline, 3 seeds | **macro-F1 ≥ 0.80 on `test_3000`, measured on the ONNX-INT8 artefact**, FP32 reported alongside. Anchored to LexGLUE Table 3 (DeBERTa m-F1 83.1) | planned |
-| E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **NOT ACCEPTED (§3bi): 0.798744 ± 0.007018, short by 0.0013 = 0.18σ. Undertraining confirmed as the dominant cause (+0.0465 = 8.31× E1's sd) without reaching the bar** |
+| E1b | Tier 0 retrained at **10 epochs**, all else identical to E1 | **macro-F1 ≥ 0.80 on `test_3000`, INT8, mean over 3 seeds** — the SAME bar as E1. Seed 1 first; seeds 2–3 gated on it | **NOT ACCEPTED (§3bi): 0.798744 ± 0.007018, short by 0.0013 = 0.18σ. Undertraining supported by the ONE-VARIABLE within-host comparison — +0.0385 vs the 3-epoch host baseline, n = 1 (§3ak/§3at) — without reaching the bar. The cross-host +0.0465 / 8.31σ is DESCRIPTIVE ONLY. Seed 1 breaches E3's 0.01 quantisation tolerance at −0.0137** |
 | E2 | Tier 0 loss arms vs E1 (sqrt-inv-freq, effective-number, inv-freq) | best arm beats E1 by **≥ √2·1.96·seed_sd** (paired, same rows) — **NOT YET SETTABLE** | **[C3-gated]** |
-| E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | planned **[C3-gated]** |
+| E3 | INT8 vs FP32 at the deployed precision | **\|INT8 − FP32\| ≤ 0.01** macro-F1, paired. FP32-as-headline prohibited | **still `planned` / unscored.** Scope settled 2026-09-11 (§3bi): **artefact-general across Tier 0, not E1-scoped**. Tolerance stands at 0.01 (C3 `seed_sd = 0.003195`). **E1b seed 1 BREACHES at −0.013668**; E1 max was \|0.0083\| |
 | E4 | Tier 1: Qwen2.5-1.5B-Instruct LoRA, 3 seeds | macro-F1 **≥ E1 + 0.04** = **0.7923** (E1 INT8 0.7523, §3ar) | **seed 1: 0.7254 — misses by 0.0669 = 12× test_3000 σ** |
 | E4b | Two-tier `Tier 0 → Claude` fallback | E6's rule with Tier 1 removed. **Registered before E4 runs** | **SUPERSEDED BY MEASUREMENT (E4b-A, §3av)** — the E6 frontier IS this configuration; no Tier 1 experiment remains |
 | E5 | Routing signal: margin vs max-softmax vs entropy | best **AUROC ≥ 0.75** AND **≥ 0.05** above worst, on `dev_2000` only | planned |
@@ -367,6 +367,23 @@ this does not change any conclusion, but the number must be what it says it is.
   Report the INT8 number as the headline regardless, with the delta stated. **Reporting
   the FP32 figure as the system's accuracy is prohibited** — it describes something that
   does not exist.
+- **SCOPE — settled 2026-09-11, §3bi, because E1b forced the question.** This rule names
+  **no run**. Its hypothesis is about **Tier 0**, and "same model, same rows" pairs each
+  artefact against **itself** rather than restricting which artefact is eligible.
+  **E3 is artefact-general across every Tier 0 artefact, not scoped to E1.** Consequences,
+  recorded either way as §3bi required:
+  - **E1b's artefacts are in scope, and E1b seed 1 BREACHES the tolerance at −0.013668**
+    (seeds: −0.013668 / −0.001751 / −0.007598, mean −0.007672). E1's largest was
+    **|0.0083|**. This is the first measured breach.
+  - **The tolerance is NOT loosened.** 0.01 was registered **[C3-gated]** against the risk
+    that seed sd ≈ 0.03 would void it; C3 measured **0.003195**, so the gate lifts in
+    favour of 0.01 standing. Substituting now — after a number breached it — is exactly
+    what the gate's ordering forbids.
+  - **The falsification clause does not bind the running service today:** no E1b artefact
+    is deployed (§3bg serves `fp32_ce_1`, an E1 artefact). It binds on any decision to
+    serve an E1b artefact at INT8, on top of §3bc's recalibration gate.
+  - **E3 itself remains UNSCORED.** The above is a measured delta recorded against E3's
+    rule, not E3's result entry.
 
 ### E4 — Tier 1 QLoRA
 
@@ -1395,15 +1412,43 @@ relaxed afterwards**."*
 > Shortfall **0.001256** — **0.18×** E1b's own seed sd. **1 of 3** seeds clears the bar
 > individually. The rule is not relaxed, not re-anchored, and not restated to fit.
 
-**AND THE HYPOTHESIS IS SUBSTANTIALLY SUPPORTED ANYWAY — these are different questions.**
-E1b was registered to test whether E1's shortfall is caused by **undertraining**. Against
-E1 the gain is **+0.046492**, which is **8.31× E1's seed sd**. That is not a marginal
-effect; undertraining was a real and dominant cause of E1's shortfall. What the rule
-records is that **fixing it does not, by itself, reach 0.80.**
+**AND THE HYPOTHESIS IS SUPPORTED — on the one-variable comparison, which is not the one
+this entry first used.**
 
-> Stated without hedging: *undertraining accounts for most of E1's gap and does not
-> account for all of it.* A report that said only "E1b failed" would be as wrong as one
-> that said "E1b confirmed undertraining".
+> **CORRECTION, applied before this entry was final (§3ak).** The first draft rested the
+> undertraining claim on **+0.046492 = 8.31× E1's seed sd**, E1b's 3-seed mean against
+> E1's. That is a **cross-host, two-variable** comparison — epochs **and** host — reported
+> as one, and §3ak registers exactly that construction as **rejected**: E1's training
+> environment was never recorded (§3e instance 9), so a difference across it is
+> **detectable but not attributable**, and no metadata converts it back into one variable.
+> The figure is retained below as **descriptive only** and carries no causal weight.
+
+The comparison §3ak step 1 was spent to make, and the one the claim now rests on — **one
+variable, both arms on this host, both training environments persisted by `train_env()`,
+both scored INT8 on arm64**:
+
+| arm | epochs | seeds | INT8 `test_3000` |
+|---|---|---|---|
+| host baseline (`ce_hostB`) | 3 | **n = 1** | 0.7589 |
+| **E1b seed 1** | **10** | **n = 1** | **0.7974** |
+| **within-host epochs effect** | | **n = 1** | **+0.0385** |
+
+**n = 1 ON BOTH SIDES, AND THAT BOUNDS THE CLAIM.** The host baseline was never run at
+more than one seed, so this comparison has **no variance estimate of its own**. Against
+§3at's borrowed 2σ yardstick of 0.0112, +0.0385 is **3.4×** the noticing threshold, so an
+epochs effect is **detected** — §3at licenses that reading and licenses no stronger one. It
+is not a 3-seed result and hard rule 2 forbids presenting it as one.
+
+> Stated with the scope it actually has: *on this host, at n = 1, going from 3 to 10
+> epochs moves INT8 `test_3000` by **+0.0385**, and 10 epochs still does not reach 0.80.*
+> Undertraining is a **real and substantial** cause of E1's shortfall and is **not the
+> whole** of it. A report that said only "E1b failed" would be as wrong as one that said
+> "E1b confirmed undertraining".
+
+**Descriptive only, retained and labelled (§3ak step 4, §3at):** E1b's 3-seed mean against
+E1's 3-seed mean is **+0.046492**; E1b seed 1 against E1 seed 1 is **+0.0392**. Both cross
+the unrecorded-host boundary. They agree in sign and rough magnitude with the within-host
++0.0385, which is **corroboration, not evidence**.
 
 **THE EPOCH BUDGET IS STILL BINDING, which bears directly on the near-miss.** Selection
 best was **epoch 10 — the last one — for seeds 2 and 3** (0.8151 / 0.8153), and epoch 9
@@ -1428,6 +1473,59 @@ and a 20-epoch run is a new experiment requiring its own registration and its ow
 > registered scorer with the `test_3000_indices` guard, and reproduce Kaggle's recorded
 > figures to **0 delta** at n=3000.
 
+**THE PAIRED QUANTISATION DELTA, WHICH E3 OWNS — and it is larger than the miss.**
+
+| seed | INT8 | FP32 | **INT8 − FP32** |
+|---|---|---|---|
+| 1 | 0.797443 | 0.811111 | **−0.013668** |
+| 2 | 0.792468 | 0.794219 | −0.001751 |
+| 3 | 0.806321 | 0.813919 | −0.007598 |
+| **mean** | 0.798744 | 0.806416 | **−0.007672** |
+
+> **Seed 1's |−0.013668| EXCEEDS E3's registered tolerance of 0.01.** E1's largest was
+> |0.0083|, so this is the **first Tier 0 artefact this project has measured to breach
+> it**, and it breaches on the artefact family the near-miss belongs to.
+
+**IS E3 SCOPED TO E1, OR TO EVERY TIER 0 ARTEFACT? CHECKED RATHER THAN ASSUMED — and the
+answer is the one that costs us something.** E3's registration **names no run**: its
+hypothesis is *"INT8 dynamic quantisation does not materially degrade **Tier 0**"*; its
+metric is *"macro-F1 of both precisions on `test_3000`, paired on identical rows — same
+model, same rows"*, where "same model" pairs **each artefact against itself** rather than
+restricting which artefact; and §2's E3 row reads *"INT8 vs FP32 **at the deployed
+precision**"*. **E3 is artefact-general across Tier 0, not E1-scoped.** E1b's artefacts are
+therefore in scope, and **seed 1 fires E3's falsification clause.**
+
+**What that does and does not mean, against E3's own falsification text** — *"delta > 0.01
+⇒ the deployed system is not the measured system. Report the INT8 number as the headline
+regardless, with the delta stated. Reporting the FP32 figure as the system's accuracy is
+prohibited."*
+
+- It **does** mean the INT8 figure stays the headline and the delta is stated. Both done
+  above, and the FP32 figure is not reported as the system's accuracy anywhere in this
+  entry.
+- It does **not** bind the running system today: **no E1b artefact is deployed.** §3bg
+  serves `fp32_ce_1`, an **E1** artefact, at FP32. The clause binds on any future decision
+  to serve an E1b artefact at INT8 — a swap §3bc already gates behind recalibration, and
+  which this breach makes materially harder rather than merely procedural.
+- **E3's tolerance is unchanged at 0.01.** It was registered **[C3-gated]** against the
+  risk that a seed sd around 0.03 would render 0.01 meaningless; C3 measured
+  **`seed_sd = 0.003195`**, so the gate lifts **in favour of 0.01 standing**. No
+  substitution was ever due under the gate, and none is made now that a number has
+  breached it — that ordering is the whole point of the gate.
+- **E3 REMAINS UNSCORED AS AN EXPERIMENT.** This records one artefact family's measured
+  delta against E3's rule. It is **not** E3's result entry, and E3's §2 status stays
+  `planned`. Recorded here either way, as the scope check required.
+
+**THE MISS IS SMALLER THAN THE QUANTISATION COST — stated, and explicitly not a rescue.**
+FP32 clears 0.80 at **0.806416**. The shortfall is **0.001256**. The mean INT8−FP32 penalty
+is **0.007672**, which is **6.1× the miss**; seed 1's penalty alone is **10.9×** it.
+
+> **THIS DOES NOT CONVERT THE VERDICT INTO A PASS.** The rule names INT8, INT8 is what was
+> measured, and 0.798744 < 0.80. What the comparison legitimately says is *where the
+> missing 0.0013 most plausibly sits* — inside a quantisation penalty this project already
+> registered a tolerance for and has now exceeded on one seed. That is a pointer to the
+> next experiment, not an argument about this one.
+
 **PROVENANCE, CHECKED RATHER THAN ASSUMED.** Seeds 2 and 3 were quantised under the
 **pinned** toolchain — `onnxruntime 1.29.0`, `optimum 2.1.0`, `optimum-onnx 0.1.0`,
 `onnx 1.22.0`, `transformers 4.57.6`, with `quantiser_versions_complete: true`, the first
@@ -1439,6 +1537,15 @@ stated here rather than left for a reader to discover.
 
 All three scored on arm64 under ORT 1.29.0 through `scripts/score_int8_local.py`, n=3000,
 0 unmatched, `classes_averaged=100`.
+
+**DISCLOSURE, VOLUNTEERED, AND IT CHANGES NOTHING.** E1b's accept rule names **INT8
+because INT8 was the deployed precision when the rule was written**. **§3bg (2026-09-11)
+moved serving to FP32**, so the rule's premise no longer describes the running system — and
+FP32 is the arm that clears 0.80. **The verdict is unchanged and the rule is not re-read.**
+E1b was registered against INT8, measured on INT8, and is scored on INT8 at **0.798744**. A
+rule may not be re-anchored to whichever precision turns out to pass once the number is
+known, and the fact that such a re-anchoring is now *available* is precisely why it is
+refused **in writing** rather than left unmentioned for a reader to notice later.
 
 **What does NOT follow from this verdict:** that Tier 0 is unfit to deploy. §3bg's serving
 decision rests on FP32 platform-stability and the canary, not on E1b's accept rule, and
@@ -1886,7 +1993,10 @@ started anyway would serve chance-level labels with plausible confidences on eve
 request, which is exactly the silent-degradation path hard rule 11 forbids.
 
 **Why 0.80 and not something tighter.** The gap to the measured value is 0.10 absolute,
-≈12× the largest FP32/INT8 delta this project has measured (E3, max |delta| 0.0083), so
+≈12× the largest FP32/INT8 delta this project had measured at the time (E3, max
+|delta| 0.0083) — **SUPERSEDED 2026-09-11 (§3ax's class): E1b seed 1 measures |0.013668|,
+so the correct multiple is ≈7.3×, not ≈12×. The floor is UNCHANGED and the reasoning still
+holds** — 7.3× benign jitter is still far above it, and §3bi records the breach — so
 benign cross-ISA numeric jitter cannot trip it; and it sits far above any degenerate
 outcome, so the failure it exists to catch cannot pass it. The floor is deliberately
 loose: it is a smoke test for a catastrophic mode, not a precision instrument.
