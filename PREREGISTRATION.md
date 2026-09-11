@@ -1373,6 +1373,91 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3be. E1b SEED-1 GATE READ — ON TRACK; the ORT confound is CLOSED (2026-09-11)
+
+**THE CONFOUND REGISTERED OPEN IN §3bd IS NOW CLOSED BY MEASUREMENT, NOT BY ARGUMENT.**
+`scripts/verify_quantiser_repro.py`, both phases, on the downloaded artefacts:
+
+| phase | onnxruntime | result |
+|---|---|---|
+| **control** | 1.30.0 (the reference's own) | **376 / 376 initializers byte-identical** |
+| **candidate** | 1.29.0 (host baseline's) | **376 / 376 initializers byte-identical** |
+
+The control passing rules out arm64-vs-x86, the local export, optimum and onnx in one
+step; the candidate then shows **onnxruntime 1.29.0 and 1.30.0 produce the same quantised
+tensors** for this model. **There is no quantiser confound, the gate reads the downloaded
+`int8_ce10ep_1` bytes unmodified, and §3bd's open item is discharged.**
+
+> Scope, stated because it is narrower than "the versions are equivalent": this is
+> byte-identity of the QUANTISED WEIGHTS for one model under one config. It says nothing
+> about inference-kernel differences between ORT versions at scoring time. Scoring was
+> done under 1.29.0, the same version the host baseline was scored under.
+
+**A CORRECTION TO THE RECORD, made because the claim was mine and it was wrong.** §3bd
+said the FP32 ONNX was "retained deliberately as E3's middle arm". **It is not retained.**
+`kaggle_tier0.py` deletes `onnx_<tag>_<seed>/` after the discriminator uses it, and the
+E1b commit-2 output contains no `onnx_ce10ep_1`. The comment above the export — "previously
+it was deleted immediately after quantising" — governs **ORDER**, not survival, and was
+misread as a retention guarantee. Consequences: `onnx_*` in `_RESTORE_GLOBS` can never
+match, and no check may assume the FP32 ONNX is downloadable. It is **reproducible**
+instead — the control phase exported it locally from `fp32_ce10ep_1` and the result
+quantised to Kaggle's exact bytes, so the local export is itself validated (under torch
+2.14.0 locally vs 2.10.0 on Kaggle, which therefore did not matter here).
+
+---
+
+#### THE GATE (§3ar), READ
+
+> **E1b seed 1, INT8, `test_3000`, arm64: macro-F1 = 0.7974** (accuracy 0.8720, n = 3000,
+> 98/100 classes predicted, 0 unmatched). Artefact `int8_ce10ep_1`, scored by
+> `scripts/score_int8_local.py` through the registered scorer.
+
+| boundary | value | |
+|---|---|---|
+| **T** (0.80 − 1.645σ) | 0.7908 | **0.7974 ≥ T** |
+| M | 0.7771 | |
+| B | 0.7635 | |
+
+> ### VERDICT: **ON TRACK → RUN SEEDS 2–3.**
+
+**What it is NOT.** E1b's accept rule is macro-F1 **≥ 0.80 on `test_3000`, INT8, MEAN OVER
+3 SEEDS**. 0.7974 is **one seed** and sits **below 0.80**. It clears the gate that
+authorises spending quota on seeds 2–3; it does not satisfy the accept rule, and hard rule
+2 forbids reporting a 1-seed figure as a result.
+
+**The comparison E1b was designed to make (§3ak step 1) — one variable, both arms on this
+host, both scored on arm64:**
+
+| arm | epochs | INT8 `test_3000` macro-F1 |
+|---|---|---|
+| host baseline | 3 | 0.7589 |
+| **E1b seed 1** | **10** | **0.7974** |
+| **within-host epochs effect** | | **+0.0385** |
+
+For context only, and **not** the within-host comparison: E1's 3-seed INT8 mean is 0.7523
+(+0.0451) and E1 seed 1 alone is 0.7582 (+0.0392).
+
+**FP32, REPORTED ALONGSIDE AND EXPLICITLY NOT THE GATE.** Every boundary in §3ar is
+defined on INT8, the deployed precision; §3ar correction 1 exists because an FP32 figure
+was once quoted against an INT8 rule.
+
+| arm | FP32 `test_3000` macro-F1 |
+|---|---|
+| host baseline (3 ep) | 0.7639 |
+| E1b seed 1 (10 ep) | **0.8111** |
+
+Recomputed from `logits_ce10ep_seed1.npz` through the registered scorer and matching
+Kaggle's recorded `test_3000_fp32` to **0 ULP**. Selection macro-F1 rose monotonically
+across epochs 6–10 (0.7995 / 0.8083 / 0.8083 / 0.8193 / 0.8183) and `load_best_model_at_end`
+selected **epoch 9** (0.8193), confirming §3bb's checkpoint-survival analysis end to end.
+Wall clock 12,927 s.
+
+**KAGGLE'S OWN INT8 FIGURE IS 0.00017 AND IS DIAGNOSTIC ONLY.** That is the third time this
+non-VNNI x86 host has scored a healthy INT8 artefact at chance with no error raised, against
+**0.7974** for the same bytes on arm64. It is exactly the failure the deployment canary
+(§3bc) exists to refuse to start on, and the gap between the two numbers is now measured
+rather than argued.
+
 ### 3bd. E1b RUN RECORD — what commit 2 actually ran, and the ORT drift (2026-09-11)
 
 **Recorded because the file no longer says.** §3bb registered the plan; this records the
@@ -1397,11 +1482,10 @@ it:
 |---|---|---|
 | `RESUME_FROM_STEP_AT_LEAST = 17815` | **corroborated** | `restored 1: ['ck_ce10ep_1']`, `=== seed 1 (RESUMING) ===`, `[train] begin at step 17815 of 35630` |
 | resume actually advanced | **corroborated** | same three lines — the chain did not restart from zero |
-| `RUN_STEP_BUDGET = None` | **NOT corroborated** | confirmed only by the run **ending without** `COMMIT STEP BUDGET EXHAUSTED`; the end of the log has not been read |
+| `RUN_STEP_BUDGET = None` | **corroborated** | the run ended `ALL SEEDS DONE` with **no** `COMMIT STEP BUDGET EXHAUSTED` line — the budget never fired |
 
-Until that last line is checked, `budget = None` is the **declared** value, not an observed
-one. It matters: a budget that silently fired would have stopped commit 2 early and left a
-partially trained seed that reports as complete.
+All three are now observed. The budget line mattered: a budget that silently fired would
+have stopped commit 2 early and left a partially trained seed reporting as complete.
 
 **COMMIT 2'S ARM NEVER REACHED THE REPOSITORY.** It was set on the Kaggle copy, so the
 committed file continued to hold commit 1's values. The two disagreed with nothing saying
@@ -1445,13 +1529,16 @@ to rule that out. The whole toolchain is now pinned (`onnxruntime==1.29.0`,
 asserted in PREFLIGHT from `importlib.metadata`, so the next run's parity is a check
 rather than a reconstruction.
 
-**THE CONFOUND STAYS OPEN.** Same versions everywhere else narrows it to onnxruntime; it
-does **not** establish that 1.29.0 and 1.30.0 produce the same tensors. That is what the
-control/candidate check below decides, and until it runs the gate carries the confound.
+**THE CONFOUND STAYED OPEN UNTIL MEASURED, AND IS NOW CLOSED — see §3be.** Same versions
+everywhere else narrowed it to onnxruntime but did not establish that 1.29.0 and 1.30.0
+produce the same tensors. Both phases of the check have now run and both are byte-identical
+across all 376 initializers, so the gate reads the downloaded bytes unmodified.
 
-**Status: OPEN, and testable rather than argued.** `scripts/verify_quantiser_repro.py`
-re-quantises the retained FP32 ONNX (`onnx_ce10ep_1`, kept as E3's middle arm) and
-compares initializer tensors against the downloaded artefact. It runs in two phases and
+**Status: CLOSED by §3be. The protocol below is retained as registered, because it is what
+the outcome is evidence from.** `scripts/verify_quantiser_repro.py`
+re-quantises the FP32 ONNX and compares initializer tensors against the downloaded
+artefact. **(Correction: the FP32 ONNX is NOT retained — `kaggle_tier0.py` deletes it after
+the discriminator uses it. The script exports it locally instead; see §3be.)** It runs in two phases and
 **the first is a positive control**: re-quantise with onnxruntime held at the reference's
 own 1.30.0 and require byte-identity, which rules out arm64-vs-x86, optimum and onnx at
 once. Only behind a passing control does the 1.29.0 comparison mean anything, and the

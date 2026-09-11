@@ -2,6 +2,26 @@
 
 TWO PHASES, AND THE FIRST IS A POSITIVE CONTROL. Run them in this order:
 
+THE FP32 ONNX IS EXPORTED LOCALLY, because Kaggle does not keep it.
+`kaggle_tier0.py` deletes `onnx_<tag>_<seed>/` at line 915 (`shutil.rmtree(onnx_dir)`,
+~740 MB) after the E3 discriminator has used it. The comment above the export says it is
+"REQUIRED, not incidental" and that it was "previously deleted immediately after
+quantising" — that is about ORDERING (it now survives long enough to be evaluated), NOT
+about persistence. It never reaches the notebook output. (`_RESTORE_GLOBS` still lists
+`onnx_*`, which consequently can never match.)
+
+So this script exports it from the FP32 torch weights with `--export-from`. THAT WIDENS
+WHAT THE CONTROL PROVES, and the widening is the point: a passing control now shows that
+the local export AND the local quantiser together reproduce Kaggle's INT8 bytes exactly.
+A FAILING control is correspondingly less specific — it cannot separate export from
+quantiser from ISA — which is precisely why a failure forbids the candidate phase instead
+of being interpreted.
+
+EXPORT ONCE, QUANTISE TWICE. The exported ONNX is cached at `--onnx-fp32` and REUSED by
+the candidate phase. If each phase exported its own, the two quantisations would start
+from separately-produced inputs and a difference could be an export difference. Sharing
+one input makes onnxruntime the only thing that varies.
+
 THE TWO ENVIRONMENTS. Everything except onnxruntime is IDENTICAL in both, and identical
 to the host baseline's, read off the rd-tier0-hostb Kaggle pip log:
 
@@ -92,6 +112,24 @@ def initializer_digests(path: Path) -> dict[str, str]:
             for init in model.graph.initializer}
 
 
+def export_fp32_onnx(fp32_dir: Path, onnx_dir: Path) -> None:
+    """Export torch FP32 weights to ONNX, exactly as kaggle_tier0.py does.
+
+    Cached: if `onnx_dir` already holds an .onnx, it is REUSED rather than re-exported,
+    so the control and candidate phases quantise byte-identical input.
+    """
+    if onnx_dir.exists() and any(onnx_dir.glob("*.onnx")):
+        print(f"  reusing exported ONNX at {onnx_dir}")
+        return
+    from optimum.onnxruntime import ORTModelForSequenceClassification
+    from transformers import AutoTokenizer
+
+    print(f"  exporting ONNX FP32 from {fp32_dir} -> {onnx_dir}")
+    ORTModelForSequenceClassification.from_pretrained(
+        str(fp32_dir), export=True).save_pretrained(str(onnx_dir))
+    AutoTokenizer.from_pretrained(str(fp32_dir)).save_pretrained(str(onnx_dir))
+
+
 def quantise(onnx_dir: Path, out_dir: Path) -> Path:
     """Re-quantise with the SAME config the notebook uses. Any deviation here would
     manufacture a difference and blame it on the version."""
@@ -132,6 +170,7 @@ def _artefact_identity(onnx_fp32: Path, reference: Path) -> dict:
             "reference_int8": str(reference.resolve())}
 
 
+
 def _require_passing_control(identity: dict) -> dict:
     """A candidate run is only meaningful behind a control that PASSED on these files."""
     if not CONTROL_PATH.exists():
@@ -169,7 +208,11 @@ def main() -> int:
     ap.add_argument("--role", required=True, choices=("control", "candidate"),
                     help="control: same ORT as the reference. candidate: the pinned ORT.")
     ap.add_argument("--onnx-fp32", type=Path, required=True,
-                    help="the FP32 ONNX export the reference was quantised from")
+                    help="where the FP32 ONNX lives; exported here if absent, reused if "
+                         "present, so both phases quantise identical input")
+    ap.add_argument("--export-from", type=Path, required=True,
+                    help="FP32 torch weights (fp32_ce10ep_1). Kaggle deletes its own "
+                         "ONNX export, so it is reproduced from these.")
     ap.add_argument("--reference-int8", type=Path, required=True,
                     help="the downloaded INT8 artefact to check")
     ap.add_argument("--reference-ort", required=True,
@@ -246,6 +289,7 @@ def main() -> int:
     work = args.work or (args.reference_int8.parent /
                          f"{args.reference_int8.name}__requant_{args.role}_{local_ort}")
     work.mkdir(parents=True, exist_ok=True)
+    export_fp32_onnx(args.export_from, args.onnx_fp32)
     print(f"\n  re-quantising locally -> {work}")
     local_onnx = quantise(args.onnx_fp32, work)
 
@@ -267,13 +311,15 @@ def main() -> int:
         if identical:
             print("  CONTROL PASSED — this machine reproduces the reference byte for "
                   "byte with the ORT version held fixed.")
-            print("  arm64-vs-x86, optimum and onnx are all ruled out. A difference in "
-                  "the candidate phase is attributable to onnxruntime.")
+            print("  The LOCAL EXPORT is validated too: arm64-vs-x86, the export step, "
+                  "optimum and onnx are all ruled out. A difference in the candidate "
+                  "phase is attributable to onnxruntime.")
         else:
             print("  CONTROL FAILED — THE INSTRUMENT IS BROKEN.")
             print("  With onnxruntime held at the reference's own version, this machine "
                   "still does not reproduce it. The cause is one of ISA (arm64 here, "
-                  "x86 on Kaggle), optimum, or onnx — this check cannot say which.")
+                  "x86 on Kaggle), the LOCAL EXPORT, optimum, or onnx — this check "
+                  "cannot say which.")
             print("  DO NOT run the candidate phase. Report that the confound could not "
                   "be tested and let the gate carry it as a stated limitation.")
     else:

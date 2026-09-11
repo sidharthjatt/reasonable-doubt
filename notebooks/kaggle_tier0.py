@@ -133,17 +133,17 @@ ARMS = {
     # arm -> (RUN_STEP_BUDGET, RESUME_FROM_STEP_AT_LEAST, description)
     "e1b_commit1": (17815, 0,
                     "E1b seed 1, steps 1-17,815 (epochs 1-5). RAN 2026-09-10."),
-    # CORROBORATED BY THE KAGGLE LOG, not by this repo -- commit 2's arm was set on the
-    # Kaggle copy and never came back here (3bd). The log shows "restored 1:
-    # ['ck_ce10ep_1']", "=== seed 1 (RESUMING) ===" and "[train] begin at step 17815 of
-    # 35630", which corroborates RESUME_FROM_STEP_AT_LEAST=17815 and a real resume.
-    # RUN_STEP_BUDGET=None is NOT yet corroborated: it is confirmed only by the run
-    # ENDING WITHOUT "COMMIT STEP BUDGET EXHAUSTED", and the end of the log has not been
-    # read. Until then it is the declared value, not an observed one.
+    # FULLY CORROBORATED BY THE KAGGLE LOG (3bd), not by this repo -- commit 2's arm was
+    # set on the Kaggle copy and never came back here.
+    #   RESUME_FROM_STEP_AT_LEAST=17815 : "restored 1: ['ck_ce10ep_1']",
+    #       "=== seed 1 (RESUMING) ===", "[train] begin at step 17815 of 35630"
+    #   RUN_STEP_BUDGET=None            : the run ended "ALL SEEDS DONE" with NO
+    #       "COMMIT STEP BUDGET EXHAUSTED" line -- the budget never fired, which is the
+    #       only observable that distinguishes None from a budget that stopped it early
+    #       and left a partial seed reporting as complete.
     "e1b_commit2": (None, 17815,
                     "E1b seed 1, steps 17,815-35,630 (epochs 6-10). RAN 2026-09-11 on "
-                    "PRE-PIN code under onnxruntime 1.30.0. Resume corroborated by log; "
-                    "budget=None NOT yet corroborated (needs the run's end)."),
+                    "PRE-PIN code under onnxruntime 1.30.0. Fully corroborated by log."),
     "host_baseline": (None, 0,
                       "E1's own 3-epoch config on this host (3ak step 1). RAN 2026-09-10 "
                       "under onnxruntime 1.29.0."),
@@ -869,6 +869,13 @@ for seed in SEEDS:
         # is why the first INT8 failure could not be localised from the saved artefacts —
         # only torch-FP32 and INT8 survived, and those differ in TWO steps (export AND
         # quantisation), so their disagreement isolated neither.
+        #
+        # ⚠ THIS PARAGRAPH IS ABOUT ORDERING, NOT PERSISTENCE, and has been misread as a
+        # retention guarantee. The directory IS still deleted — see the rmtree below,
+        # after the discriminator has used it. It NEVER reaches the notebook output, so
+        # `onnx_*` in _RESTORE_GLOBS can never match and no downstream check may assume
+        # the FP32 ONNX is downloadable. It is reproducible instead: exporting it locally
+        # from fp32_<tag>_<seed> was verified byte-identical (3be).
         print("  exporting ONNX FP32…")
         ORTModelForSequenceClassification.from_pretrained(str(fp32), export=True
             ).save_pretrained(str(onnx_dir))
@@ -912,7 +919,10 @@ for seed in SEEDS:
     dev_int8_logits = onnx_predict(int8_dir,
                                    [ds["validation"][i]["text"] for i in DEV_IDX], MAX_LENGTH)
     int8_test3000 = int8_logits.argmax(-1)
-    shutil.rmtree(onnx_dir, ignore_errors=True)   # ~740MB, and now MEASURED, not assumed
+    # DELETED HERE, after the discriminator arm above has used it. ~740MB, and now
+    # MEASURED rather than assumed. This is the line that keeps onnx_<tag>_<seed> out of
+    # the notebook output; the export comment above governs ORDER, not survival (3be).
+    shutil.rmtree(onnx_dir, ignore_errors=True)
     # train_env goes into the NPZ as well as the JSON. 3e instance 9: a fact needed to
     # interpret a result later must live in the artefact, and the npz is routinely read
     # (scripts/build_frontier.py, e6_seed_structure.py) without its sibling JSON.
