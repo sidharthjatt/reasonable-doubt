@@ -88,7 +88,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def tool_versions() -> dict:
     import onnx
-    import onnxruntime as ort
+
+    from src.ort_runtime import import_onnxruntime
+
+    ort = import_onnxruntime()
 
     try:
         from optimum.version import __version__ as optimum_version
@@ -124,6 +127,10 @@ def export_fp32_onnx(fp32_dir: Path, onnx_dir: Path) -> None:
     from optimum.onnxruntime import ORTModelForSequenceClassification
     from transformers import AutoTokenizer
 
+    from src.ort_runtime import import_onnxruntime
+
+    import_onnxruntime()          # optimum builds sessions internally; disable first
+
     print(f"  exporting ONNX FP32 from {fp32_dir} -> {onnx_dir}")
     ORTModelForSequenceClassification.from_pretrained(
         str(fp32_dir), export=True).save_pretrained(str(onnx_dir))
@@ -136,6 +143,10 @@ def quantise(onnx_dir: Path, out_dir: Path) -> Path:
     from optimum.onnxruntime import ORTQuantizer
     from optimum.onnxruntime.configuration import AutoQuantizationConfig
 
+    from src.ort_runtime import import_onnxruntime
+
+    import_onnxruntime()          # optimum builds sessions internally; disable first
+
     ORTQuantizer.from_pretrained(str(onnx_dir)).quantize(
         save_dir=str(out_dir),
         quantization_config=AutoQuantizationConfig.arm64(is_static=False,
@@ -144,7 +155,9 @@ def quantise(onnx_dir: Path, out_dir: Path) -> Path:
 
 
 def can_load(path: Path) -> tuple[bool, str | None]:
-    import onnxruntime as ort
+    from src.ort_runtime import import_onnxruntime
+
+    ort = import_onnxruntime()
 
     try:
         ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])

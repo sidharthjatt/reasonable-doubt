@@ -35,8 +35,12 @@ class Tier0Encoder:
     is_stub: bool = False
 
     def __post_init__(self) -> None:
-        import onnxruntime as ort
         from transformers import AutoTokenizer
+
+        # Telemetry off BEFORE the session exists (src/ort_runtime.py).
+        from src.ort_runtime import import_onnxruntime
+
+        ort = import_onnxruntime()
 
         self.model_dir = Path(self.model_dir)
         if not self.model_dir.exists():

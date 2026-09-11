@@ -50,7 +50,9 @@ def main() -> int:
     # be pointed at test_3000 or train_holdout_3000 to manufacture a reporting number.
     assert_threshold_split(args.manifest)
 
-    import onnxruntime as ort
+    from src.ort_runtime import import_onnxruntime
+
+    ort = import_onnxruntime()
     from transformers import AutoTokenizer
 
     ds = load_ledgar()

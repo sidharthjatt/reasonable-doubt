@@ -1373,6 +1373,77 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bh. FP32 Tier 0 BENCHED; which published numbers need restating (2026-09-11)
+
+**Not an experiment.** §3bg moved serving to FP32. Every local cost and latency figure
+published so far was measured on **INT8**, so this records the FP32 measurement and lists
+exactly what it does and does not license.
+
+**MEASURED — same protocol and replicate count as the INT8 row** (3 artefacts × 3 runs = 9,
+batch 1, `max_length` 512, mean over all runs, no outlier excluded, §3aj). The three FP32
+ONNX exports come from `fp32_ce_{1,2,3}` through the path §3be validated byte-for-byte.
+
+| | INT8 (unchanged) | **FP32** |
+|---|---|---|
+| throughput req/s | 28.3615 ± 1.1839 | **24.5969 ± 2.2374** |
+| p50 latency ms | 25.3969 | **29.3805 ± 2.7296** |
+| p95 latency ms | 99.7950 | **110.9449 ± 10.4128** |
+| n runs | 9 | **9** |
+| energy J/req | 0.6269 | **UNMEASURED** |
+
+**FP32 is only 1.15× slower** — far less than the 715 MB vs 244 MB artefact gap suggests.
+Per-artefact means 24.2966 / 25.1584 / 24.3356, a 3.5% spread against a 9.1% within-run
+sd, consistent with the INT8 row's weight-independence though not formally re-tested.
+
+**ENERGY IS UNMEASURED AND THAT IS A HARD BLOCK, not a gap to be filled with the INT8
+number.** `powermetrics` needs sudo and none is available here, so all 9 runs are marked
+`complete_for_e6=false` and `scripts/bench_aggregate.py` **refuses** them. That refusal is
+correct: E6's asymptote *is* the power term. The INT8 row is untouched — it remains the
+measured basis of every E6 number published, and overwriting it would restate results
+rather than add to them.
+
+---
+
+#### What needs restating, in three groups
+
+**A. BLOCKED ENTIRELY on the FP32 energy measurement.** These are *pure marginal energy* —
+there is no capital term to fall back on, so no bound can be given at all:
+
+| figure | INT8 value |
+|---|---|
+| `tier0_usd_per_1k_sunk` | 1.4750e-05 |
+| Sonnet-5-to-Tier-0 cost ratio | **29,567×** |
+| E6's **sunk** curve and its Pareto points | all points |
+| `costs.yaml` energy_note's "1/30,395 of $0.4483" | also cites the superseded $0.4483 (§3ac fixed it to $0.43610) |
+
+**B. COMPUTABLE from today's throughput; only the last ~1.5% waits on energy.** The capital
+term dominates: energy is **1.54%** of the INT8 local per-request cost.
+
+| figure | INT8 | FP32 |
+|---|---|---|
+| `assumed_lifetime_requests` | 670,805,531 | **581,765,879** (−13.3%) |
+| capital per request | 9.4493e-07 | **1.0895e-06** |
+| local $/1k | $0.00095968 | **$0.0011043 – $0.0011486** (+15% to +20%), the range spanning FP32 energy from 1× to 4× INT8 |
+| `tier0_usd_per_1k_greenfield` at V=1e6 | 0.63388 | restate with the above |
+
+> **LIVE AND CURRENTLY WRONG-PRECISION:** `src/serve/pricing.local_usd_per_request()` reads
+> the INT8-derived `assumed_lifetime_requests` and `energy_joules_per_request`, so **every
+> `/classify` response's `estimated_cost_usd` is an INT8 figure while the service runs
+> FP32.** It understates by ~15%. Not corrected here because correcting it means writing an
+> unmeasured energy term into the billing path, which hard rule 11 forbids.
+
+**C. ESSENTIALLY UNCHANGED — and this is the one that matters most.**
+
+> **V\* ≈ 1,453,465 clauses does NOT move with precision.** Its denominator is
+> `api_usd_per_1k − marginal_local_per_1k` = 0.43610 − 1.475e-05, and the local term is
+> **0.003%** of it. Even at 4× the INT8 energy, V\* shifts by ~0.01%. The break-even volume
+> is set by the device price against the API price; throughput changes the *amortisation*,
+> not the crossover. **E6's headline conclusion is precision-independent.**
+
+**D. SEPARATE AXIS.** E7's latency inputs move and are measured: p50 25.40 → **29.38 ms**,
+p95 99.80 → **110.94 ms**. E6 does not consume latency (§3aa), so no cost conclusion
+depends on this.
+
 ### 3bg. DEPLOYMENT DECISION — serve FP32 ONNX, not INT8 (2026-09-11)
 
 **Not an experiment. A deployment decision, with the verification that licensed it.**

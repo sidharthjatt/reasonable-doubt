@@ -198,6 +198,7 @@ def create_app(config: ServiceConfig | None = None, *, tier2=None,
 
     @app.get("/health")
     def health() -> dict:
+        from src.ort_runtime import telemetry_disabled
         from src.serve.canary import cpu_isa_flags, onnxruntime_version
         return {
             "status": "ok",
@@ -216,6 +217,9 @@ def create_app(config: ServiceConfig | None = None, *, tier2=None,
                 "onnxruntime_version": onnxruntime_version(),
                 # null means UNREADABLE, not absent — see src/serve/canary.py.
                 "cpu_isa_flags": cpu_isa_flags(),
+                # ORT telemetry is off: it crashes at teardown on macOS and the service
+                # should not phone home regardless (src/ort_runtime.py).
+                "ort_telemetry_disabled": telemetry_disabled(),
             },
             "escalation_enabled": cascade.tier2.available,
         }

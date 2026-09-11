@@ -147,7 +147,9 @@ def load_runtime(onnx_dir: Path):
     than inference. Timing was unaffected (loading sat outside the timer), but the
     watt figure was not.
     """
-    import onnxruntime as ort
+    from src.ort_runtime import import_onnxruntime
+
+    ort = import_onnxruntime()
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(str(onnx_dir))

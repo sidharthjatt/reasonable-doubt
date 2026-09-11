@@ -358,7 +358,13 @@ def main() -> int:
         # is stated. Registered comparison, not an afterthought.
         print("\n  exporting ONNX + INT8 …")
         try:
+            import onnxruntime as _ort
             from optimum.onnxruntime import ORTModelForSequenceClassification, ORTQuantizer
+
+            # Telemetry off BEFORE optimum builds a session. INLINED, not imported from
+            # src.ort_runtime: this file must stay standalone because Kaggle runs it
+            # without this repo on the path (test_training_script_is_standalone).
+            _ort.disable_telemetry_events()
             from optimum.onnxruntime.configuration import AutoQuantizationConfig
 
             ort = ORTModelForSequenceClassification.from_pretrained(

@@ -176,7 +176,9 @@ def verify_canary(canary: CanarySet, ds) -> None:
 
 def onnxruntime_version() -> str | None:
     try:
-        import onnxruntime as ort
+        from src.ort_runtime import import_onnxruntime
+
+        ort = import_onnxruntime()
     except ImportError:
         return None
     return getattr(ort, "__version__", None)

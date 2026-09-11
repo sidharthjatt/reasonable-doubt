@@ -227,6 +227,58 @@ local_hardware:
         RETROSPECTIVELY VALIDATED rather than merely assumed — with the correction that
         the probe over-estimated throughput by 6.6% (1.58 sd), so every probe-derived
         figure was optimistic by that margin.
+    # ---- THE DEPLOYED PRECISION as of 3bg. Added ALONGSIDE the INT8 row, which is
+    # ---- untouched: INT8 remains the measured basis of every E6 number published so
+    # ---- far, and overwriting it would silently restate results rather than add to them.
+    tier0_encoder_onnx_fp32:
+      # INCOMPLETE FOR E6, AND THE INCOMPLETENESS IS THE POINT. `powermetrics` requires
+      # sudo and no passwordless sudo is configured on this machine, so the harness was
+      # run with --skip-power and every run is marked complete_for_e6=false.
+      # scripts/bench_aggregate.py REFUSES to aggregate them, which is correct: E6's
+      # asymptote IS the power term, and a curve built without it tends to zero and makes
+      # local always win at volume. The throughput and latency figures below are real
+      # measurements; the energy ones are absent, not estimated (hard rule 11).
+      status: incomplete_for_e6_energy_unmeasured
+      # SAME PROTOCOL AND REPLICATE COUNT AS THE INT8 ROW: 3 artefacts x 3 runs = 9 runs,
+      # batch size 1, max_length 512, mean over ALL runs with no outlier excluded (3aj).
+      # The three FP32 ONNX exports come from fp32_ce_{1,2,3} through the export path
+      # 3be's control validated byte-for-byte.
+      requests_per_second: 24.5969
+      requests_per_second_sd: 2.2374
+      p50_latency_ms: 29.3805
+      p50_latency_ms_sd: 2.7296
+      p95_latency_ms: 110.9449
+      p95_latency_ms_sd: 10.4128
+      n_runs: 9
+      batch_size: 1
+      max_length: 512
+      measured_on: "3 FP32 ONNX exports x 3 runs, arm64_local, 2026-09-11, --skip-power"
+      # Per-artefact means 24.2966 / 25.1584 / 24.3356 — a 3.5% spread against a 9.1%
+      # within-run sd, i.e. the same weight-independence the INT8 row measured, though
+      # NOT re-tested formally here.
+      per_artefact_throughput_rps: [24.2966, 25.1584, 24.3356]
+      # ENERGY IS NOT MEASURED. Null means unmeasured, never zero and never inherited
+      # from the INT8 row: FP32 does ~4x the arithmetic per token and its power draw is
+      # an open question, not a copy.
+      power_draw_soc_watts_idle: null
+      power_draw_soc_watts_load: null
+      power_draw_soc_watts_marginal: null
+      power_draw_wall_watts: null
+      energy_joules_per_request: null
+      energy_joules_per_request_sd: null
+      energy_note: >
+        UNMEASURED. Needs `sudo powermetrics`, which this run could not obtain. Until it
+        is measured, NO FP32 cost-per-clause, break-even volume or E6 curve point can be
+        computed — the energy term is the curve's asymptote. Re-run
+        `python -m src.serve.bench_local --onnx-dir models/onnx_ce_<n>_fp32
+        --tier tier0_encoder_onnx_fp32 --batch-size 1 --max-length 512 --run <r>`
+        under sudo, 3 artefacts x 3 runs, then scripts/bench_aggregate.py.
+      throughput_note: >
+        FP32 is 1.15x slower than INT8 on this host (24.5969 vs 28.3615 req/s), and p50
+        latency 29.38ms vs 25.40ms. That is a far smaller penalty than the 715MB vs 244MB
+        artefact size suggests, and it is the price of the only precision qualified to run
+        on a Linux target (3bf/3bg).
+
     tier1_qwen2_5_1_5b_instruct:
       # UNMEASURED — a real gap, not a decision. Filling it needs the trained adapter
       # served locally (mlx_lm.server or llama.cpp GGUF) and benchmarked the way Tier 0

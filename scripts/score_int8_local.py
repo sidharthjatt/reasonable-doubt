@@ -43,7 +43,9 @@ def main() -> int:
                     help="npz path for the raw logits + row indices (for E6/E5 joins)")
     args = ap.parse_args()
 
-    import onnxruntime as ort
+    from src.ort_runtime import import_onnxruntime
+
+    ort = import_onnxruntime()
     from transformers import AutoTokenizer
 
     ds = load_ledgar()
