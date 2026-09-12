@@ -229,25 +229,51 @@ def test_notebooks_no_longer_call_sklearn_directly_for_reported_metrics():
         assert "_macro_report" in src, f"{name} is missing the ported scorer"
 
 
+def _git_tracked_results() -> set[str]:
+    """Basenames of the files under results/ that git tracks. Empty if git is unavailable."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "ls-files", "results/"], cwd=ROOT,
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if out.returncode != 0:
+        return set()
+    return {Path(line).name for line in out.stdout.split() if line}
+
+
 def test_grandfathered_list_only_shrinks():
     """Every grandfathered name must still exist — a stale entry hides a real gap.
 
-    SKIPS ONLY WHEN NONE ARE PRESENT. results/* is gitignored, so on a clean checkout
-    every name is absent and the check cannot tell a deliberately removed entry from one
-    that was never checked out. When SOME are present the artefacts clearly are on disk,
-    so a missing one is real staleness and still fails — the skip is scoped to the case
-    it cannot decide, not used to make the test disappear in CI.
+    DECIDABILITY IS PER NAME, not per checkout, and that is a correction. This test used
+    to skip only when NONE of the names were present, on the assumption that results/ is
+    either fully checked out (locally) or fully absent (CI). That assumption broke the
+    moment some result summaries were committed for REPORT.md to cite: a clean checkout
+    then has *some* of them, which flipped the test out of its skip branch and made it
+    report the still-gitignored names as stale. They are not stale. They are untracked.
+
+    So: a name git TRACKS must be on disk, and its absence is real staleness, checked
+    everywhere. A name git does NOT track cannot be judged from a clean checkout at all.
+    The tracked half of the check now runs in CI, where the whole test used to skip.
     """
-    present = [n for n in GRANDFATHERED if (RESULTS / n).exists()]
-    if not present:
-        pytest.skip(
-            f"GITIGNORED ARTEFACT ABSENT: none of the {len(GRANDFATHERED)} grandfathered "
-            f"files are in results/, which is gitignored (`results/*`). A clean checkout "
-            f"cannot distinguish a removed entry from one never fetched. SKIPPED, not "
-            f"passed."
-        )
-    absent = [n for n in GRANDFATHERED if not (RESULTS / n).exists()]
-    assert not absent, (
-        f"GRANDFATHERED names no longer on disk: {absent}. Remove them, so the list "
-        "measures outstanding debt rather than history."
+    tracked = _git_tracked_results()
+
+    missing_tracked = sorted(n for n in GRANDFATHERED
+                             if n in tracked and not (RESULTS / n).exists())
+    assert not missing_tracked, (
+        f"GRANDFATHERED names that git TRACKS but are not on disk: {missing_tracked}. "
+        f"That is real staleness: remove them from the list, so it measures outstanding "
+        f"debt rather than history."
     )
+
+    undecidable = sorted(n for n in GRANDFATHERED
+                         if n not in tracked and not (RESULTS / n).exists())
+    if undecidable:
+        pytest.skip(
+            f"PARTIALLY VERIFIED, then SKIPPED. The tracked grandfathered names were "
+            f"checked and are all present. {len(undecidable)} of {len(GRANDFATHERED)} "
+            f"are gitignored (`results/*`) and absent, so a clean checkout cannot tell a "
+            f"deliberately removed entry from one never fetched: {undecidable}. "
+            f"Run locally with the artefacts on disk to decide these."
+        )

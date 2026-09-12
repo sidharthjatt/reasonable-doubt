@@ -48,7 +48,8 @@ class FakeTier0:
                           top_k=((label, 0.71), ("Governing Laws", 0.19), ("Terms", 0.10)))
 
     def describe(self):
-        return {"model_dir": "fake"}
+        return {"model_dir": "fake", "onnx": "fake.onnx", "max_length": 512,
+                "n_labels": 100}
 
 
 class FakeTier2:
@@ -478,7 +479,7 @@ def test_a_failing_canary_prevents_the_app_from_being_created(config, fastapi_cl
     from src.serve import app as app_mod
 
     monkeypatch.setattr(app_mod, "build_cascade",
-                        lambda cfg, tier2=None: Cascade(
+                        lambda cfg, tier0=None, tier2=None: Cascade(
                             tier0=FakeTier0(label="Adjustments", margin=0.97),
                             tier2=FakeTier2(available=False), config=config,
                             router=MarginRouter(threshold=config.threshold.threshold)))
@@ -1223,13 +1224,22 @@ def test_classify_returns_top_3_with_scores(config):
 
 
 def test_real_encoder_top_k_is_a_softmax_over_its_own_logits(ledgar):
-    """Scores are a DISPLAY quantity; they must still be the model's own distribution."""
+    """Scores are a DISPLAY quantity; they must still be the model's own distribution.
+
+    This one genuinely needs the weights: it checks that `top_k` is a real softmax over
+    the encoder's OWN logits, which a fake cannot stand in for. It is the only part of
+    the top-3 feature that cannot be covered from a clean checkout.
+    """
     import numpy as np
 
     from src.data.labels import load_labels
     from src.serve.tier0 import Tier0Encoder
+    from tests.conftest import require_artifact
 
     cfg = ServiceConfig.load()
+    require_artifact(cfg.tier0_model_dir,
+                     "the served encoder; top_k must be verified against REAL logits, "
+                     "which no fake can stand in for. models/ is gitignored (`/models/`)")
     enc = Tier0Encoder(model_dir=cfg.tier0_model_dir, labels=load_labels(),
                        max_length=cfg.tier0_max_length)
     lg = enc.logits("This Agreement shall be governed by the laws of the State of New York.")
@@ -1243,12 +1253,17 @@ def test_real_encoder_top_k_is_a_softmax_over_its_own_logits(ledgar):
 
 
 def test_classify_rejects_input_over_the_cap():
-    """A public endpoint must not be handed a novel to tokenise. 422, not a silent trim."""
+    """A public endpoint must not be handed a novel to tokenise. 422, not a silent trim.
+
+    Runs against an injected Tier 0 (`build_cascade(tier0=...)`): the cap is enforced by
+    the request model BEFORE any tokenizer sees the text, so the real encoder is not what
+    is under test here and requiring it would only make this skip in CI.
+    """
     from fastapi.testclient import TestClient
 
     from src.serve.app import MAX_INPUT_CHARS, create_app
 
-    client = TestClient(create_app(run_canary_on_start=False))
+    client = TestClient(create_app(tier0=FakeTier0(), run_canary_on_start=False))
     r = client.post("/classify", json={"text": "x" * (MAX_INPUT_CHARS + 1)})
     assert r.status_code == 422
     assert "20000" in r.text or "max_length" in r.text
@@ -1261,7 +1276,7 @@ def test_classify_rejects_empty_input():
 
     from src.serve.app import create_app
 
-    client = TestClient(create_app(run_canary_on_start=False))
+    client = TestClient(create_app(tier0=FakeTier0(), run_canary_on_start=False))
     assert client.post("/classify", json={"text": ""}).status_code == 422
 
 
@@ -1271,7 +1286,8 @@ def test_index_page_is_served_and_names_the_flag_meaning():
 
     from src.serve.app import create_app
 
-    r = TestClient(create_app(run_canary_on_start=False)).get("/")
+    r = TestClient(create_app(tier0=FakeTier0(),
+                              run_canary_on_start=False)).get("/")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "low confidence — human review recommended" in r.text
@@ -1292,7 +1308,8 @@ def test_health_separates_escalation_CONFIGURED_from_key_availability():
 
     from src.serve.app import create_app
 
-    h = TestClient(create_app(run_canary_on_start=False)).get("/health").json()
+    h = TestClient(create_app(tier0=FakeTier0(),
+                              run_canary_on_start=False)).get("/health").json()
     e = h["escalation"]
     assert e["configured"] is False, "§3bm: off by configuration"
     assert set(e) == {"configured", "tier2_available", "effective", "note"}

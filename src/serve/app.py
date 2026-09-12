@@ -181,8 +181,16 @@ class Cascade:
         }
 
 
-def build_cascade(config: ServiceConfig | None = None, *, tier2=None) -> Cascade:
-    """Construct the deployed cascade. Loads the ONNX session once."""
+def build_cascade(config: ServiceConfig | None = None, *, tier0=None,
+                  tier2=None) -> Cascade:
+    """Construct the deployed cascade. Loads the ONNX session once.
+
+    `tier0` is an injection point that mirrors `tier2`. It exists for tests of the HTTP
+    surface — request validation, the response shape, the demo page, `/health` — none of
+    which care which encoder answers. `models/` is gitignored, so without it those tests
+    could only skip in CI, and the service's HTTP layer would have no CI coverage at all.
+    Production passes nothing and gets the real encoder.
+    """
     from src.data.labels import load_labels
     from src.serve.tier0 import Tier0Encoder
     from src.serve.tier2 import Tier2Claude
@@ -190,8 +198,9 @@ def build_cascade(config: ServiceConfig | None = None, *, tier2=None) -> Cascade
     config = config or ServiceConfig.load()
     labels = load_labels()
 
-    tier0 = Tier0Encoder(model_dir=config.tier0_model_dir, labels=labels,
-                         max_length=config.tier0_max_length)
+    tier0 = tier0 if tier0 is not None else Tier0Encoder(
+        model_dir=config.tier0_model_dir, labels=labels,
+        max_length=config.tier0_max_length)
     tier2 = tier2 if tier2 is not None else Tier2Claude(
         model=config.tier2_model, labels=labels,
         max_output_tokens=config.tier2_max_output_tokens,
@@ -223,13 +232,13 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
             **result.as_dict()}
 
 
-def create_app(config: ServiceConfig | None = None, *, tier2=None,
+def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
                run_canary_on_start: bool = True):
     """Build the FastAPI app. The canary runs HERE, so a failure prevents startup."""
     from fastapi import FastAPI
     from fastapi.responses import HTMLResponse
 
-    cascade = build_cascade(config, tier2=tier2)
+    cascade = build_cascade(config, tier0=tier0, tier2=tier2)
     canary = run_startup_canary(cascade) if run_canary_on_start else {
         "ran": False, "reason": "explicitly skipped by the caller"}
 
