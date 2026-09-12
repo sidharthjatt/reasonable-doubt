@@ -15,6 +15,7 @@ the three turned out to be unnecessary.
 | **macro-F1, `test_3000`** | **0.8091** (ONNX FP32, arm64, single seed) |
 | Sonnet 5 zero-shot, same 3,000 rows | 0.6148 at **496×** the cost per clause |
 | Architecture | one tier, plus a `needs_review` flag |
+| Live | <https://reasonable-doubt-111680840326.asia-south1.run.app> |
 
 ![Accuracy versus cost](docs/figures/accuracy_vs_cost.png)
 
@@ -24,13 +25,23 @@ much. Escalating its low-confidence rows to Sonnet 5 was measured and did not he
 router, which flags those rows instead. [REPORT.md](REPORT.md) has the numbers, the
 limitations, and the bugs that produced plausible wrong answers along the way.
 
-## There is no live demo link
+## The live service, and its cold start
 
-Hugging Face gates compute-backed Spaces behind a PRO subscription, so the hosted demo is
-not up. The service is a self-contained Docker image and runs anywhere with a CPU. Its
-startup canary passes at 191/200 on macOS arm64 and on Linux aarch64, and at 191/200 on a
-Linux x86 build that was emulated on Apple Silicon rather than run on real x86 hardware. The
-Space deployment is staged in `deploy/space/` and needs only an account that can host it.
+It runs on Cloud Run in Mumbai, scaled to zero. **The first request after an idle period
+takes about 150 seconds.** Warm requests take 0.2 to 0.3 seconds.
+
+That is not a bug and I have not tuned it away. With `min-instances 0` nothing is running
+between requests, so a cold request pays for the container starting, the 715 MB ONNX
+session opening, and a 200-row canary finishing before the port opens. Keeping an instance
+warm would fix it and would also burn free-tier quota around the clock, which is a bad
+trade for a demo. Load the page, wait, then it is fast.
+
+**It needs 4 GiB, not 2.** A 2 GiB revision failed to start: `Memory limit of 2048 MiB
+exceeded with 2087 MiB used`, a 2% overshoot, during the canary. Worth knowing before
+sizing a box for this.
+
+A Hugging Face Space is staged in `deploy/space/` but not deployed, because HF gates
+compute-backed Spaces behind a PRO subscription.
 
 ## What it does, on real input
 
@@ -56,33 +67,42 @@ blocks trimmed.
 Input: *"This Agreement shall be governed by and construed in accordance with the laws of
 the State of New York, without regard to its conflict of laws principles."*
 
-Now one the model should not be confident about. Input: *"This Sixth Amendment shall not be
-valid and binding on Landlord and Tenant unless and until it has been completely executed
-by and delivered to both parties."*
+Now something that is not a contract clause at all. Input: *"Please preheat the oven to 180
+degrees Celsius and bake the cake for 35 minutes until golden brown."*
 
 ```json
 {
-  "label": "Effectiveness",
-  "margin": 0.1398802399635315,
+  "label": "Terms",
+  "margin": 0.4477890729904175,
   "needs_review": true,
   "needs_review_meaning": "low confidence — human review recommended",
   "top_3": [
-    {"label": "Effectiveness",   "score": 0.5495100799149649},
-    {"label": "Binding Effects", "score": 0.40962984841772326},
-    {"label": "Assigns",         "score": 0.01274250195615738}
+    {"label": "Terms",           "score": 0.5904529792940023},
+    {"label": "Interpretations", "score": 0.14266393628137297},
+    {"label": "General",         "score": 0.07784326163120221}
   ],
   "tier_used": "tier0",
   "estimated_cost_usd": 8.788115222574201e-07
 }
 ```
 
-That clause is genuinely two things at once, and the model splits 0.55 to 0.41 between two
-defensible labels. The flag fires because the top-two margin falls below a threshold
-calibrated on a held-out split. On the rows it flags, the encoder is right about 35% of the
-time against 87% overall, so the flag is a reliable signal that the answer is doubtful. It
-is not a second opinion, and nothing downstream acts on it yet.
+A 100-class classifier has no "none of these" option, so it must return a label, and it
+returns `Terms`. What it does not do is return it confidently: 59% against a top-two margin
+of 0.45, under the threshold, flagged. That is the behaviour worth having. The failure mode
+to fear from a model like this is not a wrong label, it is a wrong label at 99%.
+
+It fires on genuinely ambiguous contract text too. *"This Sixth Amendment shall not be valid
+and binding on Landlord and Tenant unless and until it has been completely executed and
+delivered"* splits 0.55 `Effectiveness` against 0.41 `Binding Effects`, margin 0.14, flagged.
+Both labels are defensible there.
+
+The threshold comes from a held-out split, never from test. On the rows it flags, the
+encoder is right about 35% of the time against 87% overall, so the flag is a reliable signal
+that the answer is doubtful. It is not a second opinion, and nothing downstream acts on it.
 
 ## Quickstart
+
+Try the live one, or run it yourself:
 
 ```bash
 docker build -t reasonable-doubt:local . && docker run --rm -p 8000:8000 -v "$PWD/models:/models:ro" -e TIER0_MODEL_DIR=/models/onnx_ce10ep_1_fp32 reasonable-doubt:local
@@ -95,6 +115,12 @@ Weights are on the Hub:
 The container classifies 200 fixed rows before uvicorn binds and exits non-zero if accuracy
 falls below 0.80. That check exists because the INT8 build of these same weights scores
 0.000166 on a CPU without AVX-512 VNNI, which is chance, and raises no error while doing it.
+On Cloud Run it passes at 191/200, the same as everywhere else. **That machine has
+AVX-512 VNNI**, so it does not test the hardware class INT8 broke on; see
+[REPORT.md](REPORT.md).
+
+To deploy your own copy, `deploy/cloudrun/` has the image (model baked in, sha256 verified
+at build) and the exact `gcloud run deploy` flags.
 
 `/classify` takes `{"text": "..."}` up to 20,000 characters. `/health` reports the canary
 result, the CPU ISA flags and the router's provenance. `/` is a one-page demo.

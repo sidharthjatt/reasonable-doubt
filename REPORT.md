@@ -36,7 +36,13 @@ Seed 1 was picked on the selection split (`train_holdout_3000`: 0.8193 against 0
 cost 0.0028 of test macro-F1 and I followed it anyway.
 
 The service exposes `/classify`, `/health`, and a one-page demo. It holds no API keys and
-makes no network calls at inference.
+makes no network calls at inference. It is live on Cloud Run in Mumbai, scaled to zero:
+<https://reasonable-doubt-111680840326.asia-south1.run.app>
+
+The first request after an idle period takes about **150 seconds**, because nothing is
+running between requests. Warm requests take **0.2 to 0.3 seconds**. The service needs
+**4 GiB**; a 2 GiB revision failed to start with `Memory limit of 2048 MiB exceeded with
+2087 MiB used`, a 2% overshoot, during the canary.
 
 ---
 
@@ -131,8 +137,18 @@ The startup canary caught this. It classifies 200 fixed rows before the server b
 refuses to start below a floor. It is the reason the service is FP32 today.
 
 **FP32 never diverged in accuracy on any platform tested.** The served artefact scores
-191/200 on macOS arm64, on Linux aarch64, and on an emulated Linux x86 build, against a
-floor of 0.80.
+191/200 on macOS arm64, on Linux aarch64, on an emulated Linux x86 build, and on **real x86
+hardware on Cloud Run**, against a floor of 0.80. On Cloud Run the margins match the local
+arm64 values to four decimals (0.9867 and 0.1399 on two fixed clauses), so it is returning
+the same answers and not merely the same accuracy.
+
+> **THE CLOUD RUN MACHINE HAS `avx512_vnni: true`, AND THAT MATTERS MORE THAN THE PASS.**
+> It is the first host in this project that has it. Kaggle's Xeon, where INT8 scored
+> 0.000166, had `avx512f` and `avx2` but **no VNNI**, and the emulated x86 build had only
+> `avx2`. So this deploy qualifies FP32 on x86-with-VNNI and says **nothing** about the
+> hardware class that broke INT8. **The non-VNNI x86 case remains untested outside that
+> one Kaggle run.** Reading "it passed on x86" as covering that class is exactly the
+> generalisation this report is trying not to make.
 
 **It is not bit-identical across those platforms either.** E1's artefact showed 0/200
 prediction disagreements between host and container. The served E1b artefact shows
@@ -283,11 +299,11 @@ On the mean it passes at 0.0077. E1 passes both ways, so the readings never dive
 Choosing now means choosing after seeing which one fails, so both are recorded and neither
 is adopted (§3bj).
 
-**The x86 evidence is emulated.** The x86 canary passed at 191/200 with
-`avx512_vnni: false`, which is the hardware class where INT8 collapsed. It ran in an
-emulated linux/amd64 container on Apple Silicon. That is a strong signal and not a
-qualification. Deploying to a real x86 host was blocked on a Hugging Face billing gate, so
-the in-Space canary has never run.
+**x86 is now qualified for FP32, on one CPU type only.** The canary passes at 191/200 on
+Cloud Run, on real x86. That machine reports `avx512_vnni: true`. The CPU where INT8
+collapsed to 0.000166 reported `avx512_vnni: false`, and **no FP32 measurement has ever
+been taken on a non-VNNI x86 host outside that single Kaggle run**. Treat the x86
+qualification as covering VNNI-capable x86 and nothing wider.
 
 **Flagged rows have no review path.** `needs_review` is honest about uncertainty and does
 nothing about it. The clause still gets an encoder answer. The human review the flag
@@ -328,6 +344,21 @@ docker build -t reasonable-doubt:local . && docker run --rm -p 8000:8000 -v "$PW
 The startup canary classifies 200 fixed rows before uvicorn binds and exits non-zero below
 the floor. A Docker Space deployment is staged in `deploy/space/`, where the model is pulled
 from the model repo at build time and verified by sha256.
+
+**Deploy to Cloud Run.** `deploy/cloudrun/` holds the image and build script. The model is
+**baked into the image** rather than downloaded at startup, and its published sha256 is
+checked at build time so a wrong artefact fails the build instead of reaching production.
+
+```bash
+./deploy/cloudrun/build_and_push.sh
+```
+
+```bash
+gcloud run deploy reasonable-doubt --image=asia-south1-docker.pkg.dev/<project>/services/reasonable-doubt:<tag> --region=asia-south1 --memory=4Gi --cpu=1 --min-instances=0 --max-instances=2 --concurrency=4 --timeout=120 --allow-unauthenticated --port=8080 --startup-probe=tcpSocket.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=30
+```
+
+`--max-instances=2` is the spend cap. The startup probe has to be generous: the canary
+takes about two minutes on one vCPU, and the port does not open until it finishes.
 
 **Rebuild the ONNX export.** The export toolchain is pinned in `requirements-export.txt` as
 an overlay, because the repo venv has drifted off it and optimum's exporter will not import

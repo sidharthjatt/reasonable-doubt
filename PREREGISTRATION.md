@@ -1404,6 +1404,93 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bn. x86 QUALIFIED — on VNNI-capable x86 only, which is not the class that broke (2026-09-12)
+
+**Not an experiment. A deployment measurement**, registered because §3bf/§3bg's serving
+decision rested on a platform claim this is the first run to test on real hardware.
+
+#### The result
+
+The service was deployed to Cloud Run (`asia-south1`, 1 vCPU, 4 GiB, scaled to zero) with
+the FP32 artefact **baked into the image** and its published sha256 verified at build time.
+The startup canary ran before the port opened:
+
+> `TIER 0 CANARY PASSED: 191/200 = 0.9550 (floor 0.8000, reference 0.9550)`
+> `| precision=fp32 artefact=onnx_ce10ep_1_fp32`
+> `| Linux/x86_64 ort 1.29.0 isa={'avx512_vnni': True, 'avx512f': True, 'avx2': True}`
+
+Reproduced on a second cold instance. `/classify` returns margins matching local arm64 to
+**four decimals** (0.9867 / 0.1399 on two fixed clauses), so the same answers are being
+returned and not merely the same accuracy.
+
+| platform | canary | `avx512_vnni` |
+|---|---|---|
+| macOS arm64 | 191/200 | n/a (ARM) |
+| Linux aarch64, container | 191/200 | n/a (ARM) |
+| Linux x86, **emulated** on Apple Silicon | 191/200 | **false** |
+| **Linux x86, Cloud Run, real** | **191/200** | **TRUE** |
+
+#### THE CAVEAT IS THE POINT, and it limits the claim more than the pass extends it
+
+**Cloud Run's CPU has AVX-512 VNNI. It is the first host in this project that does.**
+Kaggle's Xeon, where INT8 scored **0.000166** against FP32's 0.8115 in the same process
+(§3as, §3bg), reported `avx512f: true, avx2: true, avx512_vnni: FALSE`. The emulated x86
+build reported `avx2` only.
+
+> **WHAT IS QUALIFIED: FP32 on VNNI-capable x86.**
+> **WHAT IS NOT: the non-VNNI x86 class, which is the class INT8 broke on.** No FP32
+> measurement has ever been taken on a non-VNNI x86 host outside that one Kaggle run, and
+> that run measured INT8's collapse rather than FP32's stability under load.
+>
+> Reading this pass as "x86 is qualified" would extend it across exactly the boundary the
+> INT8 finding runs along. §3bg's decision to serve FP32 is unaffected either way: it rests
+> on FP32 being the only precision qualified on *any* Linux target, and it now has a real
+> host behind it rather than an emulator.
+
+**An untested hypothesis this raises, recorded so it is not mistaken for a result:** INT8
+might work on a VNNI host, since VNNI is what its kernels want. Nothing here tests that,
+and testing it is a new experiment needing its own registration and its own accept rule.
+
+#### Deployment facts a reader needs
+
+- **4 GiB is required.** A 2 GiB revision failed to start: `Memory limit of 2048 MiB
+  exceeded with 2087 MiB used`, a 2% overshoot, during the canary's inference loop. Memory
+  was raised rather than trimming the canary or shrinking the ORT arena, either of which
+  would have changed what the service does in order to fit a box.
+- **Cold start ≈ 150 s** at `min-instances 0`, measured end to end after an 18-minute idle
+  (`http=200 total=150.53s`). Warm requests are 0.2–0.3 s. The Cloud Run **request timeout
+  does not cover the startup wait**: a 120 s timeout returned 200 at 150 s.
+- **No secret of any kind.** One environment variable (`TIER0_PRECISION=fp32`), no
+  `secretKeyRef`, no API key, `tier2.enabled: false` (§3bm). The service cannot spend.
+- `--max-instances=2` is the only real spend bound.
+
+#### Startup cost, measured per phase
+
+The canary's 133.5 s in the first revision was **dataset load and inference added together**
+— `load_ledgar()` sat inside the timer as an argument expression. Separated and re-measured:
+
+| phase | Cloud Run (1 vCPU) | local arm64 | ratio |
+|---|---|---|---|
+| tokenizer init | 0.61 s | 0.27 s | 2.3× |
+| **ONNX session create** (739 MB) | **12.01 s** | 0.37 s | **32×** |
+| dataset load | 6.87 s | 4.52 s | 1.5× |
+| first inference | 0.59 s | 0.04 s | 15× |
+| **canary inference, 199 rows** | **119.39 s** | 8.03 s | **14.9×** |
+| per row | **600.2 ms** | 40.5 ms | 14.8× |
+
+**86% of startup is the canary's inference loop.** Two observations, both measured, with
+their explanations marked as hypotheses:
+
+1. **Per-row cost falls to ~145 ms once warm** (0.275 s round trip against a 0.130 s RTT
+   floor to `asia-south1`), against **600 ms** during the canary. So roughly **4× of the
+   gap is a startup transient, not steady state.** Cloud Run streams image layers lazily,
+   which would also explain the 32× on session creation reading a 739 MB file for the first
+   time. **Not confirmed.**
+2. The residual, ~145 ms against 40.5 ms locally, is **1 vCPU against a 10-core M-series**
+   and is the part that would not go away.
+
+**No fix applied.** The numbers are recorded; whether to act on them is a separate decision.
+
 ### 3bm. ESCALATION TURNED OFF — Tier 0 only, by measurement (2026-09-12)
 
 **A DEPLOYMENT DECISION, registered under §3bc. Not an experiment, no accept rule.**
@@ -2018,6 +2105,11 @@ term dominates: energy is **1.54%** of the INT8 local per-request cost.
 **D. SEPARATE AXIS.** E7's latency inputs move and are measured: p50 25.40 → **29.38 ms**,
 p95 99.80 → **110.94 ms**. E6 does not consume latency (§3aa), so no cost conclusion
 depends on this.
+
+> **⚠ x86 IS NOW QUALIFIED ON REAL HARDWARE — see §3bn (2026-09-12).** The canary passes
+> at 191/200 on Cloud Run x86. **That host has `avx512_vnni: true`**, unlike the Kaggle Xeon
+> where INT8 collapsed, so the non-VNNI x86 class this section reasons about is still
+> untested outside that one run.
 
 ### 3bg. DEPLOYMENT DECISION — serve FP32 ONNX, not INT8 (2026-09-11)
 
