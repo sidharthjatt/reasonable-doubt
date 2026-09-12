@@ -217,6 +217,7 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
     from src.data.loading import load_ledgar
     from src.serve.canary import CanarySet, hardware_report, run_canary
     import json
+    import time
 
     cfg = cascade.config
     if not cfg.canary_enabled:
@@ -226,8 +227,21 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
                 "hardware": hardware_report()}
 
     canary = CanarySet.from_dict(json.loads(cfg.canary_row_set.read_text()))
+    started = time.monotonic()
     result = run_canary(cascade.tier0, load_ledgar(), canary,
                         floor=cfg.canary_min_accuracy)
+    # LOG IT. The number that decides whether this process is allowed to serve belongs in
+    # the logs, not only behind /health: on a managed platform the logs are what you have
+    # when a revision fails to come up, and /health is exactly what you cannot reach then.
+    # A failure already raises with its own detail; this covers the passing case, which is
+    # otherwise invisible.
+    hw = result.hardware
+    print(f"TIER 0 CANARY PASSED: {result.n_correct}/{result.n} = {result.accuracy:.4f} "
+          f"(floor {cfg.canary_min_accuracy:.4f}, reference "
+          f"{cfg.canary_measured_accuracy:.4f}) in {time.monotonic() - started:.1f}s "
+          f"| precision={cfg.tier0_precision} artefact={cfg.tier0_model_dir.name} "
+          f"| {hw.get('system')}/{hw.get('machine')} ort {hw.get('onnxruntime_version')} "
+          f"isa={hw.get('cpu_isa_flags')}", flush=True)
     return {"ran": True, "reference_accuracy": cfg.canary_measured_accuracy,
             **result.as_dict()}
 
