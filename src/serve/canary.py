@@ -252,13 +252,22 @@ def run_canary(tier0, ds, canary: CanarySet, *, floor: float) -> CanaryResult:
         CanaryFailure: if accuracy is below the floor. The caller must not catch this
             and start anyway — that is the silent-degradation path this guards.
     """
-    verify_canary(canary, ds)
-    split = get_split(ds, canary.split)
-    rows = split.select(canary.indices)
-    names = label_names(ds)
-    gold = [names[int(x)] for x in rows["label"]]
+    from src.serve.startup_timing import phase
 
-    preds = [tier0.classify(t).label for t in rows["text"]]
+    with phase("canary_verify"):
+        verify_canary(canary, ds)
+    with phase("canary_row_select"):
+        split = get_split(ds, canary.split)
+        rows = split.select(canary.indices)
+        names = label_names(ds)
+        gold = [names[int(x)] for x in rows["label"]]
+        texts = list(rows["text"])
+    # FIRST INFERENCE SEPARATELY. ORT allocates its arena and picks kernels on the first
+    # run, so averaging it into the other 199 hides a one-off cost inside a per-row rate.
+    with phase("canary_first_inference"):
+        first = tier0.classify(texts[0]).label
+    with phase("canary_remaining_inference", n=len(texts) - 1):
+        preds = [first] + [tier0.classify(t).label for t in texts[1:]]
     n_correct = sum(1 for p, g in zip(preds, gold) if p == g)
     acc = n_correct / len(gold)
     result = CanaryResult(accuracy=acc, n=len(gold), n_correct=n_correct, floor=floor,

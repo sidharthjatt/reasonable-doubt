@@ -192,11 +192,14 @@ def build_cascade(config: ServiceConfig | None = None, *, tier0=None,
     Production passes nothing and gets the real encoder.
     """
     from src.data.labels import load_labels
+    from src.serve.startup_timing import phase
     from src.serve.tier0 import Tier0Encoder
     from src.serve.tier2 import Tier2Claude
 
-    config = config or ServiceConfig.load()
-    labels = load_labels()
+    with phase("config_load"):
+        config = config or ServiceConfig.load()
+    with phase("labels_load"):
+        labels = load_labels()
 
     tier0 = tier0 if tier0 is not None else Tier0Encoder(
         model_dir=config.tier0_model_dir, labels=labels,
@@ -226,10 +229,20 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
         return {"ran": False, "reason": "disabled in configs/serve.yaml",
                 "hardware": hardware_report()}
 
-    canary = CanarySet.from_dict(json.loads(cfg.canary_row_set.read_text()))
+    from src.serve.startup_timing import phase, phases_summary
+
+    with phase("canary_rowset_read"):
+        canary = CanarySet.from_dict(json.loads(cfg.canary_row_set.read_text()))
+    # load_ledgar() USED TO SIT INSIDE THE CANARY'S TIMER as an argument expression, which
+    # is why the 133.5s figure in the Cloud Run logs is dataset load AND inference added
+    # together. They are separated here because they have nothing to do with each other.
+    with phase("dataset_load"):
+        ds = load_ledgar()
     started = time.monotonic()
-    result = run_canary(cascade.tier0, load_ledgar(), canary,
-                        floor=cfg.canary_min_accuracy)
+    result = run_canary(cascade.tier0, ds, canary, floor=cfg.canary_min_accuracy)
+    print(f"STARTUP PHASE canary_run: {time.monotonic() - started:.2f}s "
+          f"n={result.n} per_row_ms={1000 * (time.monotonic() - started) / result.n:.1f}",
+          flush=True)
     # LOG IT. The number that decides whether this process is allowed to serve belongs in
     # the logs, not only behind /health: on a managed platform the logs are what you have
     # when a revision fails to come up, and /health is exactly what you cannot reach then.
@@ -242,6 +255,7 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
           f"| precision={cfg.tier0_precision} artefact={cfg.tier0_model_dir.name} "
           f"| {hw.get('system')}/{hw.get('machine')} ort {hw.get('onnxruntime_version')} "
           f"isa={hw.get('cpu_isa_flags')}", flush=True)
+    print(phases_summary(), flush=True)
     return {"ran": True, "reference_accuracy": cfg.canary_measured_accuracy,
             **result.as_dict()}
 

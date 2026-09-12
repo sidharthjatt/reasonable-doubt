@@ -54,9 +54,14 @@ class Tier0Encoder:
                 f"expected exactly one .onnx in {self.model_dir}, found "
                 f"{[f.name for f in onnx_files]}; refusing to guess which to serve")
 
-        self._tok = AutoTokenizer.from_pretrained(str(self.model_dir))
-        self._sess = ort.InferenceSession(str(onnx_files[0]),
-                                          providers=["CPUExecutionProvider"])
+        from src.serve.startup_timing import phase
+
+        with phase("tokenizer_init"):
+            self._tok = AutoTokenizer.from_pretrained(str(self.model_dir))
+        with phase("onnx_session_create",
+                   mb=round(onnx_files[0].stat().st_size / 1e6, 1)):
+            self._sess = ort.InferenceSession(str(onnx_files[0]),
+                                              providers=["CPUExecutionProvider"])
         self._wanted = {i.name for i in self._sess.get_inputs()}
         self._onnx_path = onnx_files[0]
 
