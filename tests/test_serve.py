@@ -1539,3 +1539,78 @@ def test_a_refused_request_carries_no_served_by(config, fastapi_client, monkeypa
     r = client.post("/classify", json={"text": "a clause"})
     assert r.status_code == 503
     assert "served_by" not in r.json(), "a refusal is not an answer"
+
+
+# ------------------------------------ the demo's context numbers (§3br)
+
+
+def test_facts_endpoint_serves_derived_numbers_with_their_sources():
+    """The demo is the most public surface here, so its numbers must be traceable.
+
+    They are DERIVED from the committed result summaries by scripts/build_demo_facts.py,
+    never typed into the page. Each block names where it came from.
+    """
+    from fastapi.testclient import TestClient
+
+    from src.serve.app import create_app
+
+    f = TestClient(create_app(run_canary_on_start=False,
+                              tier0=FakeTier0())).get("/facts").json()
+    for block in ("api_comparator", "tier0", "int8_collapse", "escalation"):
+        assert block in f, block
+        assert f[block]["source"], f"{block} must name its source"
+    assert f["api_comparator"]["usd_per_clause"] > 0
+    assert f["api_comparator"]["model"] == "claude-sonnet-5"
+    # The collapse figure is the point of that panel; if it stops being ~chance the panel
+    # is telling a story the data no longer supports.
+    x86 = [r for r in f["int8_collapse"]["rows"] if r["vnni"] is False]
+    assert x86 and x86[0]["int8"] < 0.01, "the INT8 collapse must still be a collapse"
+    assert x86[0]["fp32"] > 0.75
+    assert f["escalation"]["ci_low"] < 0 < f["escalation"]["ci_high"], \
+        "the escalation interval covers zero; that is what the panel claims"
+
+
+def test_demo_facts_file_matches_the_committed_results():
+    """Regenerating must be a no-op. A stale facts file shows numbers the results deny."""
+    import subprocess
+    import sys
+
+    from src.serve.app import DEMO_FACTS_PATH
+
+    before = DEMO_FACTS_PATH.read_text()
+    r = subprocess.run([sys.executable, "scripts/build_demo_facts.py"],
+                       cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert DEMO_FACTS_PATH.read_text() == before, (
+        "configs/demo_facts.json is stale. Regenerate with "
+        "`python scripts/build_demo_facts.py` and commit it.")
+
+
+def test_classify_reports_what_this_request_cost_against_the_api(config, fastapi_client):
+    """The served figure is THIS request's; the API figure is the measured batch mean."""
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(), tier2=FakeTier2(available=False),
+                     run_canary_on_start=False)
+    cc = fastapi_client(app).post("/classify",
+                                  json={"text": "a clause"}).json()["cost_comparison"]
+    assert cc["served_usd"] > 0 and cc["api_usd"] > 0
+    assert cc["ratio"] > 100, "the headline gap is hundreds of times, not percent"
+    assert cc["monthly_volume"] == 100_000
+    assert cc["served_monthly_usd"] == pytest.approx(cc["served_usd"] * 100_000)
+    assert cc["api_monthly_usd"] == pytest.approx(cc["api_usd"] * 100_000)
+    # The API number must not be presented as an estimate for this particular text.
+    assert "MEASURED" in cc["api_basis"] and "count_tokens" in cc["api_basis"]
+
+
+def test_figures_are_served_and_traversal_is_refused():
+    from fastapi.testclient import TestClient
+
+    from src.serve.app import create_app
+
+    c = TestClient(create_app(run_canary_on_start=False, tier0=FakeTier0()))
+    ok = c.get("/figures/accuracy_vs_cost.png")
+    assert ok.status_code == 200 and ok.headers["content-type"] == "image/png"
+    assert c.get("/figures/../../configs/costs.yaml").status_code in (404, 400)
+    assert c.get("/figures/nope.png").status_code == 404
+    assert c.get("/figures/costs.yaml").status_code == 404

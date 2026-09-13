@@ -98,6 +98,43 @@
     :root:not([data-theme="light"]) .err { background:#2c1a17; border-color:#7a3a2c;
                                            color:#f0b4a5 }
   }
+  .cost { margin-top:18px; border-top:1px solid var(--line); padding-top:14px }
+  .cost table { margin-top:6px }
+  .cost td { border:0; padding:3px 0; font-size:.86rem }
+  .cost td.v { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
+  .cost .big { font-size:.92rem; font-weight:650 }
+  .cost .note { color:var(--faint); font-size:.75rem; margin-top:8px; line-height:1.55 }
+  .why { margin-top:14px; color:var(--muted); font-size:.87rem; line-height:1.6 }
+
+  .context { margin-top:52px; padding-top:8px }
+  .context h2 { font-size:.74rem; letter-spacing:.1em; text-transform:uppercase;
+                color:var(--faint); margin:0 0 18px; font-weight:600 }
+  .panel { border:1px solid var(--line); border-radius:11px; background:var(--card);
+           padding:18px 20px; margin-bottom:16px }
+  .panel h3 { margin:0 0 6px; font-size:.96rem; letter-spacing:-.005em }
+  .panel p { margin:0; color:var(--muted); font-size:.87rem; line-height:1.6 }
+  /* The figure is a light-background PNG from the report. Matted deliberately so it
+     reads as a printed plate rather than as a broken image in dark mode. */
+  .panel img { display:block; width:100%; height:auto; margin:12px 0 8px;
+               border-radius:6px; background:#fff; padding:8px }
+  .isa { margin:14px 0 4px; font-size:.84rem }
+  .isa .grp { margin-bottom:11px }
+  .isa .gl { color:var(--faint); font-size:.76rem; margin-bottom:5px }
+  .isa .r { display:flex; align-items:center; gap:9px; margin:3px 0 }
+  .isa .k { width:46px; color:var(--muted); font-size:.8rem }
+  .isa .t { flex:1; height:9px; background:var(--chip); border-radius:3px; overflow:hidden }
+  .isa .f { height:100%; border-radius:3px }
+  .isa .f.ok { background:var(--ok) }
+  .isa .f.bad { background:#b4402c }
+  .isa .n { width:78px; text-align:right; font-variant-numeric:tabular-nums;
+            font-size:.8rem; color:var(--muted) }
+  .isa .n.bad { color:#b4402c; font-weight:600 }
+  .stat { display:flex; gap:22px; flex-wrap:wrap; margin:12px 0 2px }
+  .stat div { font-variant-numeric:tabular-nums }
+  .stat .sv { font-size:1.05rem; font-weight:650 }
+  .stat .sk { color:var(--faint); font-size:.74rem; letter-spacing:.05em;
+              text-transform:uppercase }
+
   footer { color:var(--faint); font-size:.79rem; line-height:1.7; margin-top:26px;
            padding-top:16px; border-top:1px solid var(--line) }
   a { color:var(--accent) }
@@ -126,6 +163,34 @@
 
   <div id="out"></div>
 
+  <!-- CONTEXT, BELOW THE RESULT. Someone who only wants to classify a clause never has to
+       read any of it: it starts below the fold and stays out of the way. -->
+  <section class="context" id="context" hidden>
+    <h2>What this project measured</h2>
+
+    <div class="panel">
+      <h3>The encoder is cheaper and more accurate than a frontier model here</h3>
+      <p id="acccap">&nbsp;</p>
+      <img src="/figures/accuracy_vs_cost.png" loading="lazy"
+           alt="macro-F1 against USD per 1,000 clauses on a log axis: the fine-tuned encoder sits above and to the left of both Sonnet 5 and Haiku 4.5.">
+    </div>
+
+    <div class="panel">
+      <h3>INT8 collapses to chance on some CPUs, silently</h3>
+      <p id="isacap">&nbsp;</p>
+      <div class="isa" id="isa"></div>
+      <p>This is why the service runs FP32, and why it re-runs a 200-row check on
+         <b>every instance</b> instead of trusting one qualification: on a managed platform
+         the CPU is a variable, not a constant.</p>
+    </div>
+
+    <div class="panel">
+      <h3>The expensive tier did not help</h3>
+      <div class="stat" id="esc"></div>
+      <p id="esccap">&nbsp;</p>
+    </div>
+  </section>
+
   <footer>
     DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32 — macro-F1 <b>0.8091</b> on a
     3,000-row test sample, <b>single seed</b>. Scores are softmax outputs, not calibrated
@@ -145,6 +210,11 @@ const EXAMPLES = {
   ood: "Please preheat the oven to 180 degrees Celsius and bake the cake for 35 minutes until golden brown."
 };
 const $ = id => document.getElementById(id);
+const usd = (v, dp) => '$' + v.toFixed(dp === undefined ? 2 : dp);
+// Cents matter at these magnitudes: $43.61 rounded to $44 loses the comparison's point.
+const money = v => v >= 1000
+  ? '$' + v.toLocaleString('en-US', {maximumFractionDigits: 0})
+  : '$' + v.toFixed(2);
 const t = $('t'), go = $('go'), out = $('out'), c = $('c'), prov = $('prov');
 const clearBtn = $('clear');
 
@@ -210,6 +280,63 @@ function renderProvenance(p, mode) {
   prov.innerHTML = bits.join('');
 }
 
+// ---- below-the-fold context, from /facts (generated from the committed results) ----
+let FACTS = null;
+async function loadFacts() {
+  try { FACTS = await (await fetch('/facts')).json(); } catch (e) { return; }
+  const f = FACTS;
+  $('acccap').textContent =
+    `macro-F1 ${f.tier0.macro_f1.toFixed(4)} on ${f.tier0.split}, against `
+    + `${usd(f.api_comparator.usd_per_1k, 4)} per 1,000 clauses for Sonnet 5 zero-shot. `
+    + `Both measured. Log cost axis.`;
+
+  $('isacap').textContent = f.int8_collapse.caption;
+  $('isa').innerHTML = f.int8_collapse.rows.map(r => {
+    const vn = r.vnni === null ? 'ARM, AVX-512 not applicable'
+             : r.vnni ? 'has AVX-512 VNNI' : 'NO AVX-512 VNNI';
+    const bar = (v, cls) =>
+      `<div class="r"><div class="k">${cls === 'bad' ? 'INT8' : 'FP32'}</div>`
+      + `<div class="t"><div class="f ${cls}" style="width:${Math.max(0.4, v * 100)}%"></div></div>`
+      + `<div class="n${cls === 'bad' && v < 0.01 ? ' bad' : ''}">`
+      + `${v < 0.01 ? v.toFixed(6) : v.toFixed(4)}</div></div>`;
+    return `<div class="grp"><div class="gl">${esc(r.isa)} · ${esc(vn)}</div>`
+      + bar(r.fp32, 'ok') + bar(r.int8, 'bad') + `</div>`;
+  }).join('');
+
+  const e = f.escalation;
+  $('esc').innerHTML = [
+    [`${e.delta >= 0 ? '+' : ''}${e.delta.toFixed(6)}`, 'macro-F1 change'],
+    [`[${e.ci_low.toFixed(4)}, ${e.ci_high.toFixed(4)}]`, '95% CI'],
+    ['off', 'escalation'],
+  ].map(([v, k]) =>
+    `<div><div class="sv">${esc(v)}</div><div class="sk">${esc(k)}</div></div>`).join('');
+  $('esccap').textContent =
+    `Routing ${e.n_escalated} of ${e.n_rows} low-confidence rows to Sonnet 5 moved accuracy `
+    + `by an amount whose interval covers zero. The tier everyone assumes you need did not `
+    + `help on this task, so it is off. The router still runs: on the rows it flags the `
+    + `encoder is right ${(e.tier0_accuracy_on_escalated * 100).toFixed(0)}% of the time and `
+    + `Sonnet 5 ${(e.api_accuracy_on_escalated * 100).toFixed(0)}%. n = 1 seed, in-sample `
+    + `for the escalation rate.`;
+  $('context').hidden = false;
+}
+loadFacts();
+
+// Start the canary as the page loads, so the container warms while the visitor reads and
+// types rather than only when they press Classify. Silent unless a classify hits it cold.
+let warmStarted = false;
+async function warmInBackground() {
+  if (warmStarted) return;
+  warmStarted = true;
+  for (let i = 0; i < 40; i++) {
+    let h;
+    try { h = await (await fetch('/health?wait_for_canary=20')).json(); }
+    catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; }
+    const st = (h.canary || {}).status;
+    if (st === 'passed' || st === 'skipped') { renderProvenance(h.served_by, 'probe'); return; }
+    if (st === 'failed') return;
+  }
+}
+
 async function probeProvenance() {
   try {
     const h = await (await fetch('/health')).json();
@@ -218,6 +345,7 @@ async function probeProvenance() {
   } catch (e) { renderProvenance(null); }
 }
 probeProvenance();
+warmInBackground();
 
 // ---- waking-up state ------------------------------------------------------------
 function waking(seconds, progress) {
@@ -326,6 +454,48 @@ function render(d, ms) {
     ? `<div class="flag"><b>Needs review</b> —
        ${esc(d.needs_review_meaning || 'low confidence — human review recommended')}</div>`
     : '';
+
+  // WHAT HAPPENED, in words, against the number the router actually compared.
+  const thr = (d.router || {}).threshold;
+  const m = Number(d.margin);
+  let why = '';
+  if (thr !== undefined) {
+    why = d.needs_review
+      ? `The top two classes are ${m.toFixed(4)} apart, below the ${thr.toFixed(4)} `
+        + `threshold calibrated on a held-out split, so the router flagged it. `
+        + `Operationally that means the answer above still stands and is still returned, `
+        + `and a person should look at it before anything acts on it. On rows like this `
+        + `the model is right about a third of the time instead of the usual seven in eight.`
+      : `The top two classes are ${m.toFixed(4)} apart, above the ${thr.toFixed(4)} `
+        + `threshold calibrated on a held-out split, so the router let it through `
+        + `unflagged. No second opinion was asked for and none was needed.`;
+  }
+
+  // COST OF THIS REQUEST, against the measured API comparator.
+  const cc = d.cost_comparison;
+  let cost = '';
+  if (cc && cc.served_usd) {
+    const ratio = cc.ratio ? Math.round(cc.ratio).toLocaleString('en-US') : '—';
+    cost = `<div class="cost">
+      <div class="lbl">What this clause cost</div>
+      <table>
+        <tr><td>served here, this request</td>
+            <td class="v big">${usd(cc.served_usd, 8)}</td></tr>
+        <tr><td>${esc(cc.api_model || 'Sonnet 5')} zero-shot, per clause</td>
+            <td class="v">${usd(cc.api_usd, 8)}</td></tr>
+        <tr><td>at ${cc.monthly_volume.toLocaleString('en-US')} clauses a month</td>
+            <td class="v"><b>${money(cc.served_monthly_usd)}</b> vs
+                ${money(cc.api_monthly_usd)}</td></tr>
+      </table>
+      <div class="note"><b>${ratio}× cheaper per clause.</b>
+        The served figure is this request's own. The
+        ${esc(cc.api_model || 'Sonnet 5')} figure is the <b>measured mean</b> over the
+        3,000-clause batch this project actually ran, not an estimate for this text: a
+        per-clause Claude cost needs that model's own token count, which is an API call
+        this service does not make.${cc.tariff_is_assumed
+          ? ' The local figure amortises the device and uses an <b>assumed</b> electricity tariff.' : ''}</div>
+    </div>`;
+  }
   showResult(
     `<div class="card">
        <div class="lbl">Predicted provision type</div>
@@ -336,8 +506,10 @@ function render(d, ms) {
          <span>margin ${Number(d.margin).toFixed(4)}</span>
        </div>
        ${flag}
+       ${why ? `<div class="why">${esc(why)}</div>` : ''}
        ${rows ? `<div class="lbl" style="margin-top:20px">Top 3</div>
                  <table>${rows}</table>` : ''}
+       ${cost}
      </div>`);
 }
 count();

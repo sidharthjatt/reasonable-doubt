@@ -49,6 +49,8 @@ RUN pip install --no-cache-dir \
 
 COPY src/ /app/src/
 COPY configs/ /app/configs/
+# The figures the demo page shows. Already generated for REPORT.md, served as-is.
+COPY docs/figures/ /app/docs/figures/
 COPY verify_baked_model.py /app/verify_baked_model.py
 
 # The served artefact, baked. 715 MB, and it is the whole reason this image is large.

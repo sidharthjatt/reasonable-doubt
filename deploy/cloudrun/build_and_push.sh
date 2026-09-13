@@ -15,6 +15,8 @@ CTX="$(mktemp -d)"
 trap 'rm -rf "$CTX"' EXIT
 cp "${ROOT}/deploy/cloudrun/Dockerfile" "${ROOT}/deploy/cloudrun/verify_baked_model.py" "$CTX/"
 cp -R "${ROOT}/src" "${ROOT}/configs" "$CTX/"
+mkdir -p "$CTX/docs"
+cp -R "${ROOT}/docs/figures" "$CTX/docs/"
 mkdir -p "$CTX/models"
 cp -R "${ROOT}/models/onnx_ce10ep_1_fp32" "$CTX/models/"
 find "$CTX" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true

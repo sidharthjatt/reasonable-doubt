@@ -46,6 +46,12 @@ MAX_INPUT_CHARS = 20_000
 
 # The one-page demo UI. Served from disk so the page is editable without touching Python.
 INDEX_HTML_PATH = Path(__file__).resolve().parent / "static" / "index.html"
+# Figures the page shows. Already generated for REPORT.md; served, never redrawn.
+FIGURES_DIR = Path(__file__).resolve().parents[2] / "docs" / "figures"
+# Headline numbers, DERIVED from the committed result summaries by
+# scripts/build_demo_facts.py. Never typed into the page: the demo is the most public
+# surface in the project and unsourced constants have no business on it.
+DEMO_FACTS_PATH = Path(__file__).resolve().parents[2] / "configs" / "demo_facts.json"
 
 # What the warming-up UI tells a visitor to expect. A rough figure from the measured cold
 # start, used for copy only — nothing branches on it.
@@ -296,6 +302,8 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
     """
     import threading
 
+    import json
+
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
 
@@ -332,6 +340,36 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
         "machine": platform.machine(),
         "ort_telemetry_disabled": _telemetry_disabled(),
     }
+
+    def _cost_comparison(answer: dict) -> dict:
+        """What THIS request cost, against the measured API comparator.
+
+        The served figure is this request's own `estimated_cost_usd`. The Claude figure is
+        the MEASURED MEAN per clause over the 3,000-clause Stage 1 batch, and is labelled
+        as such rather than presented as an estimate for this particular text: a per-clause
+        Claude cost needs that model's own count_tokens (hard rule 9), which is an API call
+        this service does not make.
+        """
+        facts = _facts()
+        api = facts.get("api_comparator", {})
+        served = float(answer.get("estimated_cost_usd") or 0.0)
+        api_per = float(api.get("usd_per_clause") or 0.0)
+        vol = 100_000
+        return {
+            "served_usd": served,
+            "api_usd": api_per,
+            "api_model": api.get("model"),
+            "api_basis": api.get("basis"),
+            "ratio": (api_per / served) if served else None,
+            "monthly_volume": vol,
+            "served_monthly_usd": served * vol,
+            "api_monthly_usd": api_per * vol,
+            "saving_monthly_usd": (api_per - served) * vol,
+            "source": api.get("source"),
+            "served_basis": answer.get("cost_detail", {}).get("per_tier", [{}])[0]
+                                  .get("basis"),
+            "tariff_is_assumed": answer.get("cost_detail", {}).get("tariff_is_assumed"),
+        }
 
     def _served_by() -> dict:
         """Who answered THIS request, canary state included."""
@@ -390,6 +428,16 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
     app = FastAPI(
         title="Reasonable Doubt — Tier 0 -> Claude Sonnet 5",
         description="Deployed two-tier cascade (E4b-A). No Tier 1: see PREREGISTRATION.")
+
+    def _facts() -> dict:
+        """Read the generated facts. Missing file RAISES rather than shipping blanks:
+        a demo that silently drops its numbers looks like a demo with no numbers."""
+        try:
+            return json.loads(DEMO_FACTS_PATH.read_text())
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"{DEMO_FACTS_PATH} is missing. Generate it with "
+                f"`python scripts/build_demo_facts.py`.") from exc
 
     # Upper bound on a single long poll. Long enough to be a useful CPU window, short
     # enough to stay well inside the request timeout and any proxy's idle limit.
@@ -465,7 +513,9 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
             # gate is checked inside classify(), reaching this line means the canary
             # passed (or an operator disabled it) on THIS instance — so the block is a
             # statement about the answer, not about the service in general.
-            return {**cascade.classify(req.text), "served_by": _served_by()}
+            answer = cascade.classify(req.text)
+            return {**answer, "served_by": _served_by(),
+                    "cost_comparison": _cost_comparison(answer)}
         except Tier0NotQualified as exc:
             status = gate.status
             # 503 for both, and the distinction is in the body rather than the code:
@@ -483,6 +533,26 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
                         if status is CanaryStatus.PENDING else None),
                 },
             ) from exc
+
+    @app.get("/facts")
+    def facts() -> dict:
+        """The derived figures the page renders. Exposed so they are inspectable."""
+        return _facts()
+
+    @app.get("/figures/{name}")
+    def figure(name: str):
+        from fastapi.responses import FileResponse
+
+        # Basename only. A path component here would be a directory traversal on a
+        # public endpoint.
+        safe = Path(name).name
+        if not safe.endswith(".png"):
+            raise HTTPException(status_code=404, detail="not found")
+        path = FIGURES_DIR / safe
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(path, media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=3600"})
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

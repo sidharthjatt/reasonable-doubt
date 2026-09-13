@@ -64,6 +64,8 @@ RUN pip install --no-cache-dir \
 # canary_200.json (the frozen startup row set) — all tracked, all required at boot.
 COPY src/ /app/src/
 COPY configs/ /app/configs/
+# The figures the demo page shows. Already generated for REPORT.md, served as-is.
+COPY docs/figures/ /app/docs/figures/
 
 # Non-root. The service writes only to the response cache and the ledger, both of which
 # are mounted read-write when wanted and absent otherwise.
