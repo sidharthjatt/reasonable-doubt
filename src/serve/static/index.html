@@ -16,24 +16,43 @@
    ONE FRAMED ELEMENT on the page (the plate), and it is the only dark region. Everything
    else is hairlines and space. If it is not the plate, it is not boxed. */
 :root {
-  --paper:#E9EBE4; --ink:#17150F; --graphite:#6B6659; --hairline:#CFD2C6;
+  --paper:#E9EBE4; --ink:#17150F; --graphite:#6B6659;
+  /* TWO RULE WEIGHTS, not one flat grey: hairline separates rows inside a block, rule
+     separates blocks. A single weight flattened the whole page into one texture. */
+  --hairline:#DCDFD4; --rule:#C3C8B9;
   --vermilion:#A5301B; --pine:#28564A;
   --plate:#16181A; --plate-ink:#E4E7DE; --plate-line:#3A3F42;
+  /* THE PLATE IS DARK IN BOTH MODES, so it needs its OWN accents in both. Reusing the
+     light-mode vermilion on it measured 2.58:1 — the `needs review` state was failing AA
+     in light mode and I had not caught it. These are 7.7:1 and 9.8:1 there. */
+  --plate-vermilion:#F2917A; --plate-pine:#83CFB0;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
   --pad: clamp(16px, 4vw, 28px);
 }
-/* DARK MODE DESTROYED THE CENTRAL IDEA and had to be re-thought. The page was #14130E and
-   the plate #0A0B0C: a 4% lightness difference, so "one dark region on a light page"
-   collapsed into one flat dark rectangle and the plate stopped reading as an object at all.
-   The plate is an INSTRUMENT SCREEN, so on a dark page it is LIT rather than darker: the
-   page drops further back and the plate lifts in front of it. What matters is that the
-   plate is the one surface that differs from the page, not that it is the darkest thing. */
+/* DARK MODE, DESIGNED RATHER THAN PATCHED. Two earlier attempts failed for the same
+   reason: they treated dark as "light mode with the lights off" — near-black ground, white
+   text, colour only inside the plate — which is absence rather than material.
+
+   The palette reasoning is unchanged and simply read at the dark end. LEDGAR stock is a
+   green-grey paper, so the ground is that paper in shadow (#171B18), not black: it has a
+   temperature and reads as a surface. Body text is warmed toward the paper tone (#E3E7DC)
+   rather than pure white, so the page keeps that temperature. Vermilion and pine are lifted
+   to carry at dark-mode contrast and do the same work they do in light — the needs-review
+   state, the INT8 collapse — instead of being confined to the plate.
+
+   The plate stays the one surface that differs from the page. It cannot be darker here: on
+   a #171B18 ground a darker plate measured 1.10:1, invisible. So it is LIT — a screen on a
+   desk rather than a hole in it — at a 1.25:1 step plus its hairline.
+
+   Every pairing below is measured, not eyeballed: body 13.87:1, secondary 6.43:1,
+   vermilion 7.11:1, pine 8.70:1 against the ground; all AA. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper:#0C0B07; --ink:#E8E3D6; --graphite:#918B7C; --hairline:#2B2A23;
-    --vermilion:#E4735A; --pine:#69B79C;
-    --plate:#1C2024; --plate-ink:#EEF1E8; --plate-line:#3D4348;
+    --paper:#171B18; --ink:#E3E7DC; --graphite:#97A092;
+    --hairline:#262C27; --rule:#3A423B;
+    --vermilion:#F08A70; --pine:#7CC6A8;
+    --plate:#262E28; --plate-ink:#EFF3E9; --plate-line:#454F47;
   }
 }
 * { box-sizing:border-box }
@@ -49,7 +68,7 @@ h1 { font-size:clamp(1.6rem,4.4vw,2rem); font-weight:600; letter-spacing:-.02em;
 .tag { font-family:var(--serif); font-size:clamp(1rem,2.6vw,1.25rem); color:var(--graphite);
        margin:0 0 20px; line-height:1.45 }
 .prov { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:4px 18px;
-        border-top:1px solid var(--hairline); border-bottom:1px solid var(--hairline);
+        border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
         padding:9px 0; font-size:11px; letter-spacing:.03em; color:var(--graphite) }
 .prov b { display:block; color:var(--ink); font-weight:500; font-size:12.5px;
           font-variant-numeric:tabular-nums }
@@ -97,13 +116,13 @@ button.quiet:hover { color:var(--ink) }
             margin:0; line-height:1 }
 .state { font-size:13px; font-weight:500; letter-spacing:.12em; text-transform:uppercase;
          white-space:nowrap; padding-top:10px }
-.state.doubt { color:var(--vermilion) }
-.state.clear { color:var(--pine) }
+.state.doubt { color:var(--plate-vermilion) }
+.state.clear { color:var(--plate-pine) }
 .plate svg { display:block; width:100%; height:auto; margin-top:14px; overflow:visible }
 .plate .read { font-family:var(--serif); font-size:14.5px; line-height:1.55; margin-top:12px;
                opacity:.82 }
-.plate .meaning { border-left:2px solid var(--vermilion); padding-left:13px; opacity:1;
-                  margin-top:14px; font-size:13.5px }
+.plate .meaning { border-left:2px solid var(--plate-vermilion); padding-left:13px;
+                  opacity:1; margin-top:14px; font-size:13.5px }
 .pl-grid { stroke:var(--plate-line); stroke-width:1 }
 .pl-tick { fill:var(--plate-line); font-size:9px; font-family:var(--mono) }
 .pl-tick.lit { fill:var(--plate-ink); opacity:.5 }
@@ -141,13 +160,14 @@ button.tog[aria-expanded="true"] .caret { transform:rotate(90deg) }
       padding:8px 0; border-bottom:1px solid var(--hairline); font-size:13.5px;
       align-items:baseline }
 .fx dt { color:var(--graphite); font-size:12px; letter-spacing:.03em }
-.fx dd { margin:0; font-variant-numeric:tabular-nums }
+.fx dd { margin:0; font-variant-numeric:tabular-nums; color:var(--ink); font-size:14.5px }
 .fx .said { font-family:var(--serif); font-size:13.5px; color:var(--graphite); font-style:italic;
             font-variant-numeric:normal }
 
-.sec { margin-top:40px; padding-top:22px; border-top:1px solid var(--hairline) }
-.sec h3 { font-size:1.05rem; font-weight:500; margin:0 0 3px; letter-spacing:-.01em }
-.sec h3 .num { color:var(--graphite); margin-right:10px; font-size:.82em }
+.sec { margin-top:44px; padding-top:24px; border-top:1px solid var(--rule) }
+.sec h3 { font-size:1.28rem; font-weight:600; margin:0 0 5px; letter-spacing:-.015em;
+          display:flex; align-items:baseline; gap:12px }
+.sec h3 .num { color:var(--graphite); font-size:.66em; font-weight:400; letter-spacing:.06em }
 .sec .lede { font-family:var(--serif); font-size:14.5px; color:var(--graphite); line-height:1.6;
              margin-bottom:14px }
 .note { font-family:var(--serif); font-size:13px; color:var(--graphite); line-height:1.6;
@@ -161,14 +181,26 @@ button.tog[aria-expanded="true"] .caret { transform:rotate(90deg) }
 .cmp .k { font-size:12px; color:var(--graphite); letter-spacing:.03em }
 .cmp .v { font-size:clamp(1.1rem,3.4vw,1.45rem); font-variant-numeric:tabular-nums;
           letter-spacing:-.02em }
-.bars { margin-top:4px }
-.br { display:grid; grid-template-columns:46px 1fr 84px; gap:10px; align-items:center;
-      padding:4px 0; font-size:12.5px }
-.br .t { height:8px; background:var(--hairline); border-radius:1px; overflow:hidden }
-.br .f { height:100%; background:var(--ink); display:block }
-.br .f.bad { background:var(--vermilion) }
-.br .v { text-align:right; font-variant-numeric:tabular-nums; color:var(--graphite) }
-.br .v.bad { color:var(--vermilion) }
+.bars { margin-top:10px }
+.br { display:grid; grid-template-columns:52px 1fr auto; gap:12px; align-items:center;
+      padding:7px 0; font-size:12.5px }
+.br .k { color:var(--graphite); letter-spacing:.05em; text-transform:uppercase;
+         font-size:11px }
+.br .t { height:12px; background:var(--hairline); border-radius:2px; position:relative }
+.br .f { height:100%; background:var(--pine); display:block; border-radius:2px }
+/* THE COLLAPSE HAS TO REGISTER. 0.000166 is 0.0166% of the track: a bar that width is a
+   hairline nobody sees, which under-sells the most alarming number in the project. The
+   near-zero case gets a vermilion stub at the origin plus a hatched remainder, so the
+   emptiness is DRAWN rather than merely absent, and the figure itself carries the weight. */
+.br .f.bad { background:var(--vermilion); min-width:4px }
+.br .t.empty { background:repeating-linear-gradient(135deg, transparent 0 5px,
+               var(--hairline) 5px 6px) }
+.br .v { text-align:right; font-variant-numeric:tabular-nums; color:var(--ink);
+         font-size:13.5px; white-space:nowrap }
+.br .v.bad { color:var(--vermilion); font-weight:600; font-size:1.15rem;
+             letter-spacing:-.02em }
+.br .v .chance { display:block; font-size:10.5px; font-weight:400; letter-spacing:.06em;
+                 text-transform:uppercase; color:var(--vermilion); opacity:.85 }
 .mx { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:4px }
 .mx th { text-align:left; font-weight:500; color:var(--graphite); font-size:11px;
          letter-spacing:.04em; padding:7px 10px 7px 0; border-bottom:1px solid var(--hairline) }
@@ -189,7 +221,7 @@ button.tog[aria-expanded="true"] .caret { transform:rotate(90deg) }
 .waking .track { height:2px; background:var(--hairline); margin-top:11px; overflow:hidden }
 .waking .fill { height:100%; background:var(--vermilion); width:0; transition:width .4s linear }
 
-footer { margin-top:46px; padding-top:18px; border-top:1px solid var(--hairline);
+footer { margin-top:46px; padding-top:18px; border-top:1px solid var(--rule);
          font-size:12px; color:var(--graphite); line-height:1.85 }
 footer .dis { font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink) }
 @media (max-width:560px) {
@@ -373,10 +405,14 @@ async function loadFacts() {
   $('s2lede').textContent = f.int8_collapse.caption;
   $('s2bars').innerHTML = [['fp32', x.fp32, ''], ['int8', x.int8, 'bad']].map(function (r) {
     const k = r[0], v = r[1], cls = r[2];
-    return '<div class="br"><span>' + k + '</span><span class="t"><span class="f ' + cls
-      + '" style="width:' + Math.max(0.4, v * 100) + '%"></span></span><span class="v ' + cls
-      + '">' + (v < 0.01 ? v.toFixed(6) : v.toFixed(4)) + '</span></div>';
-  }).join('') + '<p class="note" style="margin-top:8px">' + esc(x.isa) + ', '
+    const collapsed = v < 0.01;
+    return '<div class="br"><span class="k">' + k + '</span>'
+      + '<span class="t' + (collapsed ? ' empty' : '') + '"><span class="f ' + cls
+      + '" style="width:' + Math.max(0.3, v * 100) + '%"></span></span>'
+      + '<span class="v ' + cls + '">' + (collapsed ? v.toFixed(6) : v.toFixed(4))
+      + (collapsed ? '<span class="chance">chance on 100 classes</span>' : '')
+      + '</span></div>';
+  }).join('') + '<p class="note" style="margin-top:10px">' + esc(x.isa) + ', '
     + (x.vnni === false ? 'no AVX-512 VNNI' : 'AVX-512 not applicable')
     + '. Same weights, same 3,000 rows.</p>';
 
