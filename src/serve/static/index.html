@@ -414,11 +414,16 @@ async function classify() {
   showResult('');
   const t0 = performance.now();
   try {
-    let r = await fetch('/classify', {
+    // RETRY IN A LOOP, NOT ONCE. The service runs up to two instances and a request is
+    // routed to whichever is free, so the retry after a wake-up can land on a DIFFERENT
+    // instance that is itself still warming. Retrying once fell through to the error
+    // path and showed the visitor a raw 503 body.
+    const post = () => fetch('/classify', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({text})
     });
-    if (r.status === 503) {
+    let r = await post();
+    for (let attempt = 0; attempt < 5 && r.status === 503; attempt++) {
       const d = (await r.json()).detail || {};
       if (d.retryable === false) {
         showResult(`<div class="err"><b>This host is not qualified.</b>
@@ -428,10 +433,13 @@ async function classify() {
       go.innerHTML = '<span class="spinner"></span>Waking up';
       wokeUp = true;          // attribute the wall time to the wake-up, not to the model
       if (!await waitForWarm(d.estimated_wait_seconds || 90)) return;
-      r = await fetch('/classify', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text})
-      });
+      r = await post();
+    }
+    if (r.status === 503) {
+      showResult(`<div class="err"><b>Still warming up.</b> Every instance this request
+        reached is still running its startup check, which has to pass before any
+        prediction is returned. Try again in a moment.</div>`);
+      return;
     }
     if (!r.ok) {
       let detail = ''; try { detail = JSON.stringify(await r.json()); } catch (e) {}
