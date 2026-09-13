@@ -39,10 +39,11 @@ The service exposes `/classify`, `/health`, and a one-page demo. It holds no API
 makes no network calls at inference. It is live on Cloud Run in Mumbai, scaled to zero:
 <https://reasonable-doubt-111680840326.asia-south1.run.app>
 
-The first request after an idle period takes about **150 seconds**, because nothing is
-running between requests. Warm requests take **0.2 to 0.3 seconds**. The service needs
-**4 GiB**; a 2 GiB revision failed to start with `Memory limit of 2048 MiB exceeded with
-2087 MiB used`, a 2% overshoot, during the canary.
+Warm requests take **0.2 to 0.3 seconds**. A cold one answers in about **21 seconds** to
+say it is warming up, and can return a prediction about **2 minutes** in; the startup check
+runs in the background, and no prediction is returned until it passes (§3bp). The service
+needs **4 GiB**; a 2 GiB revision failed to start with `Memory limit of 2048 MiB exceeded
+with 2087 MiB used`, a 2% overshoot, during the canary.
 
 ---
 
@@ -133,8 +134,10 @@ quantised kernel rather than a few bad rows. The container prints
 `cpuid_info warning: Unknown CPU vendor`, which fits an ORT dispatch failure, but I did not
 confirm the mechanism and do not claim it (§3bf).
 
-The startup canary caught this. It classifies 200 fixed rows before the server binds and
-refuses to start below a floor. It is the reason the service is FP32 today.
+The startup canary caught this. It classifies 200 fixed rows and refuses to return any
+prediction below a floor. It is the reason the service is FP32 today. It now runs in the
+background so the port opens in 21 seconds instead of 150, with the refusal enforced in the
+cascade rather than by the order things happen at startup (§3bp).
 
 **FP32 never diverged in accuracy on any platform tested.** The served artefact scores
 191/200 on macOS arm64, on Linux aarch64, on an emulated Linux x86 build, and on **real x86

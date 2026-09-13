@@ -27,14 +27,19 @@ limitations, and the bugs that produced plausible wrong answers along the way.
 
 ## The live service, and its cold start
 
-It runs on Cloud Run in Mumbai, scaled to zero. **The first request after an idle period
-takes about 150 seconds.** Warm requests take 0.2 to 0.3 seconds.
+It runs on Cloud Run in Mumbai, scaled to zero. Warm requests take 0.2 to 0.3 seconds.
+**The first request after an idle period answers in about 21 seconds to say it is warming
+up, and can return a prediction about 2 minutes in.** The page shows progress while it
+waits.
 
-That is not a bug and I have not tuned it away. With `min-instances 0` nothing is running
-between requests, so a cold request pays for the container starting, the 715 MB ONNX
-session opening, and a 200-row canary finishing before the port opens. Keeping an instance
-warm would fix it and would also burn free-tier quota around the clock, which is a bad
-trade for a demo. Load the page, wait, then it is fast.
+Nothing runs between requests, so a cold request pays for the container starting, a 715 MB
+ONNX session opening, and a 200-row startup check running before any prediction is allowed.
+Keeping an instance warm would remove all of that and would also burn free-tier quota around
+the clock, which is a bad trade for a demo.
+
+The check runs in the background so the port opens in 21 seconds rather than 150, but the
+service **will not return a prediction until it passes**, and refuses permanently if it
+fails. That is the point of having it.
 
 **It needs 4 GiB, not 2.** A 2 GiB revision failed to start: `Memory limit of 2048 MiB
 exceeded with 2087 MiB used`, a 2% overshoot, during the canary. Worth knowing before
@@ -112,9 +117,10 @@ Weights are on the Hub:
 <https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar>
 (`model.onnx`, sha256 `e70fb095ee8ddd82c9449d6da0006b4fa1c7a92bb8547d5538f869c445010200`).
 
-The container classifies 200 fixed rows before uvicorn binds and exits non-zero if accuracy
-falls below 0.80. That check exists because the INT8 build of these same weights scores
-0.000166 on a CPU without AVX-512 VNNI, which is chance, and raises no error while doing it.
+The container classifies 200 fixed rows at startup and will not answer `/classify` until
+they pass, returning 503 while it works and permanently if it fails. That check exists
+because the INT8 build of these same weights scores 0.000166 on a CPU without AVX-512 VNNI,
+which is chance, and raises no error while doing it.
 On Cloud Run it passes at 191/200, the same as everywhere else. **That machine has
 AVX-512 VNNI**, so it does not test the hardware class INT8 broke on; see
 [REPORT.md](REPORT.md).

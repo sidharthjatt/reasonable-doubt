@@ -1404,6 +1404,94 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bp. CANARY MOVED OFF THE STARTUP PATH; 2 vCPU DID NOT PAY FOR ITSELF (2026-09-13)
+
+**Not an experiment.** A serving change plus its measurements. The qualification property
+is unchanged and is now explicit rather than implicit.
+
+#### The property, restated because the mechanism that enforced it moved
+
+Before: the canary ran before uvicorn bound the port, so *"the process is serving"* and
+*"the artefact is qualified"* were the same fact. Moving the canary to a background thread
+splits them: the port is open while the answer is unknown.
+
+> **A PREDICTION IS ONLY EVER RETURNED WHEN THE CANARY HAS PASSED.**
+
+`src/serve/canary_gate.py` is a **write-once** state machine. `PASSED` serves. `SKIPPED`
+serves and `/health` says an operator disabled the check. `PENDING` and `FAILED` refuse.
+**`FAILED` is permanent**: the artefact is not qualified on this host, and asking again does
+not change that, so there is no retry and no decay back to pending. The gate is checked in
+**`Cascade.classify`, not in the endpoint**, because an HTTP-level check is bypassed by any
+other caller. The canary was **not** shrunk and **not** skipped: 200 rows, same floor, same
+artefact. Tests pin all three states, write-once, and the serving allow-list.
+
+#### Result 1 — the port binds in 20.7s instead of 149s
+
+A cold client now gets a **503 in 21s** naming the state, with canary progress, instead of a
+150s hang. `/classify` refuses throughout.
+
+#### Result 2 — A BACKGROUND CANARY STARVES ON CLOUD RUN, and this had to be measured
+
+Cloud Run allocates CPU **only while a request is in flight**. The first background deploy
+bound the port and then made almost no progress:
+
+| phase | blocking (CPU allocated) | background (throttled) |
+|---|---|---|
+| `dataset_load` | 6.87s | **129.55s** |
+| `canary_first_inference` | 0.59s | **6.67s** |
+| after 190s of polling | — | **had not reached row 1 of 200** |
+
+**FIX: `/health?wait_for_canary=N` holds the request open (capped 25s) until the gate
+settles.** While that request is in flight CPU is allocated, so the canary thread runs.
+Polling stops being a workaround and becomes the mechanism. The UI long-polls.
+
+**REJECTED: `--no-cpu-throttling`.** It would allocate CPU for the whole instance lifetime
+(~900s to scale-to-zero) rather than the warm-up alone: ~1800 vCPU-s per cold start against
+150, exhausting the monthly free tier in about 100 cold starts.
+
+#### Result 3 — 2 vCPU + `--cpu-boost` DID NOT PAY FOR ITSELF
+
+The registered reasoning was *"halving the time at double the rate is roughly neutral
+against the free tier"*. **Measured, it is not.**
+
+| | 1 vCPU, blocking | 2 vCPU + boost, background |
+|---|---|---|
+| per-row inference | 600.2 ms | **469.3 ms** |
+| speed-up | — | **1.28×, not 2×** |
+| canary wall time | 133.5s | 93.9s |
+| **cold → first prediction** | **150.5s** | **120s** |
+| vCPU-seconds per cold start | **150** | **~240** |
+| GiB-seconds per cold start | 600 | ~480 |
+
+**CPU-seconds went UP by 60%** because ORT does not scale linearly to a second core here,
+and the long-poll leaves gaps between CPU windows. Memory-seconds improved. At 4 GiB the
+binding free-tier resource was **memory** (exhausts after 90,000 instance-seconds against
+CPU's 180,000); at 2 vCPU the two bind equally, so the extra core removes the headroom that
+made memory the only constraint.
+
+**`--cpu-boost` is close to useless in this design.** Boost applies during the *startup
+phase*, which now ends when the port binds at ~20s, before the canary does its work.
+
+> **RECOMMENDATION, NOT APPLIED: go back to 1 vCPU.** The premise for 2 vCPU was
+> cost-neutrality and the measurement falsifies it. The wall-clock gain is real but is
+> bought with 60% more CPU-seconds. Both configurations cost about 0.1% of the monthly free
+> tier per cold start, so this is a small number either way, and the decision is the
+> operator's.
+
+#### Result 4 — long polls occupy concurrency slots and can trigger a second instance
+
+During the cold-start measurement **two instances started**. Long polls hold request slots,
+and at `concurrency 4` Cloud Run read that as load. Each new instance runs its own canary
+from cold. `--max-instances=2` bounds the blast radius. Recorded rather than fixed.
+
+#### What did not change
+
+The canary still passes at **191/200 = 0.9550** on real x86 with `avx512_vnni: true`
+(§3bn), floor 0.80, on the same artefact. Blocking mode is retained and still **raises**, so
+`docker run` and CI get a non-zero exit; the background path records the failure and keeps
+`/health` alive instead, because a crash-loop on a managed platform leaves nothing to
+inspect.
+
 ### 3bn. x86 QUALIFIED — on VNNI-capable x86 only, which is not the class that broke (2026-09-12)
 
 **Not an experiment. A deployment measurement**, registered because §3bf/§3bg's serving
