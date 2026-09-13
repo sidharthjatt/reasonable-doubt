@@ -21,9 +21,12 @@
 # THE STARTUP CANARY RUNS INSIDE THE CONTAINER, and that is the point of running it at
 # all: Kaggle's non-VNNI x86 scored these exact weights at macro-F1 0.0037 — chance —
 # with no error raised, and a container is precisely where you cannot see that happening.
-# create_app() classifies 200 frozen rows before serving and refuses to start below the
-# floor, so a mis-built or wrong-ISA image fails at boot instead of serving chance-level
-# labels with plausible confidences.
+#
+# SINCE §3bp IT RUNS IN THE BACKGROUND while the port binds immediately. The property is
+# unchanged: no prediction is returned until the canary passes, and a FAILED canary
+# refuses every request for the life of the process. What changed is that a cold client
+# gets an instant 503 saying "warming up" instead of a two-minute hang, and a failed
+# canary leaves a live /health to inspect instead of a crash-looping container.
 
 FROM python:3.11-slim
 

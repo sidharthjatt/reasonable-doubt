@@ -11,11 +11,13 @@
 # (§3bm), and ANTHROPIC_API_KEY is not set here, not passed at deploy, and not read from
 # any secret store. The service cannot spend money.
 #
-# THE STARTUP CANARY IS THE POINT OF THIS DEPLOY. Every x86 number in this project so far
-# came from an EMULATED amd64 container on Apple Silicon. Cloud Run is the first real x86
-# execution. create_app() classifies 200 frozen rows before uvicorn binds and exits
-# non-zero below the floor, so if FP32 degrades on this hardware the revision fails to
-# start rather than serving plausible wrong labels.
+# THE STARTUP CANARY IS THE POINT OF THIS DEPLOY. Every x86 number in this project before
+# §3bn came from an EMULATED amd64 container on Apple Silicon.
+#
+# It runs on a background thread (§3bp) so the port binds in seconds rather than ~150.
+# /classify returns 503 until the canary passes and FOREVER if it fails; the qualification
+# check is enforced in Cascade.classify, not in the endpoint, so no caller can route
+# around it.
 
 FROM --platform=linux/amd64 python:3.11-slim
 

@@ -6,120 +6,251 @@
 <title>Reasonable Doubt — contract clause classifier</title>
 <style>
   :root {
-    --bg:#fbfaf8; --fg:#1a1a1a; --muted:#6b6b6b; --line:#e2ddd5;
-    --card:#fff; --accent:#7a5c2e; --warn-bg:#fdf6e3; --warn-line:#d9b667;
-    --warn-fg:#6b4e10; --bar:#cdbfa6;
+    --bg:#fbfaf8; --fg:#1a1a1a; --muted:#6b6b6b; --faint:#8c8c8c; --line:#e4dfd7;
+    --card:#fff; --accent:#7a5c2e; --accent-fg:#fff;
+    --warn-bg:#fdf6e3; --warn-line:#d9b667; --warn-fg:#6b4e10;
+    --bar:#cdbfa6; --chip:#f3efe8; --ok:#3d6b4f;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg:#16151a; --fg:#ececec; --muted:#a0a0a0; --line:#33313a;
-      --card:#1e1d23; --accent:#d6b77a; --warn-bg:#2a2415; --warn-line:#7a6428;
-      --warn-fg:#e5cd91; --bar:#5b5340;
+      --bg:#16151a; --fg:#ececec; --muted:#a0a0a0; --faint:#7d7d85; --line:#33313a;
+      --card:#1e1d23; --accent:#d6b77a; --accent-fg:#1a1a1a;
+      --warn-bg:#2a2415; --warn-line:#7a6428; --warn-fg:#e5cd91;
+      --bar:#5b5340; --chip:#26252c; --ok:#7fae90;
     }
   }
   * { box-sizing:border-box }
+  html, body { height:100% }
   body { margin:0; background:var(--bg); color:var(--fg);
-         font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  .wrap { max-width:760px; margin:0 auto; padding:40px 20px 72px }
-  h1 { font-size:1.45rem; margin:0 0 4px; letter-spacing:-.01em }
-  .sub { color:var(--muted); margin:0 0 28px; font-size:.92rem }
-  textarea { width:100%; min-height:170px; padding:13px 14px; resize:vertical;
+         font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+         display:flex; flex-direction:column; align-items:center }
+  .wrap { width:100%; max-width:680px; padding:44px 20px 64px; flex:1 }
+  header { margin-bottom:22px }
+  h1 { font-size:1.4rem; margin:0 0 4px; letter-spacing:-.01em }
+  .sub { color:var(--muted); margin:0; font-size:.92rem }
+
+  .provenance { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:14px;
+                padding-top:13px; border-top:1px solid var(--line);
+                color:var(--faint); font-size:.78rem; font-variant-numeric:tabular-nums }
+  .provenance b { color:var(--muted); font-weight:600 }
+  .dot { display:inline-block; width:6px; height:6px; border-radius:50%;
+         background:var(--ok); margin-right:5px; vertical-align:1px }
+
+  .chips { display:flex; flex-wrap:wrap; gap:7px; margin:22px 0 9px }
+  .chip { background:var(--chip); border:1px solid var(--line); color:var(--fg);
+          border-radius:999px; padding:5px 13px; font-size:.82rem; cursor:pointer;
+          font-family:inherit; text-align:left }
+  .chip:hover { border-color:var(--accent) }
+  .chip span { color:var(--faint) }
+
+  textarea { width:100%; min-height:150px; padding:13px 14px; resize:vertical;
              border:1px solid var(--line); border-radius:9px; background:var(--card);
              color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace }
   textarea:focus { outline:2px solid var(--accent); outline-offset:-1px }
-  .row { display:flex; gap:12px; align-items:center; margin-top:11px; flex-wrap:wrap }
-  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
-           padding:9px 20px; font-size:.92rem; font-weight:550; cursor:pointer }
-  button:disabled { opacity:.5; cursor:default }
-  .count { color:var(--muted); font-size:.82rem; margin-left:auto;
+  .row { display:flex; gap:12px; align-items:center; margin-top:11px }
+  button.go { background:var(--accent); color:var(--accent-fg); border:0; border-radius:8px;
+              padding:9px 20px; font-size:.92rem; font-weight:600; cursor:pointer;
+              font-family:inherit; display:inline-flex; align-items:center; gap:8px }
+  button.go:disabled { opacity:.55; cursor:default }
+  .count { color:var(--faint); font-size:.82rem; margin-left:auto;
            font-variant-numeric:tabular-nums }
   .count.over { color:#b4402c; font-weight:600 }
-  .card { margin-top:26px; border:1px solid var(--line); border-radius:11px;
+
+  .spinner { width:13px; height:13px; border:2px solid currentColor;
+             border-right-color:transparent; border-radius:50%;
+             animation:spin .7s linear infinite }
+  @keyframes spin { to { transform:rotate(360deg) } }
+
+  .card { margin-top:24px; border:1px solid var(--line); border-radius:11px;
           background:var(--card); padding:20px 22px }
   .lbl { font-size:.72rem; letter-spacing:.09em; text-transform:uppercase;
-         color:var(--muted); margin-bottom:5px }
-  .answer { font-size:1.3rem; font-weight:600; letter-spacing:-.01em }
+         color:var(--faint); margin-bottom:5px }
+  .answer { font-size:1.3rem; font-weight:650; letter-spacing:-.01em }
+  .meta-row { display:flex; gap:16px; margin-top:9px; color:var(--muted);
+              font-size:.8rem; font-variant-numeric:tabular-nums }
   .flag { margin-top:16px; background:var(--warn-bg); border:1px solid var(--warn-line);
-          border-left-width:3px; color:var(--warn-fg);
-          border-radius:7px; padding:11px 14px; font-size:.9rem }
-  .flag b { font-weight:650 }
+          border-left-width:3px; color:var(--warn-fg); border-radius:7px;
+          padding:11px 14px; font-size:.9rem }
   table { width:100%; border-collapse:collapse; margin-top:8px }
   td { padding:7px 0; border-bottom:1px solid var(--line); vertical-align:middle }
   tr:last-child td { border-bottom:0 }
   td.n { width:58px; text-align:right; color:var(--muted);
          font-variant-numeric:tabular-nums; font-size:.86rem }
-  td.b { width:132px }
+  td.b { width:130px }
   .bar { height:7px; border-radius:4px; background:var(--bar); min-width:2px }
-  .meta { margin-top:22px; color:var(--muted); font-size:.8rem; line-height:1.7 }
-  .meta code { font-size:.94em }
-  .err { margin-top:26px; border:1px solid #d99; background:#fdf0ee; color:#8c2f1c;
+
+  .waking { margin-top:24px; border:1px solid var(--warn-line); background:var(--warn-bg);
+            color:var(--warn-fg); border-radius:11px; padding:18px 20px; font-size:.9rem }
+  .waking h3 { margin:0 0 6px; font-size:.95rem }
+  .waking .track { height:5px; border-radius:3px; background:rgba(0,0,0,.12);
+                   margin-top:12px; overflow:hidden }
+  .waking .fill { height:100%; background:var(--warn-fg); width:0; opacity:.55;
+                  transition:width .4s linear }
+  .err { margin-top:24px; border:1px solid #d99; background:#fdf0ee; color:#8c2f1c;
          border-radius:9px; padding:13px 15px; font-size:.9rem }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .err { background:#2c1a17; border-color:#7a3a2c;
                                            color:#f0b4a5 }
   }
+  footer { color:var(--faint); font-size:.79rem; line-height:1.7; margin-top:26px;
+           padding-top:16px; border-top:1px solid var(--line) }
   a { color:var(--accent) }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Reasonable Doubt</h1>
-  <p class="sub">Contract clause classifier — 100 LEDGAR provision types. Paste a clause.</p>
+  <header>
+    <h1>Reasonable Doubt</h1>
+    <p class="sub">Contract clause classification into 100 LEDGAR provision types.</p>
+    <div class="provenance" id="prov"><span>checking service…</span></div>
+  </header>
 
-  <textarea id="t" placeholder="This Agreement shall be governed by and construed in accordance with the laws of the State of New York, without regard to its conflict of laws principles."></textarea>
+  <div class="chips">
+    <button class="chip" data-k="gov">Governing law</button>
+    <button class="chip" data-k="amb">Ambiguous <span>— two defensible labels</span></button>
+    <button class="chip" data-k="ood">A cake recipe <span>— not a contract at all</span></button>
+  </div>
+
+  <textarea id="t" placeholder="Paste a contract clause, or pick an example above."></textarea>
   <div class="row">
-    <button id="go">Classify</button>
+    <button class="go" id="go">Classify</button>
     <span class="count" id="c">0 / 20,000</span>
   </div>
 
   <div id="out"></div>
 
-  <p class="meta">
-    Serves a DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32 —
-    macro-F1 <b>0.8091</b> on a 3,000-row test sample, <b>single seed</b>.
-    Scores are softmax outputs, not calibrated probabilities; routing uses the margin.
+  <footer>
+    DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32 — macro-F1 <b>0.8091</b> on a
+    3,000-row test sample, <b>single seed</b>. Scores are softmax outputs, not calibrated
+    probabilities; routing uses the top-two margin.
     <b>Research artefact — not legal advice.</b><br>
     <a href="https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar">Model card</a>
+    · <a href="https://github.com/sidharthjatt/reasonable-doubt">Source</a>
     · <a href="/health">/health</a> · <a href="/docs">API</a>
-  </p>
+  </footer>
 </div>
 
 <script>
 const MAX = 20000;
-const t = document.getElementById('t'), go = document.getElementById('go');
-const out = document.getElementById('out'), c = document.getElementById('c');
+const EXAMPLES = {
+  gov: "This Agreement shall be governed by and construed in accordance with the laws of the State of New York, without regard to its conflict of laws principles.",
+  amb: "This Sixth Amendment shall not be valid and binding on Landlord and Tenant unless and until it has been completely executed by and delivered to both parties.",
+  ood: "Please preheat the oven to 180 degrees Celsius and bake the cake for 35 minutes until golden brown."
+};
+const $ = id => document.getElementById(id);
+const t = $('t'), go = $('go'), out = $('out'), c = $('c'), prov = $('prov');
+const esc = s => String(s).replace(/[&<>"']/g,
+  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const fmt = n => n.toLocaleString('en-US');
 
 function count() {
   const n = t.value.length;
   c.textContent = fmt(n) + ' / ' + fmt(MAX);
   c.classList.toggle('over', n > MAX);
-  go.disabled = n === 0 || n > MAX;
+  go.disabled = n === 0 || n > MAX || busy;
 }
-t.addEventListener('input', count); count();
+let busy = false;
+t.addEventListener('input', count);
+document.querySelectorAll('.chip').forEach(b =>
+  b.addEventListener('click', () => { t.value = EXAMPLES[b.dataset.k]; count(); t.focus(); }));
 
-const esc = s => String(s).replace(/[&<>"']/g,
-  m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+// ---- provenance strip: real numbers off /health, not decoration -----------------
+async function provenance() {
+  try {
+    const h = await (await fetch('/health')).json();
+    const cy = h.canary || {}, rt = h.runtime || {};
+    const isa = rt.cpu_isa_flags || {};
+    const on = Object.entries(isa).filter(([, v]) => v).map(([k]) => k);
+    const bits = [];
+    if (cy.status === 'passed' || cy.n_correct !== undefined) {
+      bits.push(`<span><span class="dot"></span><b>canary</b> ${cy.n_correct}/${cy.n}</span>`);
+    } else if (cy.status) {
+      bits.push(`<span><b>canary</b> ${esc(cy.status)}</span>`);
+    }
+    if (h.tier0 && h.tier0.precision) bits.push(`<span><b>precision</b> ${esc(h.tier0.precision.toUpperCase())}</span>`);
+    bits.push(`<span><b>cpu</b> ${on.length ? esc(on.join(' ')) : esc(rt.machine || 'arm64')}</span>`);
+    if (rt.onnxruntime_version) bits.push(`<span><b>ort</b> ${esc(rt.onnxruntime_version)}</span>`);
+    if (rt.region) bits.push(`<span><b>region</b> ${esc(rt.region)}</span>`);
+    prov.innerHTML = bits.join('');
+    return h;
+  } catch (e) { prov.innerHTML = '<span>service unreachable</span>'; }
+}
+provenance();
 
+// ---- waking-up state ------------------------------------------------------------
+function waking(seconds, progress) {
+  const p = progress && progress.rows_total
+    ? ` — canary ${progress.rows_done}/${progress.rows_total} rows`
+    : '';
+  out.innerHTML =
+    `<div class="waking">
+       <h3>Waking up the container</h3>
+       This service scales to zero, so the first request after an idle period has to start
+       it, load a 715 MB model and re-run the 200-row startup check before it will answer.
+       <b>About ${seconds} seconds.</b> It will not return a prediction until that check
+       passes<span id="wprog">${p}</span>.
+       <div class="track"><div class="fill" id="wfill"></div></div>
+     </div>`;
+}
+
+async function waitForWarm(seconds) {
+  waking(seconds, null);
+  const t0 = Date.now();
+  for (let i = 0; i < 400; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    let h; try { h = await (await fetch('/health')).json(); } catch (e) { continue; }
+    const cy = h.canary || {};
+    const el = Math.round((Date.now() - t0) / 1000);
+    const fill = $('wfill'), wp = $('wprog');
+    if (fill) fill.style.width = Math.min(97, 100 * el / seconds) + '%';
+    if (wp && cy.progress) wp.textContent = ` — canary ${cy.progress.rows_done}/${cy.progress.rows_total} rows`;
+    if (cy.status === 'passed' || cy.status === 'skipped') { provenance(); return true; }
+    if (cy.status === 'failed') {
+      out.innerHTML = `<div class="err"><b>This host is not qualified.</b> The startup
+        canary failed, so the service refuses to return predictions. ${esc(cy.error || '')}</div>`;
+      return false;
+    }
+  }
+  return false;
+}
+
+// ---- classify -------------------------------------------------------------------
 async function classify() {
   const text = t.value;
-  if (!text || text.length > MAX) return;
-  go.disabled = true; go.textContent = 'Classifying…';
+  if (!text || text.length > MAX || busy) return;
+  busy = true;
+  go.innerHTML = '<span class="spinner"></span>Classifying';
+  count();
   out.innerHTML = '';
+  const t0 = performance.now();
   try {
-    const r = await fetch('/classify', {
+    let r = await fetch('/classify', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({text})
     });
-    if (!r.ok) {
-      let d = ''; try { d = JSON.stringify(await r.json()); } catch (e) {}
-      throw new Error('HTTP ' + r.status + (d ? ' — ' + d : ''));
+    if (r.status === 503) {
+      const d = (await r.json()).detail || {};
+      if (d.retryable === false) {
+        out.innerHTML = `<div class="err"><b>This host is not qualified.</b>
+          ${esc(d.message || '')}</div>`;
+        return;
+      }
+      go.innerHTML = '<span class="spinner"></span>Waking up';
+      if (!await waitForWarm(d.estimated_wait_seconds || 90)) return;
+      r = await fetch('/classify', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text})
+      });
     }
-    render(await r.json());
+    if (!r.ok) {
+      let detail = ''; try { detail = JSON.stringify(await r.json()); } catch (e) {}
+      throw new Error('HTTP ' + r.status + (detail ? ' — ' + detail : ''));
+    }
+    render(await r.json(), Math.round(performance.now() - t0));
   } catch (e) {
     out.innerHTML = '<div class="err">' + esc(e.message) + '</div>';
   } finally {
-    go.disabled = false; go.textContent = 'Classify'; count();
+    busy = false; go.textContent = 'Classify'; count();
   }
 }
 go.addEventListener('click', classify);
@@ -127,32 +258,34 @@ t.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') classify();
 });
 
-function render(d) {
+function render(d, ms) {
   const top = d.top_3 || [];
   const max = top.length ? Math.max(...top.map(x => x.score)) : 1;
   const rows = top.map(x => {
-    const pct = (x.score * 100).toFixed(1) + '%';
     const w = Math.max(2, Math.round((x.score / max) * 100));
-    return '<tr><td>' + esc(x.label) + '</td>' +
-           '<td class="b"><div class="bar" style="width:' + w + '%"></div></td>' +
-           '<td class="n">' + pct + '</td></tr>';
+    return `<tr><td>${esc(x.label)}</td>
+            <td class="b"><div class="bar" style="width:${w}%"></div></td>
+            <td class="n">${(x.score * 100).toFixed(1)}%</td></tr>`;
   }).join('');
-
   const flag = d.needs_review
-    ? '<div class="flag"><b>Needs review</b> — ' +
-      esc(d.needs_review_meaning || 'low confidence — human review recommended') +
-      '</div>'
+    ? `<div class="flag"><b>Needs review</b> —
+       ${esc(d.needs_review_meaning || 'low confidence — human review recommended')}</div>`
     : '';
-
   out.innerHTML =
-    '<div class="card">' +
-      '<div class="lbl">Predicted provision type</div>' +
-      '<div class="answer">' + esc(d.label) + '</div>' +
-      flag +
-      (rows ? '<div class="lbl" style="margin-top:20px">Top 3</div>' +
-              '<table>' + rows + '</table>' : '') +
-    '</div>';
+    `<div class="card">
+       <div class="lbl">Predicted provision type</div>
+       <div class="answer">${esc(d.label)}</div>
+       <div class="meta-row">
+         <span><b>${esc(d.tier_used)}</b></span>
+         <span>${ms} ms round trip</span>
+         <span>margin ${Number(d.margin).toFixed(4)}</span>
+       </div>
+       ${flag}
+       ${rows ? `<div class="lbl" style="margin-top:20px">Top 3</div>
+                 <table>${rows}</table>` : ''}
+     </div>`;
 }
+count();
 </script>
 </body>
 </html>

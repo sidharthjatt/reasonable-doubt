@@ -25,12 +25,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.serve.canary_gate import CanaryGate, CanaryStatus, Tier0NotQualified
 from src.serve.config import ServiceConfig
 from src.serve.pricing import CostEstimate, api_usd_for_result, local_usd_per_request
 from src.serve.tier2 import Tier2Unavailable
 from src.serve.tiers import TierResult
 
-__all__ = ["Cascade", "ClassifyRequest", "MarginRouter", "build_cascade", "create_app"]
+__all__ = ["Cascade", "ClassifyRequest", "MarginRouter", "Tier0NotQualified",
+           "build_cascade", "create_app"]
 
 
 # INPUT CAP. A clause is a paragraph; 512 tokens is roughly 2-4k characters and anything
@@ -41,6 +43,10 @@ MAX_INPUT_CHARS = 20_000
 
 # The one-page demo UI. Served from disk so the page is editable without touching Python.
 INDEX_HTML_PATH = Path(__file__).resolve().parent / "static" / "index.html"
+
+# What the warming-up UI tells a visitor to expect. A rough figure from the measured cold
+# start, used for copy only — nothing branches on it.
+CANARY_ESTIMATED_SECONDS = 90
 
 
 class ClassifyRequest(BaseModel):
@@ -87,8 +93,17 @@ class Cascade:
     tier2: Any
     router: MarginRouter
     config: ServiceConfig
+    # THE QUALIFICATION GATE. Default-open only because a cascade built without one is a
+    # unit under test, never the served object: build_cascade() always supplies a real
+    # gate, and create_app() is what settles it.
+    gate: "CanaryGate | None" = None
 
     def classify(self, text: str) -> dict:
+        # CHECKED HERE, ON EVERY PREDICTION, and deliberately not in the endpoint. An
+        # HTTP-level check is bypassed by any other caller of this object, and "the
+        # endpoint forgot" is the failure being guarded against (§3bp).
+        if self.gate is not None:
+            self.gate.check_may_serve()
         t0 = self.tier0.classify(text)
         margin = t0.confidence
         # PRECISION-KEYED (§3bl). Passing the served precision is what stops this
@@ -212,7 +227,8 @@ def build_cascade(config: ServiceConfig | None = None, *, tier0=None,
 
     return Cascade(tier0=tier0, tier2=tier2, config=config,
                    router=MarginRouter(threshold=config.threshold.threshold,
-                                       signal=config.threshold.signal))
+                                       signal=config.threshold.signal),
+                   gate=CanaryGate())
 
 
 def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
@@ -239,7 +255,9 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
     with phase("dataset_load"):
         ds = load_ledgar()
     started = time.monotonic()
-    result = run_canary(cascade.tier0, ds, canary, floor=cfg.canary_min_accuracy)
+    result = run_canary(cascade.tier0, ds, canary, floor=cfg.canary_min_accuracy,
+                        on_progress=(cascade.gate.note_progress
+                                     if cascade.gate is not None else None))
     print(f"STARTUP PHASE canary_run: {time.monotonic() - started:.2f}s "
           f"n={result.n} per_row_ms={1000 * (time.monotonic() - started) / result.n:.1f}",
           flush=True)
@@ -261,14 +279,73 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
 
 
 def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
-               run_canary_on_start: bool = True):
-    """Build the FastAPI app. The canary runs HERE, so a failure prevents startup."""
-    from fastapi import FastAPI
+               run_canary_on_start: bool = True, canary_background: bool = True):
+    """Build the FastAPI app.
+
+    THE CANARY NO LONGER BLOCKS THE PORT (§3bp). It runs on a background thread while
+    uvicorn binds immediately, so a cold request gets an instant 503 that says what is
+    happening instead of hanging for two minutes. What did NOT change: no prediction is
+    returned until the canary passes, and a failure refuses permanently. That property
+    lives in `Cascade.gate`, which `classify` checks on every call.
+
+    `canary_background=False` runs it inline, which is what the tests use when they need
+    the outcome to be settled before the first assertion.
+    """
+    import threading
+
+    from fastapi import FastAPI, HTTPException
     from fastapi.responses import HTMLResponse
 
+    from src.serve.canary import CanaryFailure
+
     cascade = build_cascade(config, tier0=tier0, tier2=tier2)
-    canary = run_startup_canary(cascade) if run_canary_on_start else {
-        "ran": False, "reason": "explicitly skipped by the caller"}
+    gate = cascade.gate
+    assert gate is not None, "build_cascade must supply a gate"
+
+    def _run_canary_into_gate(*, reraise: bool) -> None:
+        """Run the canary and settle the gate.
+
+        `reraise` is the difference between the two modes, and it is a deliberate one.
+        BACKGROUND: the port is already open, so a failure is recorded and every
+        prediction is refused; the process stays up because a crash-loop on a managed
+        platform leaves nothing to inspect, while a live /health says exactly what went
+        wrong. BLOCKING: nothing is serving yet, so the failure propagates and the
+        process exits non-zero, which is what `docker run` and CI expect.
+        """
+        try:
+            result = run_startup_canary(cascade)
+        except CanaryFailure as exc:
+            print(f"TIER 0 CANARY FAILED — THIS SERVICE WILL NOT PREDICT: {exc}",
+                  flush=True)
+            gate.mark_failed(str(exc))
+            if reraise:
+                raise
+            return
+        except Exception as exc:                       # noqa: BLE001
+            # Any other error also means unqualified. It is recorded as a failure with
+            # its type rather than swallowed: an exception here must never leave the gate
+            # PENDING forever, because "pending" would look like "still warming up".
+            print(f"TIER 0 CANARY ERRORED — THIS SERVICE WILL NOT PREDICT: "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+            gate.mark_failed(f"{type(exc).__name__}: {exc}")
+            if reraise:
+                raise
+            return
+        if result.get("ran"):
+            gate.mark_passed(result)
+        else:
+            gate.mark_skipped(str(result.get("reason", "canary disabled")))
+
+    if not run_canary_on_start:
+        gate.mark_skipped("explicitly skipped by the caller")
+        canary = {"ran": False, "reason": "explicitly skipped by the caller"}
+    elif canary_background:
+        canary = None
+        threading.Thread(target=_run_canary_into_gate, name="canary",
+                         kwargs={"reraise": False}, daemon=True).start()
+    else:
+        _run_canary_into_gate(reraise=True)
+        canary = gate.as_dict()
 
     app = FastAPI(
         title="Reasonable Doubt — Tier 0 -> Claude Sonnet 5",
@@ -290,7 +367,8 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
                       "model_dir_from_env": cascade.config.tier0_model_dir_from_env},
             "tier2": cascade.tier2.describe(),
             "router": cascade.config.threshold.as_dict(),
-            "canary": canary,
+            # The gate is the source of truth. `canary` is only the inline-mode copy.
+            "canary": {**(canary or {}), **gate.as_dict()},
             "runtime": {
                 "onnxruntime_version": onnxruntime_version(),
                 # null means UNREADABLE, not absent — see src/serve/canary.py.
@@ -298,6 +376,12 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
                 # ORT telemetry is off: it crashes at teardown on macOS and the service
                 # should not phone home regardless (src/ort_runtime.py).
                 "ort_telemetry_disabled": telemetry_disabled(),
+                "machine": __import__("platform").machine(),
+                # Where this process is running, when the platform tells us. Set at
+                # deploy time; ABSENT rather than guessed, because the page prints it as
+                # provenance and a hardcoded region would have claimed "asia-south1"
+                # while running on a laptop.
+                "region": __import__("os").environ.get("SERVICE_REGION") or None,
             },
             # TWO DIFFERENT FACTS, kept apart. `configured` is the operator's
             # decision (§3bm turned it off); `tier2_available` is whether a key is
@@ -319,7 +403,25 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
 
     @app.post("/classify")
     def classify(req: ClassifyRequest) -> dict:
-        return cascade.classify(req.text)
+        try:
+            return cascade.classify(req.text)
+        except Tier0NotQualified as exc:
+            status = gate.status
+            # 503 for both, and the distinction is in the body rather than the code:
+            # both mean "this service is not answering", and a client that only reads
+            # the status code must not treat a permanent refusal as a retryable one.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "tier0_not_qualified",
+                    "canary_status": status.value,
+                    "retryable": status is CanaryStatus.PENDING,
+                    "message": str(exc),
+                    "estimated_wait_seconds": (
+                        CANARY_ESTIMATED_SECONDS
+                        if status is CanaryStatus.PENDING else None),
+                },
+            ) from exc
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:

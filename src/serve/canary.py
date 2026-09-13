@@ -245,7 +245,8 @@ class CanaryResult:
                 "floor": self.floor, "passed": self.passed, "hardware": self.hardware}
 
 
-def run_canary(tier0, ds, canary: CanarySet, *, floor: float) -> CanaryResult:
+def run_canary(tier0, ds, canary: CanarySet, *, floor: float,
+               on_progress=None) -> CanaryResult:
     """Classify every canary row and compare accuracy against ``floor``.
 
     Raises:
@@ -267,7 +268,13 @@ def run_canary(tier0, ds, canary: CanarySet, *, floor: float) -> CanaryResult:
     with phase("canary_first_inference"):
         first = tier0.classify(texts[0]).label
     with phase("canary_remaining_inference", n=len(texts) - 1):
-        preds = [first] + [tier0.classify(t).label for t in texts[1:]]
+        preds = [first]
+        for i, t in enumerate(texts[1:], start=2):
+            preds.append(tier0.classify(t).label)
+            # Progress, so a warming-up client can be told how far along rather than
+            # just shown a spinner. Reported every 10 rows to keep it cheap.
+            if on_progress is not None and i % 10 == 0:
+                on_progress(i, len(texts))
     n_correct = sum(1 for p, g in zip(preds, gold) if p == g)
     acc = n_correct / len(gold)
     result = CanaryResult(accuracy=acc, n=len(gold), n_correct=n_correct, floor=floor,

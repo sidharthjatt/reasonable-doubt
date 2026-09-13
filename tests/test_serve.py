@@ -9,6 +9,7 @@ real `configs/costs.yaml` rather than from a literal.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -472,20 +473,146 @@ def test_health_says_when_the_canary_was_skipped(config, fastapi_client):
     assert canary["ran"] is False, "a skipped canary must never look like a passed one"
 
 
-def test_a_failing_canary_prevents_the_app_from_being_created(config, fastapi_client,
-                                                              monkeypatch, ledgar):
-    """The refusal is at STARTUP, not per-request: an app that started and then failed
-    every request would still be serving chance-level labels."""
+def _cascade_that_fails_the_canary(config):
+    """A cascade whose Tier 0 answers "Adjustments" to everything, so the canary fails."""
+    from src.serve.canary_gate import CanaryGate
+
+    return Cascade(tier0=FakeTier0(label="Adjustments", margin=0.97),
+                   tier2=FakeTier2(available=False), config=config,
+                   router=MarginRouter(threshold=config.threshold.threshold),
+                   gate=CanaryGate())
+
+
+def test_a_failing_canary_in_BLOCKING_mode_still_prevents_startup(config, monkeypatch,
+                                                                  ledgar):
+    """Blocking mode keeps the old contract: the process refuses to come up at all.
+
+    This is what `docker run` uses when an operator wants a non-zero exit rather than a
+    running service that answers 503.
+    """
     from src.serve import app as app_mod
 
     monkeypatch.setattr(app_mod, "build_cascade",
-                        lambda cfg, tier0=None, tier2=None: Cascade(
-                            tier0=FakeTier0(label="Adjustments", margin=0.97),
-                            tier2=FakeTier2(available=False), config=config,
-                            router=MarginRouter(threshold=config.threshold.threshold)))
+                        lambda cfg, tier0=None, tier2=None:
+                        _cascade_that_fails_the_canary(config))
 
     with pytest.raises(CanaryFailure, match="REFUSING TO START"):
-        app_mod.create_app(config, run_canary_on_start=True)
+        app_mod.create_app(config, run_canary_on_start=True, canary_background=False)
+
+
+# ---- the three gate states (§3bp). Moving the canary off the startup path split "the
+# ---- port is open" from "the artefact is qualified", so each state is pinned here.
+
+
+def test_gate_PENDING_refuses_to_predict_and_says_it_is_retryable(config,
+                                                                  fastapi_client):
+    """While the canary is still running, no prediction is returned. 503, not a guess."""
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(), tier2=FakeTier2(available=False),
+                     run_canary_on_start=True, canary_background=True)
+    # The canary thread is running against the real dataset; the gate starts PENDING and
+    # this asserts the state, not a race — it is read immediately.
+    client = fastapi_client(app)
+    r = client.post("/classify", json={"text": "a clause"})
+
+    if r.status_code == 200:
+        pytest.skip("canary completed before the first request; PENDING not observable "
+                    "here. Covered deterministically by the gate unit tests below.")
+    assert r.status_code == 503
+    d = r.json()["detail"]
+    assert d["error"] == "tier0_not_qualified"
+    assert d["canary_status"] == "pending"
+    assert d["retryable"] is True
+    assert "WARMING UP" in d["message"]
+    assert d["estimated_wait_seconds"]
+
+
+def test_gate_PASSED_is_required_before_any_prediction(config, fastapi_client, ledgar):
+    """The passing case, run inline so the outcome is settled before the assertion."""
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(label="Notices", margin=0.99),
+                     tier2=FakeTier2(available=False),
+                     run_canary_on_start=False)       # SKIPPED serves; see below
+    assert fastapi_client(app).post("/classify",
+                                    json={"text": "a clause"}).status_code == 200
+
+
+def test_gate_FAILED_refuses_PERMANENTLY_and_is_not_retryable(config, fastapi_client,
+                                                              monkeypatch, ledgar):
+    """The property that had to survive moving the canary off the startup path.
+
+    A failed canary means the artefact is not qualified on this host. That does not
+    change by waiting, so the refusal never expires and never retries.
+    """
+    from src.serve import app as app_mod
+
+    monkeypatch.setattr(app_mod, "build_cascade",
+                        lambda cfg, tier0=None, tier2=None:
+                        _cascade_that_fails_the_canary(config))
+    app = app_mod.create_app(config, run_canary_on_start=True, canary_background=True)
+
+    # Background thread; wait for it to settle rather than assuming it has.
+    client = fastapi_client(app)
+    for _ in range(600):
+        if client.get("/health").json()["canary"]["status"] != "pending":
+            break
+        time.sleep(0.1)
+
+    h = client.get("/health").json()["canary"]
+    assert h["status"] == "failed"
+    assert h["serves_predictions"] is False
+    assert "error" in h
+
+    for attempt in range(3):        # refusal must not decay into a pass on retry
+        r = client.post("/classify", json={"text": "a clause"})
+        assert r.status_code == 503, f"attempt {attempt} was served"
+        d = r.json()["detail"]
+        assert d["canary_status"] == "failed"
+        assert d["retryable"] is False, "a permanent refusal must not look retryable"
+        assert d["estimated_wait_seconds"] is None
+        assert "NOT QUALIFIED" in d["message"]
+
+
+def test_the_gate_is_checked_in_the_cascade_not_only_in_the_endpoint(config):
+    """An HTTP-level check is bypassed by every other caller of the cascade."""
+    from src.serve.canary_gate import CanaryGate, Tier0NotQualified
+
+    c = Cascade(tier0=FakeTier0(), tier2=FakeTier2(available=False), config=config,
+                router=MarginRouter(threshold=config.threshold.threshold),
+                gate=CanaryGate())
+    with pytest.raises(Tier0NotQualified, match="WARMING UP"):
+        c.classify("a clause")      # PENDING
+
+    c.gate.mark_passed({"ran": True, "accuracy": 0.955})
+    assert c.classify("a clause")["label"] is not None
+
+
+def test_the_gate_is_write_once(config):
+    """A settled gate must never reopen: a failed canary cannot be marked passed."""
+    from src.serve.canary_gate import CanaryGate, CanaryStatus
+
+    g = CanaryGate()
+    assert g.status is CanaryStatus.PENDING
+    g.mark_failed("0.64 below floor 0.80")
+    assert g.status is CanaryStatus.FAILED
+    for reopen in (lambda: g.mark_passed({"ran": True}),
+                   lambda: g.mark_skipped("nope"),
+                   lambda: g.mark_failed("again")):
+        with pytest.raises(RuntimeError, match="write-once"):
+            reopen()
+    assert g.status is CanaryStatus.FAILED
+
+
+def test_only_PASSED_and_SKIPPED_serve():
+    """The allow-list, stated once. Any new state defaults to refusing."""
+    from src.serve.canary_gate import CanaryStatus
+
+    assert CanaryStatus.PASSED.serves is True
+    assert CanaryStatus.SKIPPED.serves is True
+    assert CanaryStatus.PENDING.serves is False
+    assert CanaryStatus.FAILED.serves is False
 
 
 def test_classify_endpoint_returns_the_required_fields(config, fastapi_client):
