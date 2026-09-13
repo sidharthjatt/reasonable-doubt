@@ -112,6 +112,20 @@
     "cost_usd_total": 1.308313,
     "source": "results/spend_ledger.jsonl via results/cost_per_1k.json"
   },
+  "served_reference": {
+    "usd_per_clause": 8.788115222574201e-07,
+    "basis": "fp32: capital 633.86 USD / 731,170,832 lifetime requests (at 30.9137 req/s) + marginal energy 0.505668 J/req at 0.0847 USD/kWh",
+    "is_estimate": true,
+    "tariff_is_assumed": true,
+    "source": "configs/costs.yaml via src.serve.pricing.local_usd_per_request"
+  },
+  "headline": {
+    "api_macro_f1": 0.6148376610577307,
+    "tier0_macro_f1": 0.8090515439998669,
+    "n_rows": 3000,
+    "split": "test_3000",
+    "source": "results/stage1_scored_test3000.json + results/fp32_local_onnx_ce10ep_seed1.json"
+  },
   "tier0": {
     "macro_f1": 0.8090515439998669,
     "accuracy": 0.8733333333333333,
@@ -393,5 +407,26 @@
     "api_accuracy_on_escalated": 0.40310077519379844,
     "in_sample": true,
     "source": "results/served_config_escalation.json"
+  },
+  "ood": {
+    "n_probes": 20,
+    "n_unflagged": 10,
+    "worst_case": {
+      "input": "data policy prose",
+      "label": "Records",
+      "top1": 0.9987330980261955,
+      "margin": 0.9984284043312073,
+      "flagged": false
+    },
+    "in_domain_reference": {
+      "input": "governing-law clause (in-domain control)",
+      "label": "Governing Laws",
+      "top1": 0.9676666175311318,
+      "margin": 0.9369723200798035,
+      "flagged": false
+    },
+    "n_distinct_labels_when_unflagged": 8,
+    "caveat": "Hand-written probes, not a sample from any distribution: these rates describe these twenty inputs and nothing wider.",
+    "source": "results/ood_probe.json"
   }
 }

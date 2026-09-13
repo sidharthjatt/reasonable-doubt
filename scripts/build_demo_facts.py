@@ -64,7 +64,12 @@ def build(margin_distribution: dict) -> dict:
     cost = json.loads((R / "cost_per_1k.json").read_text())
     isa = json.loads((R / "isa_matrix.json").read_text())
     esc = json.loads((R / "served_config_escalation.json").read_text())
+    ood = json.loads((R / "ood_probe.json").read_text())
+    stage1 = json.loads((R / "stage1_scored_test3000.json").read_text())
     t0 = json.loads((R / "fp32_local_onnx_ce10ep_seed1.json").read_text())["metrics"]
+
+    from src.serve.pricing import local_usd_per_request
+    served = local_usd_per_request(precision="fp32")
 
     api = cost["api"]["claude-sonnet-5"]
     mf = {r["isa"]: r for r in isa["test_3000_macro_f1"]["rows"]}
@@ -91,6 +96,30 @@ def build(margin_distribution: dict) -> dict:
             "n_requests": api["n_requests"],
             "cost_usd_total": api["cost_usd"],
             "source": "results/spend_ledger.jsonl via results/cost_per_1k.json",
+        },
+
+        # THE COMPARISON THE PAGE OPENS WITH. Both halves measured on the SAME 3,000 rows
+        # with the same scorer, so the two macro-F1 figures are comparable; the two cost
+        # figures are not derived the same way and the page says so where it shows them.
+        # The served per-request cost, from the SAME function `/classify` uses, so the
+        # page can state the comparison before any request has been made instead of
+        # carrying a hardcoded constant in the HTML. A live response's own figure still
+        # overrides this the moment one arrives.
+        "served_reference": {
+            "usd_per_clause": served.usd,
+            "basis": served.basis,
+            "is_estimate": served.is_estimate,
+            "tariff_is_assumed": served.tariff_is_assumed,
+            "source": "configs/costs.yaml via src.serve.pricing.local_usd_per_request",
+        },
+
+        "headline": {
+            "api_macro_f1": stage1["models"]["claude-sonnet-5"]["macro_f1"],
+            "tier0_macro_f1": t0["macro_f1"],
+            "n_rows": stage1["models"]["claude-sonnet-5"]["n"],
+            "split": "test_3000",
+            "source": ("results/stage1_scored_test3000.json "
+                       "+ results/fp32_local_onnx_ce10ep_seed1.json"),
         },
 
         "tier0": {
@@ -136,6 +165,19 @@ def build(margin_distribution: dict) -> dict:
             "in_sample": esc["in_sample"],
             "source": "results/served_config_escalation.json",
         },
+
+        # §3bs. Twenty PROBES, not a sample. The page must render the caveat with the
+        # number, so the caveat travels in the same block as the number.
+        "ood": {
+            "n_probes": ood["n_probes"],
+            "n_unflagged": ood["n_unflagged"],
+            "worst_case": ood["worst_case"],
+            "in_domain_reference": ood["in_domain_reference"],
+            "n_distinct_labels_when_unflagged": len(ood["labels_when_unflagged"]),
+            "caveat": ("Hand-written probes, not a sample from any distribution: these "
+                       "rates describe these twenty inputs and nothing wider."),
+            "source": "results/ood_probe.json",
+        },
     }
     return facts
 
@@ -152,6 +194,10 @@ def main() -> int:
     print(f"  int8 on non-VNNI x86: {x86['int8']}")
     print(f"  escalation delta {esc['delta']:+.6f} "
           f"CI [{esc['ci_low']:+.4f}, {esc['ci_high']:+.4f}]")
+    ood = facts["ood"]
+    print(f"  ood {ood['n_unflagged']}/{ood['n_probes']} unflagged; worst "
+          f"{ood['worst_case']['margin']:.4f} against a genuine clause's "
+          f"{ood['in_domain_reference']['margin']:.4f}")
     return 0
 
 

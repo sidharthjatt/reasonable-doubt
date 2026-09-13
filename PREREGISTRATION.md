@@ -1473,6 +1473,19 @@ stylistically far from contracts: recipes, sport, poetry, product copy.
 energy score, a Mahalanobis distance on the encoder features, or a null class — each a new
 experiment with its own accept rule and its own registration. Recorded as a limitation.
 
+**RECORDED AS AN ARTEFACT (2026-09-13).** The probe now writes `results/ood_probe.json`
+(`scripts/ood_probe.py <base_url> --write`), which is committed and is where
+`scripts/build_demo_facts.py` reads the figures the demo page shows, so the §5 numbers on
+the page are traceable rather than typed in. The re-run reproduces this entry exactly:
+10/20 unflagged, worst case `Records` at margin 0.9984.
+
+The in-domain comparison is no longer quoted from an earlier run — **the genuine
+governing-law clause is now classified in the SAME session as the probes** and stored
+alongside them as `in_domain_reference`. It is the SHORT form of the clause (margin 0.9370)
+rather than the demo's longer one (0.9867), which makes it the weaker control: the finding
+is that a non-contract text beats a real clause's margin, and it survives being tested
+against the real clause that scores lowest.
+
 ### 3br. NEGATIVE RESULT — batching the canary does not help (2026-09-13)
 
 **Question asked, measured, and answered no.** The startup canary classifies its 200 rows

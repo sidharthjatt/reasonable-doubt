@@ -5,302 +5,421 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Reasonable Doubt — contract clause classifier</title>
 <style>
-/* GROUND: cool ledger grey-green, not warm cream. Engineering paper and accounting
-   stock, not literary. DISPLAY FACE: the mono, not a serif — on a page about a machine
-   reading legal text, the machine's voice is the loud one and the document's voice is
-   the quiet one. Serif is demoted to small running prose.
+/* THE PAGE OPENS WITH THE PROBLEM, NOT THE TOOL. Two costs for the same 3,000 clauses
+   facing each other at display size, accuracy under each, before anything is explained.
+   Everything after that is how the comparison was established, including the parts that
+   did not work.
+
+   THREE ACCENTS, each with ONE meaning, so none of them has to carry two:
+     vermilion  doubt, collapse, failure
+     pine       confidence, the served path
+     brass      structure — section numbers, links, focus. Never a verdict.
 
    NO WEBFONTS. System stacks only: zero bytes, zero requests, no FOUT, on a service that
    already has a cold-start problem.
 
-   ONE FRAMED ELEMENT on the page (the plate), and it is the only dark region. Everything
-   else is hairlines and space. If it is not the plate, it is not boxed. */
+   ONE FRAMED ELEMENT (the plate), dark in both modes. If it is not the plate, it is not
+   boxed; everything else is hairlines and space.
+
+   EVERY COLOUR PAIRING BELOW IS MEASURED against WCAG AA, in both modes, and the ratios
+   are written next to the tokens. Text is `--ink` or `--mute` and nothing else: a third,
+   fainter grey is what put the page's own caveats at 3.08:1, so hierarchy below `--mute`
+   comes from size and family instead of from lightness. */
 :root {
-  --paper:#E9EBE4; --ink:#17150F; --graphite:#6B6659;
-  /* TWO RULE WEIGHTS, not one flat grey: hairline separates rows inside a block, rule
-     separates blocks. A single weight flattened the whole page into one texture. */
-  --hairline:#DCDFD4; --rule:#C3C8B9;
-  --vermilion:#A5301B; --pine:#28564A;
-  --plate:#16181A; --plate-ink:#E4E7DE; --plate-line:#3A3F42;
-  /* THE PLATE IS DARK IN BOTH MODES, so it needs its OWN accents in both. Reusing the
-     light-mode vermilion on it measured 2.58:1 — the `needs review` state was failing AA
-     in light mode and I had not caught it. These are 7.7:1 and 9.8:1 there. */
-  --plate-vermilion:#F2917A; --plate-pine:#83CFB0;
+  /* LIGHT — ledger stock, cool grey-green. Ratios against --page. */
+  --page:#E9EBE4; --sunk:#E1E4DA;
+  --ink:#17150F;            /* 15.18 */
+  --mute:#6B6659;           /* 4.76  */
+  --rule:#C3C8B9; --hair:#DCDFD4;
+  --pine:#28564A;           /* 6.93  */
+  --verm:#A5301B;           /* 5.75  */
+  --brass:#7A5E0E;          /* 5.09  — the gold read at the dark end so it carries on paper */
+  /* THE PLATE IS DARK IN BOTH MODES, so it keeps its own accents in both. Reusing the
+     light-mode vermilion on it measured 2.58:1 — the needs-review state was failing AA in
+     light mode. These are 7.7 / 9.8 / 7.4 there. */
+  --plate:#16181A; --plate-ink:#E4E7DE; --plate-mute:#9AA396; --plate-line:#3A3F42;
+  --plate-verm:#F2917A; --plate-pine:#83CFB0; --plate-brass:#C9A227;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
-  --pad: clamp(16px, 4vw, 28px);
+  --pad: clamp(18px, 4vw, 28px);
 }
-/* DARK MODE, DESIGNED RATHER THAN PATCHED. Two earlier attempts failed for the same
-   reason: they treated dark as "light mode with the lights off" — near-black ground, white
-   text, colour only inside the plate — which is absence rather than material.
-
-   The palette reasoning is unchanged and simply read at the dark end. LEDGAR stock is a
-   green-grey paper, so the ground is that paper in shadow (#171B18), not black: it has a
-   temperature and reads as a surface. Body text is warmed toward the paper tone (#E3E7DC)
-   rather than pure white, so the page keeps that temperature. Vermilion and pine are lifted
-   to carry at dark-mode contrast and do the same work they do in light — the needs-review
-   state, the INT8 collapse — instead of being confined to the plate.
-
-   The plate stays the one surface that differs from the page. It cannot be darker here: on
-   a #171B18 ground a darker plate measured 1.10:1, invisible. So it is LIT — a screen on a
-   desk rather than a hole in it — at a 1.25:1 step plus its hairline.
-
-   Every pairing below is measured, not eyeballed: body 13.87:1, secondary 6.43:1,
-   vermilion 7.11:1, pine 8.70:1 against the ground; all AA. */
+/* DARK, DESIGNED RATHER THAN INVERTED. The ground is the same ledger stock in shadow
+   (#0E1211) rather than black, so it keeps a temperature and reads as a surface; body text
+   is warmed toward that stock rather than pure white. The plate cannot be darker here, so
+   it is LIT — a screen on a desk rather than a hole in it — at a measured 1.26:1 step plus
+   its hairline. (A plate at the mockup's #1B2220 measures 1.16:1 on this ground, which is
+   the separation failure this design already fixed once.)
+   Ratios against --page: ink 15.62, mute 6.03, pine 9.43, vermilion 7.70, brass 7.80. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper:#171B18; --ink:#E3E7DC; --graphite:#97A092;
-    --hairline:#262C27; --rule:#3A423B;
-    --vermilion:#F08A70; --pine:#7CC6A8;
-    --plate:#262E28; --plate-ink:#EFF3E9; --plate-line:#454F47;
+    --page:#0E1211; --sunk:#0A0D0C;
+    --ink:#E7EBE3; --mute:#8C948A;
+    --rule:#2C3431; --hair:#222A27;
+    --pine:#7CC6A8; --verm:#F08A70; --brass:#C9A227;
+    --plate:#242825; --plate-ink:#E7EBE3; --plate-line:#454F47;
   }
 }
 * { box-sizing:border-box }
-body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--mono);
+html, body { margin:0; padding:0 }
+body { background:var(--page); color:var(--ink); font-family:var(--mono);
        font-size:16px; line-height:1.5; -webkit-font-smoothing:antialiased }
-.wrap { max-width:880px; margin:0 auto; padding:clamp(28px,6vw,56px) var(--pad) 72px }
-p { margin:0 }
-a { color:inherit; text-underline-offset:3px }
-:focus-visible { outline:2px solid var(--vermilion); outline-offset:2px; border-radius:1px }
-.plate :focus-visible { outline-color:var(--plate-ink) }
+.wrap { max-width:1080px; margin:0 auto; padding:0 var(--pad) }
+.measure { max-width:62ch }
+p { font-family:var(--serif); font-size:18px; line-height:1.65; margin:0 0 14px }
+p:last-child { margin-bottom:0 }
+.dim { color:var(--mute) }
+hr.rule { height:1px; background:var(--rule); border:0; margin:0 }
+a { color:var(--brass); text-underline-offset:3px }
+:focus-visible { outline:2px solid var(--brass); outline-offset:2px; border-radius:1px }
+.plate :focus-visible { outline-color:var(--plate-brass) }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0);
+      white-space:nowrap }
 
-h1 { font-size:clamp(1.6rem,4.4vw,2rem); font-weight:600; letter-spacing:-.02em; margin:0 0 4px }
-.tag { font-family:var(--serif); font-size:clamp(1rem,2.6vw,1.25rem); color:var(--graphite);
-       margin:0 0 20px; line-height:1.45 }
-.prov { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:4px 18px;
-        border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
-        padding:9px 0; font-size:11px; letter-spacing:.03em; color:var(--graphite) }
-.prov b { display:block; color:var(--ink); font-weight:500; font-size:12.5px;
+/* ---------------- masthead ---------------- */
+.mast { padding:clamp(36px,7vw,56px) 0 28px }
+.mast h1 { font-family:var(--mono); font-size:22px; font-weight:600; letter-spacing:.06em;
+           margin:0 0 6px; text-transform:uppercase }
+.mast .sub { font-family:var(--serif); font-size:19px; color:var(--mute); margin:0 }
+
+/* ---------------- the problem ---------------- */
+.problem { padding:clamp(48px,8vw,72px) 0 clamp(56px,9vw,88px) }
+.kicker { font-size:13px; letter-spacing:.14em; color:var(--brass); margin-bottom:26px;
+          text-transform:uppercase }
+.face { display:grid; grid-template-columns:1fr auto 1fr; align-items:end; margin:0 0 10px }
+.face .col.right { text-align:right }
+.face .who { font-size:14px; color:var(--mute); margin-bottom:10px; line-height:1.4 }
+.face .num { font-family:var(--mono); font-weight:500; font-size:clamp(2.4rem,7vw,4.6rem);
+             line-height:.95; letter-spacing:-.03em; font-variant-numeric:tabular-nums }
+.face .num.a { color:var(--verm) }
+.face .num.b { color:var(--pine) }
+.face .unit { font-size:14px; color:var(--mute); margin-top:12px }
+.vs { font-size:13px; color:var(--mute); padding:0 20px 18px; letter-spacing:.1em }
+.problem .line { margin-top:44px; padding-top:26px; border-top:1px solid var(--rule) }
+.gain { color:var(--pine) }
+
+/* ---------------- sections ---------------- */
+.act { padding:clamp(44px,7vw,64px) 0 }
+.finding { padding:clamp(52px,8vw,76px) 0; border-top:1px solid var(--rule) }
+.acthead { display:flex; align-items:baseline; gap:16px; margin-bottom:8px; flex-wrap:wrap }
+.actnum { font-size:14px; color:var(--brass); letter-spacing:.1em;
           font-variant-numeric:tabular-nums }
-.prov .src { grid-column:1/-1; font-style:italic; font-family:var(--serif);
-             letter-spacing:0; font-size:12px; color:var(--graphite); padding-top:2px }
+h2.acttitle { font-size:26px; font-weight:600; letter-spacing:.02em; margin:0;
+              font-family:var(--mono) }
+.actlede { font-family:var(--serif); font-size:19px; color:var(--mute); margin:6px 0 34px;
+           max-width:62ch; line-height:1.55 }
 
-.inrow { display:flex; align-items:baseline; justify-content:space-between; gap:14px;
-         margin:26px 0 7px; flex-wrap:wrap }
-.inrow > span { font-size:13px; letter-spacing:.04em; color:var(--graphite) }
-.egs { display:flex; gap:16px; flex-wrap:wrap }
-.eg { font-family:var(--serif); font-style:italic; font-size:14px; background:none; border:0;
-      padding:0; color:var(--ink); cursor:pointer; text-decoration:underline;
-      text-decoration-thickness:1px; text-underline-offset:3px }
-.eg:hover { color:var(--vermilion) }
-textarea { width:100%; min-height:132px; padding:13px 14px; resize:vertical;
-           border:1px solid var(--hairline); border-radius:2px; background:transparent;
-           color:var(--ink); font-family:var(--mono); font-size:14px; line-height:1.55 }
-textarea::placeholder { color:var(--graphite); opacity:.75 }
-.actions { display:flex; gap:10px; align-items:center; margin-top:10px }
-button.go { background:var(--ink); color:var(--paper); border:0; border-radius:2px;
-            padding:10px 22px; font-family:var(--mono); font-size:13px; font-weight:500;
-            letter-spacing:.06em; text-transform:uppercase; cursor:pointer;
-            display:inline-flex; align-items:center; gap:9px }
-button.go:disabled { opacity:.4; cursor:default }
-button.quiet { background:none; border:0; color:var(--graphite); cursor:pointer;
-               font-family:var(--mono); font-size:13px; padding:10px 4px;
-               text-decoration:underline; text-underline-offset:3px }
-button.quiet:hover { color:var(--ink) }
-.count { margin-left:auto; font-size:12px; color:var(--graphite); font-variant-numeric:tabular-nums }
-.count.over { color:var(--vermilion) }
+/* provenance of the instance that answers — kept, and moved next to the instrument it
+   describes rather than under the masthead, where it was the first thing a visitor read. */
+.strip { display:flex; flex-wrap:wrap; gap:10px 34px; padding:14px 0;
+         border-top:1px solid var(--hair); border-bottom:1px solid var(--hair);
+         margin-bottom:18px }
+.strip div { display:flex; flex-direction:column; gap:3px }
+.strip .k { font-size:12px; letter-spacing:.08em; color:var(--mute); text-transform:uppercase }
+.strip .v { font-size:15px; color:var(--ink); font-variant-numeric:tabular-nums }
+.stripnote { font-family:var(--serif); font-style:italic; font-size:15px; color:var(--mute);
+             max-width:62ch; margin:0 0 30px }
+
+.chips { display:flex; flex-wrap:wrap; gap:18px; margin-bottom:14px; align-items:baseline }
+.chips .lab { font-size:13px; color:var(--mute) }
+.chip { font-family:var(--serif); font-style:italic; font-size:17px; background:none;
+        border:0; border-bottom:1px solid var(--rule); color:var(--ink); cursor:pointer;
+        padding:2px 0 }
+.chip:hover, .chip:focus-visible { border-bottom-color:var(--brass); color:var(--brass) }
+
+textarea { width:100%; min-height:108px; resize:vertical; background:var(--sunk);
+           color:var(--ink); border:1px solid var(--rule); border-radius:2px;
+           font-family:var(--mono); font-size:16px; line-height:1.55; padding:16px }
+textarea::placeholder { color:var(--mute) }
+.controls { display:flex; align-items:center; gap:20px; margin:16px 0 34px; flex-wrap:wrap }
+.btn { font-family:var(--mono); font-size:14px; letter-spacing:.1em; background:var(--ink);
+       color:var(--page); border:0; border-radius:2px; padding:12px 24px; cursor:pointer;
+       display:inline-flex; align-items:center; gap:10px; text-transform:uppercase }
+.btn:disabled { opacity:.45; cursor:default }
+.linkbtn { background:none; border:0; color:var(--mute); font-family:var(--mono);
+           font-size:14px; cursor:pointer; text-decoration:underline;
+           text-underline-offset:3px; padding:4px 0 }
+.linkbtn:hover { color:var(--ink) }
+.count { margin-left:auto; font-size:13px; color:var(--mute);
+         font-variant-numeric:tabular-nums }
+.count.over { color:var(--verm) }
 .spin { width:12px; height:12px; border:2px solid currentColor; border-right-color:transparent;
         border-radius:50%; animation:spin .7s linear infinite }
 @keyframes spin { to { transform:rotate(360deg) } }
 
-.plate { background:var(--plate); color:var(--plate-ink); border-radius:3px;
-         border:1px solid var(--plate-line);
-         padding:clamp(18px,3.6vw,26px); margin-top:26px }
-.plate .verdict { display:flex; align-items:flex-start; justify-content:space-between;
-                  gap:16px; flex-wrap:wrap }
-/* WAS clamp(1.85rem, 6vw, 3.3rem), which ties the hero to the VIEWPORT rather than to the
-   880px container: below an 880px viewport it shrank, and in a narrow pane it sat on its
-   1.85rem floor — a small word in a corner, the opposite of the intent. The floor is now
-   large enough to dominate on a phone and the slope is steeper. */
-.plate h2 { font-size:clamp(2.4rem,8.5vw,4rem); font-weight:500; letter-spacing:-.04em;
-            margin:0; line-height:1 }
-.state { font-size:13px; font-weight:500; letter-spacing:.12em; text-transform:uppercase;
-         white-space:nowrap; padding-top:10px }
-.state.doubt { color:var(--plate-vermilion) }
-.state.clear { color:var(--plate-pine) }
-.plate svg { display:block; width:100%; height:auto; margin-top:14px; overflow:visible }
-.plate .read { font-family:var(--serif); font-size:14.5px; line-height:1.55; margin-top:12px;
-               opacity:.82 }
-.plate .meaning { border-left:2px solid var(--plate-vermilion); padding-left:13px;
-                  opacity:1; margin-top:14px; font-size:13.5px }
+/* ---------------- the plate ---------------- */
+.plate { background:var(--plate); color:var(--plate-ink); border:1px solid var(--plate-line);
+         border-radius:3px; padding:clamp(20px,3.4vw,30px) clamp(18px,3.6vw,32px) 24px }
+.plate .top { display:flex; align-items:flex-start; justify-content:space-between; gap:24px;
+              flex-wrap:wrap }
+.verdict { font-family:var(--mono); font-weight:500; font-size:clamp(2.2rem,6.4vw,4.2rem);
+           line-height:1; letter-spacing:-.02em; margin:0 }
+.state { font-size:13px; letter-spacing:.12em; white-space:nowrap; padding-top:10px;
+         text-transform:uppercase }
+.state.ok { color:var(--plate-pine) }
+.state.flag { color:var(--plate-verm) }
+.state.idle { color:var(--plate-mute) }
+.plate svg { display:block; width:100%; height:auto; margin-top:22px; overflow:visible }
+.readout { font-family:var(--serif); font-size:18px; color:var(--plate-ink); margin:18px 0 0;
+           max-width:62ch; line-height:1.6 }
+.plate .note { font-family:var(--serif); font-size:16px; color:var(--plate-ink);
+               border-left:2px solid var(--plate-verm); padding-left:14px; margin:16px 0 0;
+               max-width:62ch; line-height:1.6 }
 .pl-grid { stroke:var(--plate-line); stroke-width:1 }
-.pl-tick { fill:var(--plate-line); font-size:9px; font-family:var(--mono) }
-.pl-tick.lit { fill:var(--plate-ink); opacity:.5 }
-/* The curve and its fill ARE the verdict, so they carry weight. The fill was rendering at
-   0.2 opacity, which on a near-black plate was indistinguishable from the plate itself —
-   the pine/vermilion signal that the whole design rests on was invisible. */
+.pl-tick { fill:var(--plate-mute); font-size:11px; font-family:var(--mono) }
 .pl-curve { fill:none; stroke:var(--plate-ink); stroke-width:2.6; stroke-linejoin:round;
             stroke-linecap:round }
 .pl-area { stroke:none; opacity:.5 }
 .pl-dot { fill:var(--plate-ink) }
-.pl-lab { fill:var(--plate-ink); font-size:10.5px; font-family:var(--mono); opacity:.85 }
+.pl-lab { fill:var(--plate-ink); font-size:12px; font-family:var(--mono); opacity:.9 }
 
-.ranks { margin-top:22px }
-.rk { display:grid; grid-template-columns:28px 1fr auto; gap:12px; align-items:baseline;
-      padding:9px 0; border-bottom:1px solid var(--hairline); font-size:14px }
-.rk .n { color:var(--graphite); font-size:12px; font-variant-numeric:tabular-nums }
-.rk .p { font-variant-numeric:tabular-nums }
-.rk.dim .l, .rk.dim .p { color:var(--graphite) }
-.disclose { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:11px 0 }
+/* ---------------- ranked rows + register ---------------- */
+.ranked { margin-top:30px }
+.row { display:grid; grid-template-columns:32px 1fr auto; gap:16px; align-items:baseline;
+       padding:13px 0; border-bottom:1px solid var(--hair) }
+.row .r { color:var(--mute); font-size:14px; font-variant-numeric:tabular-nums }
+.row .n { font-size:16px }
+.row .p { font-size:16px; font-variant-numeric:tabular-nums }
+.row.dim .n, .row.dim .p { color:var(--mute) }
+.disclose { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:14px 0 }
 button.tog { background:none; border:0; padding:0; color:var(--ink); cursor:pointer;
-             font-family:var(--mono); font-size:13px; letter-spacing:.03em;
-             display:inline-flex; align-items:center; gap:7px }
-button.tog .caret { display:inline-block; transition:transform .18s ease-out }
+             font-family:var(--mono); font-size:14px; letter-spacing:.03em;
+             display:inline-flex; align-items:center; gap:8px }
+button.tog:hover { color:var(--brass) }
+button.tog .caret { display:inline-block; transition:transform .18s ease-out;
+                    color:var(--brass) }
 button.tog[aria-expanded="true"] .caret { transform:rotate(90deg) }
-.filter { flex:1; min-width:140px; max-width:230px; padding:6px 9px; font-family:var(--mono);
-          font-size:12.5px; border:1px solid var(--hairline); border-radius:2px;
-          background:transparent; color:var(--ink) }
+.filter { flex:1; min-width:150px; max-width:240px; padding:8px 10px; font-family:var(--mono);
+          font-size:14px; border:1px solid var(--rule); border-radius:2px;
+          background:var(--sunk); color:var(--ink) }
 .panel-body { display:grid; grid-template-rows:0fr; transition:grid-template-rows .18s ease-out }
 .panel-body.open { grid-template-rows:1fr }
 .panel-body > div { overflow:hidden; min-height:0 }
-.all { max-height:340px; overflow-y:auto; margin-bottom:6px }
+.all { max-height:360px; overflow-y:auto; margin-bottom:6px }
+.reg { margin-top:26px }
+.reg .row2 { display:grid; grid-template-columns:140px 160px 1fr; gap:16px; padding:12px 0;
+             border-bottom:1px solid var(--hair); align-items:baseline }
+.reg .k { font-size:13px; color:var(--mute); letter-spacing:.06em; text-transform:uppercase }
+.reg .v { font-size:16px; font-variant-numeric:tabular-nums }
+.reg .c { font-family:var(--serif); font-size:16px; color:var(--mute); line-height:1.5 }
 
-.facts { margin:6px 0 0 }
-.fx { display:grid; grid-template-columns:minmax(92px,124px) minmax(88px,auto) 1fr; gap:14px;
-      padding:8px 0; border-bottom:1px solid var(--hairline); font-size:13.5px;
-      align-items:baseline }
-.fx dt { color:var(--graphite); font-size:12px; letter-spacing:.03em }
-.fx dd { margin:0; font-variant-numeric:tabular-nums; color:var(--ink); font-size:14.5px }
-.fx .said { font-family:var(--serif); font-size:13.5px; color:var(--graphite); font-style:italic;
-            font-variant-numeric:normal }
-
-.sec { margin-top:44px; padding-top:24px; border-top:1px solid var(--rule) }
-.sec h3 { font-size:1.28rem; font-weight:600; margin:0 0 5px; letter-spacing:-.015em;
-          display:flex; align-items:baseline; gap:12px }
-.sec h3 .num { color:var(--graphite); font-size:.66em; font-weight:400; letter-spacing:.06em }
-.sec .lede { font-family:var(--serif); font-size:14.5px; color:var(--graphite); line-height:1.6;
-             margin-bottom:14px }
-.note { font-family:var(--serif); font-size:13px; color:var(--graphite); line-height:1.6;
-        margin-top:10px }
-.note b { color:var(--ink); font-weight:400 }
-.slider { display:flex; align-items:center; gap:13px; margin:4px 0 14px; flex-wrap:wrap }
-.slider input[type=range] { flex:1; min-width:170px; accent-color:var(--ink) }
-.slider .vol { font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap;
-               min-width:158px }
-.cmp { display:grid; grid-template-columns:1fr 1fr; gap:12px; max-width:440px }
-.cmp .k { font-size:12px; color:var(--graphite); letter-spacing:.03em }
-.cmp .v { font-size:clamp(1.1rem,3.4vw,1.45rem); font-variant-numeric:tabular-nums;
-          letter-spacing:-.02em }
-.bars { margin-top:10px }
-.br { display:grid; grid-template-columns:52px 1fr auto; gap:12px; align-items:center;
-      padding:7px 0; font-size:12.5px }
-.br .k { color:var(--graphite); letter-spacing:.05em; text-transform:uppercase;
-         font-size:11px }
-.br .t { height:12px; background:var(--hairline); border-radius:2px; position:relative }
-.br .f { height:100%; background:var(--pine); display:block; border-radius:2px }
-/* THE COLLAPSE HAS TO REGISTER. 0.000166 is 0.0166% of the track: a bar that width is a
-   hairline nobody sees, which under-sells the most alarming number in the project. The
-   near-zero case gets a vermilion stub at the origin plus a hatched remainder, so the
-   emptiness is DRAWN rather than merely absent, and the figure itself carries the weight. */
-.br .f.bad { background:var(--vermilion); min-width:4px }
-.br .t.empty { background:repeating-linear-gradient(135deg, transparent 0 5px,
-               var(--hairline) 5px 6px) }
-.br .v { text-align:right; font-variant-numeric:tabular-nums; color:var(--ink);
-         font-size:13.5px; white-space:nowrap }
-.br .v.bad { color:var(--vermilion); font-weight:600; font-size:1.15rem;
-             letter-spacing:-.02em }
-.br .v .chance { display:block; font-size:10.5px; font-weight:400; letter-spacing:.06em;
-                 text-transform:uppercase; color:var(--vermilion); opacity:.85 }
-.mx { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:4px }
-.mx th { text-align:left; font-weight:500; color:var(--graphite); font-size:11px;
-         letter-spacing:.04em; padding:7px 10px 7px 0; border-bottom:1px solid var(--hairline) }
-.mx td { padding:9px 10px 9px 0; border-bottom:1px solid var(--hairline);
+/* ---------------- findings ---------------- */
+.big { font-family:var(--mono); font-weight:500; font-size:clamp(2.8rem,9vw,5.4rem);
+       line-height:.92; letter-spacing:-.03em; margin:18px 0 6px;
+       font-variant-numeric:tabular-nums }
+.biglab { font-size:14px; color:var(--mute); margin-bottom:26px; line-height:1.5 }
+.duo { display:grid; grid-template-columns:1fr 1fr; gap:48px; margin:26px 0 0 }
+.duo .side .big { font-size:clamp(2.2rem,6.4vw,4.2rem); margin-top:0 }
+.track { height:16px; background:var(--sunk); border:1px solid var(--rule); position:relative;
+         overflow:hidden; margin-top:12px }
+.bar { height:100%; background:var(--pine); width:0; transition:width 1.1s cubic-bezier(.2,.8,.2,1) }
+.bar.bad { background:var(--verm) }
+/* 0.000166 is 0.0166% of the track: a bar that width is a hairline nobody sees, which
+   under-sells the most alarming number here. The emptiness is DRAWN, and the bar keeps a
+   visible stub at the origin, so the figure carries the weight rather than the geometry. */
+.hatch { position:absolute; inset:0;
+         background:repeating-linear-gradient(45deg, transparent 0 6px, var(--rule) 6px 7px) }
+.bar.bad { min-width:3px; position:relative }
+.slider { width:100%; margin:22px 0 10px; accent-color:var(--brass) }
+.costrow { display:flex; gap:clamp(28px,6vw,56px); margin-top:6px; flex-wrap:wrap }
+.costrow .k { font-size:13px; color:var(--mute); letter-spacing:.06em; text-transform:uppercase }
+.costrow .v { font-size:26px; font-variant-numeric:tabular-nums; margin-top:6px }
+.fine { font-family:var(--serif); font-size:15px; color:var(--mute); max-width:62ch;
+        margin:18px 0 0; line-height:1.6 }
+.fine b { color:var(--ink); font-weight:400 }
+.mx { width:100%; border-collapse:collapse; font-size:14px; margin-top:4px }
+.mx th { text-align:left; font-weight:500; color:var(--mute); font-size:12px;
+         letter-spacing:.06em; padding:8px 12px 8px 0; border-bottom:1px solid var(--hair);
+         text-transform:uppercase }
+.mx td { padding:11px 12px 11px 0; border-bottom:1px solid var(--hair);
          font-variant-numeric:tabular-nums; vertical-align:top }
-.mx td.bad { color:var(--vermilion) }
-.mx .m { font-size:11px; color:var(--graphite); font-variant-numeric:normal }
-.mx .hostnote { font-family:var(--serif); font-style:italic; font-size:12px;
-                color:var(--graphite); font-variant-numeric:normal; margin-top:3px }
-.stats { display:flex; gap:30px; flex-wrap:wrap; margin:6px 0 4px }
-.stats .v { font-size:1.2rem; font-variant-numeric:tabular-nums; letter-spacing:-.02em }
-.stats .k { font-size:11px; color:var(--graphite); letter-spacing:.04em }
+.mx td.bad { color:var(--verm) }
+.mx .m { font-size:13px; color:var(--mute); font-variant-numeric:normal }
+.mx .hostnote { font-family:var(--serif); font-style:italic; font-size:14px; color:var(--mute);
+                font-variant-numeric:normal; margin-top:4px; line-height:1.45 }
 
-.waking, .err { margin-top:26px; border-left:3px solid var(--vermilion); padding:4px 0 4px 16px }
-.waking h3 { margin:0 0 5px; font-size:14px; font-weight:500 }
-.waking p, .err { font-family:var(--serif); font-size:14px; color:var(--graphite); line-height:1.6 }
+.waking, .err { margin-top:26px; border-left:3px solid var(--verm); padding:4px 0 4px 16px }
+.waking h3 { margin:0 0 6px; font-size:15px; font-weight:500; font-family:var(--mono) }
+.waking p, .err { font-family:var(--serif); font-size:17px; color:var(--mute); line-height:1.6 }
 .err b { color:var(--ink) }
-.waking .track { height:2px; background:var(--hairline); margin-top:11px; overflow:hidden }
-.waking .fill { height:100%; background:var(--vermilion); width:0; transition:width .4s linear }
+.waking .wtrack { height:2px; background:var(--hair); margin-top:12px; overflow:hidden }
+.waking .wfill { height:100%; background:var(--verm); width:0; transition:width .4s linear }
 
-footer { margin-top:46px; padding-top:18px; border-top:1px solid var(--rule);
-         font-size:12px; color:var(--graphite); line-height:1.85 }
-footer .dis { font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink) }
-@media (max-width:560px) {
-  .fx { grid-template-columns:1fr auto }
-  .fx .said { grid-column:1/-1 }
-  .cmp { grid-template-columns:1fr }
+footer { padding:clamp(40px,7vw,64px) 0 80px; border-top:1px solid var(--rule); margin-top:40px }
+footer p { font-size:15px; color:var(--mute); margin:0 0 12px }
+footer .dis { font-family:var(--serif); font-style:italic; font-size:17px; color:var(--ink) }
+footer b { color:var(--ink); font-weight:400 }
+footer nav { font-family:var(--mono); font-size:14px; display:flex; flex-wrap:wrap; gap:8px 22px }
+
+@media (max-width:760px) {
+  .face { grid-template-columns:1fr; gap:28px }
+  .face .col.right { text-align:left }
+  .vs { padding:0 }
+  .duo { grid-template-columns:1fr; gap:34px }
+  .reg .row2 { grid-template-columns:120px 1fr }
+  .reg .c { grid-column:1 / -1 }
 }
 @media (prefers-reduced-motion:reduce) {
-  *, *::before, *::after { animation-duration:.001ms !important; transition-duration:.001ms !important }
+  *, *::before, *::after { transition:none !important; animation:none !important }
 }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Reasonable Doubt</h1>
-  <p class="tag">A contract clause classifier that says when it does not know.</p>
-  <div class="prov" id="prov"><span>checking&hellip;</span></div>
 
-  <div class="inrow">
-    <span>Paste a clause</span>
-    <div class="egs">
-      <button class="eg" data-k="gov">governing law</button>
-      <button class="eg" data-k="amb">ambiguous</button>
-      <button class="eg" data-k="ood">a cake recipe</button>
-    </div>
-  </div>
-  <textarea id="t" aria-label="Contract clause" placeholder="&hellip;or choose one of the three above."></textarea>
-  <div class="actions">
-    <button class="go" id="go">Classify</button>
-    <button class="quiet" id="clear" hidden>Try another</button>
-    <span class="count" id="c">0 / 20,000</span>
-  </div>
+  <header class="mast">
+    <h1>Reasonable Doubt</h1>
+    <p class="sub">A clause classifier, and an account of where it fails.</p>
+  </header>
 
-  <div id="out"></div>
+  <hr class="rule">
 
-  <section class="sec">
-    <h3><span class="num">&sect;1</span>Cost at volume</h3>
-    <p class="lede" id="s1lede">&nbsp;</p>
-    <div class="slider">
-      <input type="range" id="vol" min="0" max="1000" value="667" step="1" aria-label="Clauses per month">
-      <span class="vol" id="volv">100,000 clauses / month</span>
+  <!-- ===================== THE PROBLEM ===================== -->
+  <section class="problem">
+    <div class="kicker" id="k-kick">the same 3,000 contract clauses</div>
+    <div class="face">
+      <div class="col">
+        <div class="who" id="k-who-a">a frontier model, zero-shot</div>
+        <div class="num a" id="k-cost-a">&mdash;</div>
+        <div class="unit" id="k-f1-a">&mdash;</div>
+      </div>
+      <div class="vs">against</div>
+      <div class="col right">
+        <div class="who">an encoder fine-tuned for the job, on a CPU</div>
+        <div class="num b" id="k-cost-b">&mdash;</div>
+        <div class="unit" id="k-f1-b">&mdash;</div>
+      </div>
     </div>
-    <div class="cmp">
-      <div><div class="k">served here</div><div class="v" id="c-here">&mdash;</div></div>
-      <div><div class="k" id="c-apik">API</div><div class="v" id="c-api">&mdash;</div></div>
+    <div class="line measure">
+      <p>Reaching for a frontier model is the reasonable default, because it is the thing
+        that works on everything. On one narrow, high-volume task it is the expensive way
+        to be <em>less</em> accurate.</p>
+      <p class="dim">That is the measurement, not the argument.
+        <span class="gain" id="k-gain">&nbsp;</span> Everything below is how it was
+        established &mdash; including the tier that turned out to be unnecessary, and the
+        case where the model is confidently wrong and says nothing.</p>
     </div>
-    <p class="note" id="s1note">&nbsp;</p>
   </section>
 
-  <section class="sec">
-    <h3><span class="num">&sect;2</span>Precision</h3>
-    <p class="lede" id="s2lede">&nbsp;</p>
-    <div class="bars" id="s2bars"></div>
+  <hr class="rule">
+
+  <!-- ===================== 01 TRY IT ===================== -->
+  <section class="act">
+    <div class="acthead"><span class="actnum">01</span><h2 class="acttitle">Try it</h2></div>
+    <p class="actlede">One clause in. A label, whether the model will stand behind it, and
+      the shape of its certainty across all 100 classes.</p>
+
+    <div class="strip" id="prov"><div><span class="k">status</span><span class="v">checking&hellip;</span></div></div>
+    <p class="stripnote" id="provnote">&nbsp;</p>
+
+    <div class="chips">
+      <span class="lab">Paste a clause, or try</span>
+      <button class="chip" data-k="gov">governing law</button>
+      <button class="chip" data-k="amb">an ambiguous one</button>
+      <button class="chip" data-k="ood">a cake recipe</button>
+      <button class="chip" data-k="pol">a privacy policy</button>
+    </div>
+
+    <textarea id="t" aria-label="Contract clause" placeholder="This Agreement shall be governed by&hellip;"></textarea>
+    <div class="controls">
+      <button class="btn" id="go">Classify</button>
+      <button class="linkbtn" id="clear" hidden>Try another</button>
+      <span class="count" id="c">0 / 20,000</span>
+    </div>
+
+    <div class="plate">
+      <div class="top">
+        <h3 class="verdict" id="verdict">&mdash;</h3>
+        <span class="state idle" id="state">idle</span>
+      </div>
+      <svg id="chart" role="img" aria-label="Probability by rank across all 100 classes."></svg>
+      <p class="readout" id="readout">No clause loaded. The instrument is on and waiting.</p>
+      <p class="note" id="pnote" hidden></p>
+    </div>
+
+    <div id="after"></div>
+  </section>
+
+  <!-- ===================== 02 COST ===================== -->
+  <section class="finding">
+    <div class="acthead"><span class="actnum">02</span><h2 class="acttitle">Cost</h2></div>
+    <p class="actlede" id="s2lede">&nbsp;</p>
+    <div class="big" id="mult">&mdash;</div>
+    <div class="biglab">cheaper per clause</div>
+    <input class="slider" type="range" id="vol" min="0" max="1000" value="667" step="1"
+           aria-label="Clauses per month">
+    <div class="costrow">
+      <div><div class="k">served here</div><div class="v" id="c-here">&mdash;</div></div>
+      <div><div class="k" id="c-apik">the API</div><div class="v" id="c-api">&mdash;</div></div>
+      <div><div class="k">per month</div><div class="v" id="c-vol">&mdash;</div></div>
+    </div>
+    <p class="fine" id="s2fine">&nbsp;</p>
+  </section>
+
+  <!-- ===================== 03 PRECISION ===================== -->
+  <section class="finding">
+    <div class="acthead"><span class="actnum">03</span><h2 class="acttitle">Precision</h2></div>
+    <p class="actlede">The same weights. The same 3,000 rows. One CPU instruction apart.</p>
+    <div class="duo">
+      <div class="side">
+        <div class="big" id="b-fp32v" style="color:var(--pine)">&mdash;</div>
+        <div class="biglab">FP32 &mdash; macro-F1</div>
+        <div class="track"><div class="bar" id="b1"></div></div>
+      </div>
+      <div class="side">
+        <div class="big" id="b-int8v" style="color:var(--verm)">&mdash;</div>
+        <div class="biglab">INT8 &mdash; chance, on 100 classes</div>
+        <div class="track"><div class="hatch"></div><div class="bar bad" id="b2"></div></div>
+      </div>
+    </div>
+    <p class="fine" id="s3fine">&nbsp;</p>
     <div class="disclose">
       <button class="tog" id="mxtog" aria-expanded="false" aria-controls="mxbody">
-        <span class="caret">&rsaquo;</span><span>every host measured</span></button>
+        <span class="caret" aria-hidden="true">&rsaquo;</span><span>every host measured</span></button>
     </div>
     <div class="panel-body" id="mxbody"><div><div id="mx"></div></div></div>
-    <p class="note">FP32 is served because it is the only precision that has not collapsed on
-      some host. The 200-row check re-runs on <b>every instance</b>: the CPU varies between
-      instances of one revision, so it is a variable, not a constant.</p>
   </section>
 
-  <section class="sec">
-    <h3><span class="num">&sect;3</span>Escalation</h3>
-    <div class="stats" id="s3stats"></div>
-    <p class="note" id="s3note">&nbsp;</p>
+  <!-- ===================== 04 ESCALATION ===================== -->
+  <section class="finding">
+    <div class="acthead"><span class="actnum">04</span><h2 class="acttitle">Escalation</h2></div>
+    <p class="actlede">The tier everyone assumes you need.</p>
+    <div class="big" id="e-delta">&mdash;</div>
+    <div class="biglab" id="e-lab">&nbsp;</div>
+    <p class="fine" id="s4fine">&nbsp;</p>
+  </section>
+
+  <!-- ===================== 05 WHERE IT FAILS ===================== -->
+  <section class="finding">
+    <div class="acthead"><span class="actnum">05</span><h2 class="acttitle">Where it fails</h2></div>
+    <p class="actlede">The flag catches text that looks different. It does not catch text
+      that looks like a contract and is not one.</p>
+    <div class="duo">
+      <div class="side">
+        <div class="big" id="o-worst" style="color:var(--verm)">&mdash;</div>
+        <div class="biglab" id="o-worstlab">&nbsp;</div>
+      </div>
+      <div class="side">
+        <div class="big" id="o-ctrl" style="color:var(--pine)">&mdash;</div>
+        <div class="biglab" id="o-ctrllab">&nbsp;</div>
+      </div>
+    </div>
+    <p class="fine" id="s5fine">&nbsp;</p>
+    <p class="fine" id="s5fine2">&nbsp;</p>
   </section>
 
   <footer>
     <p class="dis">Research artefact &mdash; not legal advice.</p>
-    <p>DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32. macro-F1 <b id="f-mf">&mdash;</b>
-      on a 3,000-row test sample, single seed. Scores are softmax outputs, not calibrated
-      probabilities; routing uses the top-two margin.</p>
-    <p><a href="https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar">Model card</a>
-      &nbsp;&nbsp;<a href="https://github.com/sidharthjatt/reasonable-doubt">Source</a>
-      &nbsp;&nbsp;<a href="/health">/health</a>
-      &nbsp;&nbsp;<a href="/facts">/facts</a>
-      &nbsp;&nbsp;<a href="/docs">API</a></p>
+    <p>DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32. macro-F1
+      <b id="f-mf">&mdash;</b> on a 3,000-row test sample, single seed, chronological split
+      &mdash; trained on 2016&ndash;2017 filings and tested on 2019. Scores are softmax
+      outputs, not calibrated probabilities; routing uses the top-two margin.</p>
+    <nav>
+      <a href="https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar">Model card</a>
+      <a href="https://github.com/sidharthjatt/reasonable-doubt">Source</a>
+      <a href="/health">/health</a>
+      <a href="/facts">/facts</a>
+      <a href="/docs">API</a>
+    </nav>
   </footer>
 </div>
 
@@ -309,10 +428,13 @@ const MAX = 20000;
 const EXAMPLES = {
   gov: "This Agreement shall be governed by and construed in accordance with the laws of the State of New York, without regard to its conflict of laws principles.",
   amb: "This Sixth Amendment shall not be valid and binding on Landlord and Tenant unless and until it has been completely executed by and delivered to both parties.",
-  ood: "Please preheat the oven to 180 degrees Celsius and bake the cake for 35 minutes until golden brown."
+  ood: "Please preheat the oven to 180 degrees Celsius and bake the cake for 35 minutes until golden brown.",
+  pol: "Access to production data is restricted to named individuals and reviewed on a quarterly basis. All access is logged and retained for eighteen months."
 };
 const $ = id => document.getElementById(id);
-const t = $('t'), go = $('go'), out = $('out'), c = $('c'), prov = $('prov'), clearBtn = $('clear');
+const t = $('t'), go = $('go'), c = $('c'), clearBtn = $('clear'), after = $('after');
+const chart = $('chart'), verdict = $('verdict'), state = $('state');
+const readout = $('readout'), pnote = $('pnote');
 const esc = s => String(s).replace(/[&<>"']/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const nf = n => n.toLocaleString('en-US');
@@ -325,204 +447,87 @@ const money = function (v) {
   return '$0';
 };
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const SERVED_FALLBACK = 8.788115222574201e-7;
-
+/* The fallback meaning of the flag, kept as ONE unbroken literal on purpose: it must be
+   present in the served HTML itself, not assembled at runtime, so the page can never show
+   a `needs review` badge whose meaning is missing. tests/test_serve.py asserts this string
+   is in the response body. */
+const FLAG_MEANING = 'low confidence — human review recommended';
 let FACTS = null, LAST = null, busy = false, wokeUp = false;
 
-function count() {
-  const n = t.value.length;
-  c.textContent = nf(n) + ' / ' + nf(MAX);
-  c.classList.toggle('over', n > MAX);
-  go.disabled = n === 0 || n > MAX || busy;
-}
-t.addEventListener('input', count);
-document.querySelectorAll('.eg').forEach(b => b.addEventListener('click', () => {
-  t.value = EXAMPLES[b.dataset.k];
-  showResult(''); count(); t.focus();
-}));
-
-function showResult(html) {
-  out.innerHTML = html;
-  clearBtn.hidden = !html;
-  if (!html) LAST = null;
-}
-clearBtn.addEventListener('click', () => {
-  t.value = ''; showResult(''); count(); volume(); t.focus(); probeProvenance();
-});
-
-function renderProvenance(p, mode) {
-  if (!p) { prov.innerHTML = '<span>service unreachable</span>'; return; }
-  const cy = p.canary || {};
-  const on = Object.entries(p.cpu_isa_flags || {}).filter(([, v]) => v).map(([k]) => k);
-  const cell = (k, v) => '<span>' + esc(k) + '<b>' + esc(v) + '</b></span>';
-  const bits = [];
-  bits.push(cell('canary', (cy.n_correct !== undefined && cy.n_correct !== null)
-    ? cy.n_correct + '/' + cy.n : (cy.status || '—')));
-  if (p.precision) bits.push(cell('precision', String(p.precision).toUpperCase()));
-  bits.push(cell('cpu', on.length ? on.join(' ') : (p.machine || '—')));
-  if (p.onnxruntime_version) bits.push(cell('onnxruntime', p.onnxruntime_version));
-  if (p.region) bits.push(cell('region', p.region));
-  if (p.process) bits.push(cell('instance', p.process.slice(0, 6)));
-  bits.push('<span class="src">' + (mode === 'answer'
-    ? 'Provenance of the instance that produced the result below.'
-    : 'From a health probe. Up to two instances run, and the one that answers your request may be a different process.') + '</span>');
-  prov.innerHTML = bits.join('');
-}
-async function probeProvenance() {
-  try { const h = await (await fetch('/health')).json();
-        renderProvenance(h.served_by, 'probe'); return h; }
-  catch (e) { renderProvenance(null); }
-}
-
-let warmStarted = false;
-async function warmInBackground() {
-  if (warmStarted) return; warmStarted = true;
-  for (let i = 0; i < 40; i++) {
-    let h;
-    try { h = await (await fetch('/health?wait_for_canary=20')).json(); }
-    catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; }
-    const st = (h.canary || {}).status;
-    if (st === 'passed' || st === 'skipped') { renderProvenance(h.served_by, 'probe'); return; }
-    if (st === 'failed') return;
-  }
-}
-
-async function loadFacts() {
-  try { FACTS = await (await fetch('/facts')).json(); } catch (e) { return; }
-  const f = FACTS;
-  $('f-mf').textContent = f.tier0.macro_f1.toFixed(4);
-  $('s1lede').textContent = 'What the served encoder costs against ' + f.api_comparator.model
-    + ', at any volume you pick.';
-  $('s1note').innerHTML = 'The served figure is per request, amortising the device and using an '
-    + '<b>assumed</b> electricity tariff. The ' + esc(f.api_comparator.model) + ' figure is the '
-    + '<b>measured mean</b> over the 3,000-clause batch this project actually ran, not an '
-    + 'estimate for any particular clause: a per-clause Claude cost needs that model&rsquo;s own '
-    + 'token count, which is an API call this service does not make.';
-  $('c-apik').textContent = f.api_comparator.model;
-  volume();
-
-  const x = f.int8_collapse.rows.find(r => r.vnni === false) || f.int8_collapse.rows[0];
-  $('s2lede').textContent = f.int8_collapse.caption;
-  $('s2bars').innerHTML = [['fp32', x.fp32, ''], ['int8', x.int8, 'bad']].map(function (r) {
-    const k = r[0], v = r[1], cls = r[2];
-    const collapsed = v < 0.01;
-    return '<div class="br"><span class="k">' + k + '</span>'
-      + '<span class="t' + (collapsed ? ' empty' : '') + '"><span class="f ' + cls
-      + '" style="width:' + Math.max(0.3, v * 100) + '%"></span></span>'
-      + '<span class="v ' + cls + '">' + (collapsed ? v.toFixed(6) : v.toFixed(4))
-      + (collapsed ? '<span class="chance">chance on 100 classes</span>' : '')
-      + '</span></div>';
-  }).join('') + '<p class="note" style="margin-top:10px">' + esc(x.isa) + ', '
-    + (x.vnni === false ? 'no AVX-512 VNNI' : 'AVX-512 not applicable')
-    + '. Same weights, same 3,000 rows.</p>';
-
-  $('mx').innerHTML = '<table class="mx"><thead><tr><th>host</th><th>ISA</th><th>metric</th>'
-    + '<th>FP32</th><th>INT8</th></tr></thead><tbody>'
-    + f.platforms.rows.map(function (r) {
-        const isa = Object.entries(r.isa).filter(function (e) { return e[1]; })
-          .map(function (e) { return e[0]; }).join(' ') || 'n/a';
-        const fmt = function (v) {
-          return (v === null || v === undefined) ? '—' : (v < 0.01 ? v.toFixed(6) : v.toFixed(4));
-        };
-        const bad = r.int8 !== null && r.int8 !== undefined && r.int8 < 0.5;
-        return '<tr><td>' + esc(r.host)
-          + (r.note ? '<div class="hostnote">' + esc(r.note) + '</div>' : '')
-          + '</td><td class="m">' + esc(isa) + '</td><td class="m">' + esc(r.metric)
-          + '</td><td>' + fmt(r.fp32) + '</td><td class="' + (bad ? 'bad' : '') + '">'
-          + fmt(r.int8) + '</td></tr>';
-      }).join('') + '</tbody></table>';
-
-  const e = f.escalation;
-  $('s3stats').innerHTML = [
-    [(e.delta >= 0 ? '+' : '') + e.delta.toFixed(6), 'macro-F1 change'],
-    ['[' + e.ci_low.toFixed(4) + ', ' + e.ci_high.toFixed(4) + ']', '95% CI'],
-    ['off', 'escalation']
-  ].map(function (r) {
-    return '<div><div class="v">' + esc(r[0]) + '</div><div class="k">' + esc(r[1]) + '</div></div>';
-  }).join('');
-  $('s3note').innerHTML = 'Routing ' + e.n_escalated + ' of ' + nf(e.n_rows)
-    + ' low-confidence rows to ' + esc(f.api_comparator.model) + ' moved accuracy by an amount '
-    + 'whose interval covers zero, so it is off. The router still runs: on the rows it flags '
-    + 'the encoder is right ' + (e.tier0_accuracy_on_escalated * 100).toFixed(0)
-    + '% of the time and ' + esc(f.api_comparator.model) + ' '
-    + (e.api_accuracy_on_escalated * 100).toFixed(0) + '%. n = 1 seed, in-sample for the '
-    + 'escalation rate.';
-}
-
-/* LOG scale: the range spans four orders of magnitude and a linear slider would spend
-   most of its travel above a million. */
-function sliderToVolume(pos) {
-  const lo = Math.log10(1000), hi = Math.log10(10000000);
-  return Math.round(Math.pow(10, lo + (pos / 1000) * (hi - lo)) / 100) * 100;
-}
-function volume() {
-  if (!FACTS) return;
-  const v = sliderToVolume(+$('vol').value);
-  const api = FACTS.api_comparator.usd_per_clause;
-  const here = (LAST && LAST.cost_comparison) ? LAST.cost_comparison.served_usd : SERVED_FALLBACK;
-  $('volv').textContent = nf(v) + ' clauses / month';
-  $('vol').setAttribute('aria-valuetext', nf(v) + ' clauses per month');
-  $('c-here').textContent = money(here * v);
-  $('c-api').textContent = money(api * v);
-}
-$('vol').addEventListener('input', volume);
-
-const PW = 660, PH = 232, PL = 40, PR = 12, PT = 16, PB = 26, FLOOR = 1e-6;
+/* ------------------------------------------------------------------ the chart
+   The REAL 100-class distribution off the response, ranked and drawn on a log axis,
+   never a decay curve fitted to the top 3: the long tail's actual shape is the evidence
+   for what "doubt" and "certainty" look like, and a synthetic tail would be decoration
+   standing where the measurement should be. */
+const PW = 900, PH = 290, PL = 46, PR = 14, PT = 16, PB = 30, FLOOR = 1e-6;
+chart.setAttribute('viewBox', '0 0 ' + PW + ' ' + PH);
 const lg = v => Math.log10(Math.max(v, FLOOR));
 const ppx = i => PL + (i / 99) * (PW - PL - PR);
 const ppy = v => PT + ((lg(v) - lg(1)) / (lg(FLOOR) - lg(1))) * (PH - PT - PB);
 const curveOf = p => p.map((v, i) => ppx(i).toFixed(1) + ',' + ppy(v).toFixed(1)).join(' ');
+function gridSvg() {
+  return [1, 1e-2, 1e-4, 1e-6].map(function (v) {
+    const y = ppy(v).toFixed(1);
+    return '<line class="pl-grid" x1="' + PL + '" y1="' + y + '" x2="' + (PW - PR)
+      + '" y2="' + y + '"/><text class="pl-tick" x="' + (PL - 8) + '" y="' + (ppy(v) + 4).toFixed(1)
+      + '" text-anchor="end">' + (v === 1 ? '1' : '1e' + Math.round(Math.log10(v))) + '</text>';
+  }).join('')
+  + '<text class="pl-tick" x="' + PL + '" y="' + (PH - 8) + '">rank 1</text>'
+  + '<text class="pl-tick" x="' + (PW - PR) + '" y="' + (PH - 8) + '" text-anchor="end">100</text>';
+}
 
-function plate(d) {
+function idlePlate() {
+  chart.innerHTML = gridSvg();
+  chart.setAttribute('aria-label', 'Empty probability axis. No clause has been classified yet.');
+  verdict.textContent = '—';
+  state.className = 'state idle'; state.textContent = 'idle';
+  readout.textContent = 'No clause loaded. The instrument is on and waiting.';
+  pnote.hidden = true; after.innerHTML = ''; clearBtn.hidden = true; LAST = null;
+}
+
+function drawPlate(d) {
   const p = (d.distribution || []).slice().sort((a, b) => b - a);
   const doubt = !!d.needs_review;
-  const hue = doubt ? 'var(--vermilion)' : 'var(--pine)';
-  const grid = [1, 1e-2, 1e-4, 1e-6].map(function (v) {
-    return '<line class="pl-grid" x1="' + PL + '" y1="' + ppy(v).toFixed(1) + '" x2="'
-      + (PW - PR) + '" y2="' + ppy(v).toFixed(1) + '"/><text class="pl-tick" x="' + (PL - 6)
-      + '" y="' + (ppy(v) + 3).toFixed(1) + '" text-anchor="end">'
-      + (v === 1 ? '1' : '1e' + Math.round(Math.log10(v))) + '</text>';
-  }).join('');
+  const hue = doubt ? 'var(--plate-verm)' : 'var(--plate-pine)';
   const pts = curveOf(p);
   const area = PL + ',' + (PH - PB) + ' ' + pts + ' ' + (PW - PR) + ',' + (PH - PB);
   const dots = p.slice(0, 3).map(function (v, i) {
-    return '<circle class="pl-dot" cx="' + ppx(i).toFixed(1) + '" cy="' + ppy(v).toFixed(1) + '" r="2.8"/>';
+    return '<circle class="pl-dot" cx="' + ppx(i).toFixed(1) + '" cy="' + ppy(v).toFixed(1)
+      + '" r="3"/>';
   }).join('');
   const key = p.slice(0, 3).map(function (v, i) {
     const l = (d.top_3 && d.top_3[i]) ? d.top_3[i].label : '';
-    return '<text class="pl-lab" x="' + (PW - PR) + '" y="' + (PT + 12 + i * 14)
+    return '<text class="pl-lab" x="' + (PW - PR) + '" y="' + (PT + 14 + i * 16)
       + '" text-anchor="end">' + (i + 1) + '  ' + esc(l) + '  ' + (v * 100).toFixed(1) + '%</text>';
   }).join('');
-  const reading = doubt
+  chart.innerHTML = gridSvg()
+    + '<polygon class="pl-area" id="pl-area" fill="' + hue + '" points="' + area + '"/>'
+    + '<polyline class="pl-curve" id="pl-curve" points="' + pts + '"/>' + dots + key;
+  chart.setAttribute('aria-label', 'All 100 class probabilities, ranked highest to lowest on '
+    + 'a logarithmic scale. ' + (doubt
+      ? 'The curve falls shallowly with a long tail, indicating probability spread across many classes.'
+      : 'The curve drops sharply after rank one, indicating a single dominant class.'));
+
+  verdict.textContent = d.label;
+  state.className = 'state ' + (doubt ? 'flag' : 'ok');
+  state.textContent = doubt ? 'needs review' : 'cleared';
+  readout.textContent = doubt
     ? 'Probability is spread across the label space. That shape is what doubt looks like.'
     : 'One class, orders of magnitude clear of the rest. That shape is what certainty looks like.';
-  // WHAT THE FLAG MEANS OPERATIONALLY. Server-supplied where available; the literal here is
-  // the fallback and ships with the page, so the meaning is never missing from the HTML.
-  const meaning = doubt
-    ? '<p class="read meaning">' + esc(d.needs_review_meaning
-        || 'low confidence — human review recommended')
+  // WHAT THE FLAG MEANS OPERATIONALLY. Server-supplied where available; the literal is the
+  // fallback and ships with the page, so the meaning is never missing from the HTML.
+  pnote.hidden = !doubt;
+  if (doubt) {
+    pnote.textContent = (d.needs_review_meaning || FLAG_MEANING)
       + '. The answer above still stands and is still returned; a person should look at it '
       + 'before anything acts on it. On rows like this the model is right about a third of '
-      + 'the time instead of the usual seven in eight.</p>'
-    : '';
-  const alt = doubt
-    ? 'The curve falls shallowly with a long tail, indicating probability spread across many classes.'
-    : 'The curve drops sharply after rank one, indicating a single dominant class.';
-  return '<div class="plate"><div class="verdict"><h2>' + esc(d.label) + '</h2>'
-    + '<div class="state ' + (doubt ? 'doubt' : 'clear') + '">'
-    + (doubt ? 'needs review' : 'cleared') + '</div></div>'
-    + '<svg viewBox="0 0 ' + PW + ' ' + PH + '" role="img" aria-label="All 100 class '
-    + 'probabilities, ranked highest to lowest on a logarithmic scale. ' + alt + '">'
-    + grid + '<polygon class="pl-area" id="pl-area" fill="' + hue + '" points="' + area + '"/>'
-    + '<polyline class="pl-curve" id="pl-curve" points="' + pts + '"/>' + dots + key
-    + '<text class="pl-tick lit" x="' + PL + '" y="' + (PH - 8) + '">rank 1</text>'
-    + '<text class="pl-tick lit" x="' + (PW - PR) + '" y="' + (PH - 8)
-    + '" text-anchor="end">100</text></svg>'
-    + '<p class="read">' + reading + '</p>' + meaning + '</div>';
+      + 'the time, against seven in eight overall.';
+  }
 }
 
-/* The ONE piece of motion: the curve morphs to the new shape when you classify, because
-   that is what changed. Same 100 points, so it interpolates directly in log space. */
+/* The ONE piece of motion here: the curve morphs to the new shape when you classify,
+   because that is the thing that changed. Same 100 points, so it interpolates in log
+   space directly. */
 function morphCurve(from, to) {
   if (reduced || !from || from.length !== to.length) return;
   const cu = $('pl-curve'), ar = $('pl-area');
@@ -541,17 +546,49 @@ function morphCurve(from, to) {
   requestAnimationFrame(step);
 }
 
-function ranks(d) {
+/* ------------------------------------------------------------------ rows below the plate */
+function ranksAndRegister(d, roundTripMs) {
   const top = d.top_3 || [];
-  return '<div class="ranks">' + top.map(function (x, i) {
-      return '<div class="rk"><span class="n">' + (i + 1) + '</span><span class="l">'
-        + esc(x.label) + '</span><span class="p">' + (x.score * 100).toFixed(1) + ' %</span></div>';
-    }).join('')
+  const rows = top.map(function (x, i) {
+    return '<div class="row"><span class="r">' + (i + 1) + '</span><span class="n">'
+      + esc(x.label) + '</span><span class="p">' + (x.score * 100).toFixed(1) + ' %</span></div>';
+  }).join('');
+  const thr = (d.router || {}).threshold, m = Number(d.margin);
+  const inf = d.timing_ms && d.timing_ms.tier0_inference;
+  const cc = d.cost_comparison;
+  const md = FACTS && FACTS.margin_distribution;
+  let pct = null;
+  if (md) { pct = 0; while (pct < 100 && md.percentiles[pct] < m) pct++; }
+  const extra = (inf !== undefined && inf !== null) ? roundTripMs - inf : 0;
+  const wall = roundTripMs >= 10000 ? (roundTripMs / 1000).toFixed(0) + ' s'
+                                    : Math.round(roundTripMs) + ' ms';
+  const reg = [];
+  reg.push(['margin', m.toFixed(4), thr === undefined ? '' :
+    (m < thr ? 'below the ' + thr.toFixed(4) + ' threshold, so it is flagged'
+             : 'above the ' + thr.toFixed(4) + ' threshold, so it is not')]);
+  if (pct !== null) reg.push(['percentile', (100 - pct) + ' %',
+    'of test clauses are answered more confidently than this one']);
+  if (inf !== undefined && inf !== null) reg.push(['inference',
+    (inf < 1 ? inf.toFixed(2) : Math.round(inf)) + ' ms',
+    extra > 250 ? wall + (wokeUp ? ' including container wake-up' : ' round trip')
+                : 'the model’s own work, server-side']);
+  if (cc) reg.push(['this request', usd(cc.served_usd, 8),
+    (cc.ratio ? nf(Math.round(cc.ratio)) : '—') + '× under '
+    + esc(cc.api_model || 'the API')]);
+
+  return '<div class="ranked">' + rows
     + '<div class="disclose"><button class="tog" id="alltog" aria-expanded="false" '
-    + 'aria-controls="allbody"><span class="caret">&rsaquo;</span><span>all 100 classes</span>'
-    + '</button><input class="filter" id="allf" type="search" placeholder="filter&hellip;" '
+    + 'aria-controls="allbody"><span class="caret" aria-hidden="true">&rsaquo;</span>'
+    + '<span>all 100 classes</span></button>'
+    + '<input class="filter" id="allf" type="search" placeholder="filter&hellip;" '
     + 'aria-label="Filter classes by name"></div>'
-    + '<div class="panel-body" id="allbody"><div><div class="all" id="alllist"></div></div></div></div>';
+    + '<div class="panel-body" id="allbody"><div><div class="all" id="alllist"></div></div></div>'
+    + '</div><div class="reg">'
+    + reg.map(function (r) {
+        return '<div class="row2"><span class="k">' + esc(r[0]) + '</span><span class="v">'
+          + esc(r[1]) + '</span><span class="c">' + r[2] + '</span></div>';
+      }).join('')
+    + '</div>';
 }
 function renderAll(filter) {
   if (!LAST || !LAST.distribution || !FACTS || !FACTS.labels) return;
@@ -563,11 +600,11 @@ function renderAll(filter) {
   const shown = q ? rows.filter(function (r) { return r.label.toLowerCase().indexOf(q) !== -1; }) : rows;
   $('alllist').innerHTML = shown.length
     ? shown.map(function (r) {
-        return '<div class="rk' + (r.rank > 3 ? ' dim' : '') + '"><span class="n">' + r.rank
-          + '</span><span class="l">' + esc(r.label) + '</span><span class="p">'
+        return '<div class="row' + (r.rank > 3 ? ' dim' : '') + '"><span class="r">' + r.rank
+          + '</span><span class="n">' + esc(r.label) + '</span><span class="p">'
           + (r.p < 0.0001 ? r.p.toExponential(1) : (r.p * 100).toFixed(2) + ' %') + '</span></div>';
       }).join('')
-    : '<div class="rk"><span class="n"></span><span class="l">no class matches &ldquo;'
+    : '<div class="row"><span class="r"></span><span class="n">no class matches &ldquo;'
       + esc(q) + '&rdquo;</span><span class="p"></span></div>';
 }
 function wireDisclosure(togId, bodyId, onOpen) {
@@ -581,53 +618,215 @@ function wireDisclosure(togId, bodyId, onOpen) {
   });
 }
 
-function facts(d, roundTripMs) {
-  const thr = (d.router || {}).threshold, m = Number(d.margin);
-  const inf = d.timing_ms && d.timing_ms.tier0_inference;
-  const cc = d.cost_comparison;
-  const md = FACTS && FACTS.margin_distribution;
-  let pct = null;
-  if (md) { pct = 0; while (pct < 100 && md.percentiles[pct] < m) pct++; }
-  const row = function (k, v, said) {
-    return '<div class="fx"><dt>' + esc(k) + '</dt><dd>' + v + '</dd><dd class="said">'
-      + (said || '') + '</dd></div>';
-  };
-  const extra = (inf !== undefined && inf !== null) ? roundTripMs - inf : 0;
-  const wall = roundTripMs >= 10000 ? (roundTripMs / 1000).toFixed(0) + ' s'
-                                    : Math.round(roundTripMs) + ' ms';
-  return '<dl class="facts">'
-    + row('margin', m.toFixed(4), thr === undefined ? '' :
-        (m < thr ? 'below the ' + thr.toFixed(4) + ' threshold, so it is flagged'
-                 : 'above the ' + thr.toFixed(4) + ' threshold, so it is not'))
-    + (pct !== null ? row('percentile', (100 - pct) + ' %',
-        'of test clauses are answered more confidently than this one') : '')
-    + ((inf !== undefined && inf !== null)
-        ? row('inference', (inf < 1 ? inf.toFixed(2) : Math.round(inf)) + ' ms',
-              extra > 250 ? wall + (wokeUp ? ' including container wake-up' : ' round trip') : '')
-        : '')
-    + (cc ? row('this request', usd(cc.served_usd, 8),
-        (cc.ratio ? nf(Math.round(cc.ratio)) : '—') + '&times; under '
-        + esc(cc.api_model || 'the API')) : '')
-    + '</dl>';
+/* ------------------------------------------------------------------ provenance */
+function renderProvenance(p, mode) {
+  const prov = $('prov'), note = $('provnote');
+  if (!p) { prov.innerHTML = '<div><span class="k">status</span><span class="v">service unreachable</span></div>';
+            note.textContent = ''; return; }
+  const cy = p.canary || {};
+  const on = Object.entries(p.cpu_isa_flags || {}).filter(([, v]) => v).map(([k]) => k);
+  const cell = (k, v) => '<div><span class="k">' + esc(k) + '</span><span class="v">'
+    + esc(v) + '</span></div>';
+  const bits = [];
+  bits.push(cell('canary', (cy.n_correct !== undefined && cy.n_correct !== null)
+    ? cy.n_correct + '/' + cy.n : (cy.status || '—')));
+  if (p.precision) bits.push(cell('precision', String(p.precision)));
+  bits.push(cell('cpu', on.length ? on.join(' ') : (p.machine || '—')));
+  if (p.onnxruntime_version) bits.push(cell('onnxruntime', p.onnxruntime_version));
+  if (p.region) bits.push(cell('region', p.region));
+  if (p.process) bits.push(cell('instance', p.process.slice(0, 6)));
+  prov.innerHTML = bits.join('');
+  note.textContent = mode === 'answer'
+    ? 'Provenance of the instance that produced the result below.'
+    : 'From a health probe. Up to two instances run, and the one that answers your request may be a different process.';
 }
+async function probeProvenance() {
+  try { const h = await (await fetch('/health')).json();
+        renderProvenance(h.served_by, 'probe'); return h; }
+  catch (e) { renderProvenance(null); }
+}
+let warmStarted = false;
+async function warmInBackground() {
+  if (warmStarted) return; warmStarted = true;
+  for (let i = 0; i < 40; i++) {
+    let h;
+    try { h = await (await fetch('/health?wait_for_canary=20')).json(); }
+    catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; }
+    const st = (h.canary || {}).status;
+    if (st === 'passed' || st === 'skipped') { renderProvenance(h.served_by, 'probe'); return; }
+    if (st === 'failed') return;
+  }
+}
+
+/* ------------------------------------------------------------------ facts */
+async function loadFacts() {
+  try { FACTS = await (await fetch('/facts')).json(); } catch (e) { return; }
+  const f = FACTS;
+  const api = f.api_comparator, hd = f.headline, sv = f.served_reference;
+  $('f-mf').textContent = f.tier0.macro_f1.toFixed(4);
+
+  /* THE PROBLEM. Both costs are for the SAME 3,000 rows the two macro-F1 figures were
+     measured on, so one kicker covers all four numbers. The API side is not a projection:
+     it is the batch's actual recorded spend out of the ledger. */
+  const n = hd.n_rows;
+  $('k-kick').textContent = 'the same ' + nf(n) + ' contract clauses';
+  $('k-who-a').textContent = api.model + ', zero-shot';
+  $('k-cost-a').textContent = money(api.usd_per_clause * n);
+  $('k-f1-a').textContent = hd.api_macro_f1.toFixed(2) + ' macro-F1';
+  $('k-cost-b').textContent = money(sv.usd_per_clause * n);
+  $('k-f1-b').textContent = hd.tier0_macro_f1.toFixed(2) + ' macro-F1';
+  const ratio = api.usd_per_clause / sv.usd_per_clause;
+  $('k-gain').textContent = nf(Math.round(ratio)) + '× cheaper per clause, and '
+    + (hd.tier0_macro_f1 - hd.api_macro_f1).toFixed(2) + ' macro-F1 better.';
+
+  // 02
+  $('mult').textContent = nf(Math.round(ratio)) + '×';
+  $('s2lede').textContent = 'What the served encoder costs against ' + api.model
+    + ', at any volume you pick.';
+  $('c-apik').textContent = api.model;
+  $('s2fine').innerHTML = 'The served figure amortises the device over its projected '
+    + 'lifetime requests and adds measured marginal energy at an <b>assumed</b> electricity '
+    + 'tariff; it is an estimate and is labelled as one. The ' + esc(api.model) + ' figure '
+    + 'is the <b>measured mean</b> over the ' + nf(api.n_requests) + '-clause batch this '
+    + 'project actually ran &mdash; ' + usd(api.cost_usd_total) + ' of real spend &mdash; '
+    + 'not an estimate for any particular clause: a per-clause figure needs that '
+    + 'model&rsquo;s own token count, which is an API call this service does not make.';
+  volume();
+
+  // 03
+  const x = f.int8_collapse.rows.find(r => r.vnni === false) || f.int8_collapse.rows[0];
+  BARS = {fp32: x.fp32, int8: x.int8};
+  $('b-fp32v').textContent = x.fp32.toFixed(4);
+  $('b-int8v').textContent = x.int8 < 0.01 ? x.int8.toFixed(6) : x.int8.toFixed(4);
+  $('s3fine').innerHTML = esc(x.isa) + ', '
+    + (x.vnni === false ? 'no AVX-512 VNNI' : 'AVX-512 not applicable')
+    + '. ' + esc(f.int8_collapse.caption) + ' This is why the service runs FP32, and why it '
+    + 're-runs a 200-row check on <b>every instance</b> rather than once per revision: on a '
+    + 'managed platform the CPU is a variable, not a constant.';
+  $('mx').innerHTML = '<table class="mx"><thead><tr><th>host</th><th>ISA</th><th>metric</th>'
+    + '<th>FP32</th><th>INT8</th></tr></thead><tbody>'
+    + f.platforms.rows.map(function (r) {
+        const isa = Object.entries(r.isa).filter(function (e) { return e[1]; })
+          .map(function (e) { return e[0]; }).join(' ') || 'n/a';
+        const fmt = function (v) {
+          return (v === null || v === undefined) ? '—' : (v < 0.01 ? v.toFixed(6) : v.toFixed(4));
+        };
+        const bad = r.int8 !== null && r.int8 !== undefined && r.int8 < 0.5;
+        return '<tr><td>' + esc(r.host)
+          + (r.note ? '<div class="hostnote">' + esc(r.note) + '</div>' : '')
+          + '</td><td class="m">' + esc(isa) + '</td><td class="m">' + esc(r.metric)
+          + '</td><td>' + fmt(r.fp32) + '</td><td class="' + (bad ? 'bad' : '') + '">'
+          + fmt(r.int8) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  armBars();
+
+  // 04
+  const e = f.escalation;
+  $('e-delta').textContent = (e.delta >= 0 ? '+' : '') + e.delta.toFixed(6);
+  $('e-lab').innerHTML = 'macro-F1 change &nbsp;·&nbsp; 95% CI [' + e.ci_low.toFixed(4)
+    + ', ' + e.ci_high.toFixed(4) + '] &nbsp;·&nbsp; turned off';
+  $('s4fine').innerHTML = 'Routing the ' + e.n_escalated + ' lowest-confidence rows of '
+    + nf(e.n_rows) + ' to ' + esc(api.model) + ' moved accuracy by an amount whose interval '
+    + 'covers zero, so escalation is off. The router still runs: on the rows it flags the '
+    + 'encoder is right ' + (e.tier0_accuracy_on_escalated * 100).toFixed(0) + '% of the time '
+    + 'and ' + esc(api.model) + ' ' + (e.api_accuracy_on_escalated * 100).toFixed(0) + '%. '
+    + '<b>n = 1 seed, and in-sample for the escalation rate.</b>';
+
+  // 05
+  const o = f.ood, w = o.worst_case, ref = o.in_domain_reference;
+  $('o-worst').textContent = w.margin.toFixed(4);
+  $('o-worstlab').innerHTML = 'a data-access policy → <em>' + esc(w.label) + '</em>, '
+    + (w.top1 * 100).toFixed(1) + '%, ' + (w.flagged ? 'flagged' : 'cleared');
+  $('o-ctrl').textContent = ref.margin.toFixed(4);
+  $('o-ctrllab').innerHTML = 'a genuine governing-law clause → <em>' + esc(ref.label)
+    + '</em>, ' + (ref.top1 * 100).toFixed(1) + '%, ' + (ref.flagged ? 'flagged' : 'cleared');
+  $('s5fine').innerHTML = '<b>The model is more certain about the text that is not a contract '
+    + 'clause.</b> Of ' + o.n_probes + ' hand-written non-contract paragraphs, ' + o.n_unflagged
+    + ' were answered confidently with no flag, spread across ' + o.n_distinct_labels_when_unflagged
+    + ' different labels rather than collecting in one catch-all. The split is by register: '
+    + 'policies, governance and duties read like contract prose, while recipes and sport do not.';
+  $('s5fine2').innerHTML = 'The margin measures how cleanly a text maps onto <b>one of the '
+    + '100 classes</b>. It does not measure whether the text belongs to the label space at '
+    + 'all, and it was never calibrated to — the threshold comes from a held-out split '
+    + 'containing only contract clauses, so nothing in its calibration has ever seen an '
+    + 'out-of-domain input. ' + esc(o.caveat) + ' The privacy-policy example above reproduces '
+    + 'it; this is not fixed, because fixing it is out-of-distribution detection and that is '
+    + 'a different experiment.';
+}
+
+/* LOG scale: the range spans four orders of magnitude and a linear slider would spend
+   most of its travel above a million. */
+function sliderToVolume(pos) {
+  const lo = Math.log10(1000), hi = Math.log10(10000000);
+  return Math.round(Math.pow(10, lo + (pos / 1000) * (hi - lo)) / 100) * 100;
+}
+function volume() {
+  if (!FACTS) return;
+  const v = sliderToVolume(+$('vol').value);
+  const api = FACTS.api_comparator.usd_per_clause;
+  // This request's own cost once there has been one; the derived reference before that.
+  const here = (LAST && LAST.cost_comparison) ? LAST.cost_comparison.served_usd
+                                              : FACTS.served_reference.usd_per_clause;
+  $('c-vol').textContent = nf(v);
+  $('vol').setAttribute('aria-valuetext', nf(v) + ' clauses per month');
+  $('c-here').textContent = money(here * v);
+  $('c-api').textContent = money(api * v);
+}
+$('vol').addEventListener('input', volume);
+
+/* The other piece of motion: the two §3 bars draw once, on first entry, and the observer
+   disconnects. Nothing else on this page moves on scroll. */
+let BARS = null, barsArmed = false;
+function armBars() {
+  if (barsArmed || !BARS) return; barsArmed = true;
+  const b1 = $('b1'), b2 = $('b2');
+  const paint = function () {
+    b1.style.width = '100%';
+    b2.style.width = (BARS.int8 * 100).toFixed(4) + '%';
+  };
+  if (reduced || !('IntersectionObserver' in window)) { paint(); return; }
+  const io = new IntersectionObserver(function (es) {
+    es.forEach(function (e) { if (e.isIntersecting) { paint(); io.disconnect(); } });
+  }, {threshold: .4});
+  io.observe(b1);
+}
+
+/* ------------------------------------------------------------------ classify */
+function count() {
+  const n = t.value.length;
+  c.textContent = nf(n) + ' / ' + nf(MAX);
+  c.classList.toggle('over', n > MAX);
+  go.disabled = n === 0 || n > MAX || busy;
+}
+t.addEventListener('input', count);
+document.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+  t.value = EXAMPLES[b.dataset.k]; idlePlate(); count(); t.focus();
+}));
+clearBtn.addEventListener('click', () => {
+  t.value = ''; idlePlate(); count(); volume(); t.focus(); probeProvenance();
+});
 
 function render(d, ms) {
   const prev = (LAST && LAST.distribution)
     ? LAST.distribution.slice().sort(function (a, b) { return b - a; }) : null;
   LAST = d;
-  showResult(plate(d) + ranks(d) + facts(d, ms));
+  drawPlate(d);
+  after.innerHTML = ranksAndRegister(d, ms);
+  clearBtn.hidden = false;
   wireDisclosure('alltog', 'allbody', function () { renderAll($('allf').value); });
   $('allf').addEventListener('input', function (e) { renderAll(e.target.value); });
   morphCurve(prev, d.distribution.slice().sort(function (a, b) { return b - a; }));
   volume();
 }
-
+function problem(html) {
+  after.innerHTML = html; clearBtn.hidden = false;
+}
 function waking(seconds) {
-  showResult('<div class="waking"><h3>Waking up the container</h3><p>This service scales to '
+  problem('<div class="waking"><h3>Waking up the container</h3><p>This service scales to '
     + 'zero, so the first request after an idle period has to start it, load a 715 MB model '
     + 'and finish a 200-row startup check before it will answer. About ' + seconds
     + ' seconds. No prediction is returned until that check passes<span id="wprog"></span>.'
-    + '</p><div class="track"><div class="fill" id="wfill"></div></div></div>');
+    + '</p><div class="wtrack"><div class="wfill" id="wfill"></div></div></div>');
 }
 async function waitForWarm(seconds) {
   waking(seconds);
@@ -639,17 +838,19 @@ async function waitForWarm(seconds) {
     const cy = h.canary || {}, el = Math.round((Date.now() - t0) / 1000);
     const fill = $('wfill'), wp = $('wprog');
     if (fill) fill.style.width = Math.min(97, 100 * el / seconds) + '%';
-    if (wp && cy.progress) wp.textContent = ' — ' + cy.progress.rows_done + '/' + cy.progress.rows_total + ' rows';
-    if (cy.status === 'passed' || cy.status === 'skipped') { renderProvenance(h.served_by, 'probe'); return true; }
+    if (wp && cy.progress) wp.textContent = ' — ' + cy.progress.rows_done + '/'
+      + cy.progress.rows_total + ' rows';
+    if (cy.status === 'passed' || cy.status === 'skipped') {
+      renderProvenance(h.served_by, 'probe'); return true;
+    }
     if (cy.status === 'failed') {
-      showResult('<div class="err"><b>This host is not qualified.</b> The startup check failed, '
+      problem('<div class="err"><b>This host is not qualified.</b> The startup check failed, '
         + 'so the service refuses to return predictions. ' + esc(cy.error || '') + '</div>');
       return false;
     }
   }
   return false;
 }
-
 async function classify() {
   const text = t.value;
   if (!text || text.length > MAX || busy) return;
@@ -667,7 +868,8 @@ async function classify() {
     for (let a = 0; a < 5 && r.status === 503; a++) {
       const d = (await r.json()).detail || {};
       if (d.retryable === false) {
-        showResult('<div class="err"><b>This host is not qualified.</b> ' + esc(d.message || '') + '</div>');
+        problem('<div class="err"><b>This host is not qualified.</b> '
+          + esc(d.message || '') + '</div>');
         return;
       }
       go.innerHTML = '<span class="spin"></span>Waking up';
@@ -676,7 +878,7 @@ async function classify() {
       r = await post();
     }
     if (r.status === 503) {
-      showResult('<div class="err"><b>Still warming up.</b> Every instance this request reached '
+      problem('<div class="err"><b>Still warming up.</b> Every instance this request reached '
         + 'is still running its startup check, which has to pass before any prediction is '
         + 'returned. Try again in a moment.</div>');
       return;
@@ -689,7 +891,7 @@ async function classify() {
     if (body.served_by) renderProvenance(body.served_by, 'answer');
     render(body, Math.round(performance.now() - t0));
   } catch (e) {
-    showResult('<div class="err">' + esc(e.message) + '</div>');
+    problem('<div class="err">' + esc(e.message) + '</div>');
   } finally {
     busy = false; go.textContent = 'Classify'; count();
   }
@@ -700,6 +902,7 @@ t.addEventListener('keydown', function (e) {
 });
 
 wireDisclosure('mxtog', 'mxbody');
+idlePlate();
 count();
 probeProvenance();
 warmInBackground();

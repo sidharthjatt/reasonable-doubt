@@ -88,3 +88,4 @@ dist/
 !results/e6_frontier.json
 !results/e6_cascade_paired.json
 !results/bench_*.json
+!results/ood_probe.json

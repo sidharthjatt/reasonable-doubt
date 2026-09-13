@@ -1,0 +1,173 @@
+{
+  "_what": "PREREGISTRATION 3bs. Twenty hand-written non-contract paragraphs sent to the served artefact. PROBES, NOT A SAMPLE: these rates characterise these twenty inputs and nothing wider.",
+  "_regenerate": "python scripts/ood_probe.py <base_url> --write",
+  "base_url": "http://127.0.0.1:8077",
+  "n_probes": 20,
+  "n_unflagged": 10,
+  "labels_when_unflagged": {
+    "Records": 1,
+    "Duties": 1,
+    "General": 2,
+    "Construction": 2,
+    "Erisa": 1,
+    "Financial Statements": 1,
+    "Interests": 1,
+    "Agreements": 1
+  },
+  "worst_case": {
+    "input": "data policy prose",
+    "label": "Records",
+    "top1": 0.9987330980261955,
+    "margin": 0.9984284043312073,
+    "flagged": false
+  },
+  "in_domain_reference": {
+    "input": "governing-law clause (in-domain control)",
+    "label": "Governing Laws",
+    "top1": 0.9676666175311318,
+    "margin": 0.9369723200798035,
+    "flagged": false
+  },
+  "rows": [
+    {
+      "input": "data policy prose",
+      "label": "Records",
+      "top1": 0.9987330980261955,
+      "margin": 0.9984284043312073,
+      "flagged": false
+    },
+    {
+      "input": "job ad",
+      "label": "Duties",
+      "top1": 0.969100360641097,
+      "margin": 0.9519351720809937,
+      "flagged": false
+    },
+    {
+      "input": "credit-risk model card",
+      "label": "General",
+      "top1": 0.9442083798646712,
+      "margin": 0.9323951601982117,
+      "flagged": false
+    },
+    {
+      "input": "ML abstract",
+      "label": "General",
+      "top1": 0.926788877635029,
+      "margin": 0.9112909436225891,
+      "flagged": false
+    },
+    {
+      "input": "physics",
+      "label": "Construction",
+      "top1": 0.8523023451170418,
+      "margin": 0.8136422634124756,
+      "flagged": false
+    },
+    {
+      "input": "medical note",
+      "label": "Erisa",
+      "top1": 0.7897414886129547,
+      "margin": 0.7284894585609436,
+      "flagged": false
+    },
+    {
+      "input": "credit-risk governance",
+      "label": "Construction",
+      "top1": 0.7485250125576441,
+      "margin": 0.646622359752655,
+      "flagged": false
+    },
+    {
+      "input": "weather report",
+      "label": "Financial Statements",
+      "top1": 0.6832920604955901,
+      "margin": 0.6248387694358826,
+      "flagged": false
+    },
+    {
+      "input": "credit-risk methodology",
+      "label": "Interests",
+      "top1": 0.6845625596594985,
+      "margin": 0.5861688852310181,
+      "flagged": false
+    },
+    {
+      "input": "history",
+      "label": "Agreements",
+      "top1": 0.6192869715969997,
+      "margin": 0.5357308983802795,
+      "flagged": false
+    },
+    {
+      "input": "software architecture",
+      "label": "Construction",
+      "top1": 0.6981452015359092,
+      "margin": 0.5204223394393921,
+      "flagged": true
+    },
+    {
+      "input": "cake recipe",
+      "label": "Terms",
+      "top1": 0.5904526023349979,
+      "margin": 0.4477887451648712,
+      "flagged": true
+    },
+    {
+      "input": "cooking method",
+      "label": "Definitions",
+      "top1": 0.32469059183615223,
+      "margin": 0.158509761095047,
+      "flagged": true
+    },
+    {
+      "input": "travel blurb",
+      "label": "Duties",
+      "top1": 0.23505209782192,
+      "margin": 0.10618515312671661,
+      "flagged": true
+    },
+    {
+      "input": "news lede",
+      "label": "Interests",
+      "top1": 0.27999669742887834,
+      "margin": 0.08025951683521271,
+      "flagged": true
+    },
+    {
+      "input": "product copy",
+      "label": "Expenses",
+      "top1": 0.33449822200367674,
+      "margin": 0.04522702097892761,
+      "flagged": true
+    },
+    {
+      "input": "restaurant review",
+      "label": "Representations",
+      "top1": 0.13084747697069454,
+      "margin": 0.04388482868671417,
+      "flagged": true
+    },
+    {
+      "input": "poem",
+      "label": "Definitions",
+      "top1": 0.2785391039856542,
+      "margin": 0.029365703463554382,
+      "flagged": true
+    },
+    {
+      "input": "python docstring",
+      "label": "Payments",
+      "top1": 0.3503940853823743,
+      "margin": 0.017851561307907104,
+      "flagged": true
+    },
+    {
+      "input": "football report",
+      "label": "No Waivers",
+      "top1": 0.18077137032925966,
+      "margin": 0.01582871377468109,
+      "flagged": true
+    }
+  ]
+}
