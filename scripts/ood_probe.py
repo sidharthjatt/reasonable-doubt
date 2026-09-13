@@ -34,12 +34,30 @@ PROBES = {
  "history": "The treaty was signed in the spring of that year, ending three decades of intermittent conflict and redrawing the frontier along the river.",
  "product copy": "Lightweight, water resistant and packs down to the size of a paperback. Ideal for commuting or weekend trips.",
 }
+def classify(text):
+    """POST one clause, waiting out a warming instance rather than dying on its 503.
+
+    The service scales to zero and runs up to two instances, so a cold or half-warm
+    service answers 503 until its startup canary passes. /health?wait_for_canary holds the
+    request open, which is also what gives the canary thread CPU on Cloud Run.
+    """
+    body = json.dumps({"text": text}).encode()
+    for _ in range(8):
+        req = urllib.request.Request(BASE + "/classify", data=body,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=120).read())
+        except urllib.error.HTTPError as e:
+            if e.code != 503:
+                raise
+            print("  warming…", file=sys.stderr)
+            urllib.request.urlopen(BASE + "/health?wait_for_canary=20", timeout=60).read()
+    raise SystemExit("service still warming after 8 attempts")
+
+
 rows = []
 for name, text in PROBES.items():
-    req = urllib.request.Request(BASE + "/classify",
-        data=json.dumps({"text": text}).encode(),
-        headers={"Content-Type": "application/json"})
-    d = json.loads(urllib.request.urlopen(req).read())
+    d = classify(text)
     rows.append((name, d["label"], d["top_3"][0]["score"], d["margin"], d["needs_review"]))
 rows.sort(key=lambda r: -r[3])
 print(f"{'input':<24}{'label':<22}{'top1':>7}{'margin':>9}  flag")
