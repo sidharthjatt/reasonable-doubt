@@ -105,6 +105,43 @@ def isa_matrix() -> None:
                  "avx512_vnni": False, "note": "avx512f=true, avx2=true, avx512_vnni=FALSE",
                  "source": "tier0_ce10ep_seed1.json (Kaggle run JSON): test_3000_int8, test_3000_onnx_fp32, e3_discriminator.onnx_env"},
             ]},
+        # ONE ROW PER HOST MEASURED, each naming its own METRIC. test_3000 macro-F1 and
+        # 200-row canary accuracy are different quantities on different row sets, and the
+        # matrix the demo renders must never put them in one column (§3bc).
+        "platforms": [
+            {"host": "macOS arm64 (Apple Silicon)", "machine": "arm64",
+             "isa": {"avx512_vnni": None, "avx512f": None, "avx2": None},
+             "metric": "test_3000 macro-F1", "artefact": "E1b seed 1",
+             "fp32": fp32["macro_f1"], "int8": e1b["macro_f1"],
+             "source": "results/fp32_local_onnx_ce10ep_seed1.json, results/int8_local_ce10ep_seed1.json"},
+            {"host": "Linux x86, Kaggle Xeon", "machine": "x86_64",
+             "isa": {"avx512_vnni": False, "avx512f": True, "avx2": True},
+             "metric": "test_3000 macro-F1", "artefact": "E1b seed 1",
+             "fp32": 0.8114655856105638, "int8": 0.000166,
+             "note": "INT8 at chance on a 100-class problem, no error raised.",
+             "source": "tier0_ce10ep_seed1.json (Kaggle run JSON)"},
+            {"host": "Linux aarch64, container", "machine": "aarch64",
+             "isa": {"avx512_vnni": None, "avx512f": None, "avx2": None},
+             "metric": "canary accuracy, 200 TRAIN rows", "artefact": "E1 seed 1",
+             "fp32": 0.9150, "int8": 0.6400,
+             "note": "Same physical CPU as the arm64 host. INT8 diverged; the canary refused.",
+             "source": "PREREGISTRATION §3bf/§3bg"},
+            {"host": "Cloud Run x86, VNNI", "machine": "x86_64",
+             "isa": {"avx512_vnni": True, "avx512f": True, "avx2": True},
+             "metric": "canary accuracy, 200 TRAIN rows", "artefact": "E1b seed 1",
+             "fp32": 0.9550, "int8": None,
+             "note": "12 of 13 instances observed reported VNNI.",
+             "source": "PREREGISTRATION §3bn"},
+            {"host": "Cloud Run x86, NO VNNI", "machine": "x86_64",
+             "isa": {"avx512_vnni": False, "avx512f": False, "avx2": True},
+             "metric": "canary accuracy, 200 TRAIN rows", "artefact": "E1b seed 1",
+             "fp32": 0.9550, "int8": None,
+             "note": ("Instance 65b67a604cb6, revision -00009-99j. FP32 does not collapse "
+                      "on the hardware class where INT8 scored 0.000166. CANARY-LEVEL "
+                      "EVIDENCE, not a test_3000 score."),
+             "source": "PREREGISTRATION §3bq"},
+        ],
+
         "canary_accuracy_200_train_rows": {
             "metric": "accuracy on the 200 frozen canary rows — NOT comparable to test_3000",
             "rows": [

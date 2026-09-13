@@ -5,213 +5,255 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Reasonable Doubt — contract clause classifier</title>
 <style>
-  :root {
-    --bg:#fbfaf8; --fg:#1a1a1a; --muted:#6b6b6b; --faint:#8c8c8c; --line:#e4dfd7;
-    --card:#fff; --accent:#7a5c2e; --accent-fg:#fff;
-    --warn-bg:#fdf6e3; --warn-line:#d9b667; --warn-fg:#6b4e10;
-    --bar:#cdbfa6; --chip:#f3efe8; --ok:#3d6b4f;
+/* GROUND: cool ledger grey-green, not warm cream. Engineering paper and accounting
+   stock, not literary. DISPLAY FACE: the mono, not a serif — on a page about a machine
+   reading legal text, the machine's voice is the loud one and the document's voice is
+   the quiet one. Serif is demoted to small running prose.
+
+   NO WEBFONTS. System stacks only: zero bytes, zero requests, no FOUT, on a service that
+   already has a cold-start problem.
+
+   ONE FRAMED ELEMENT on the page (the plate), and it is the only dark region. Everything
+   else is hairlines and space. If it is not the plate, it is not boxed. */
+:root {
+  --paper:#E9EBE4; --ink:#17150F; --graphite:#6B6659; --hairline:#CFD2C6;
+  --vermilion:#A5301B; --pine:#28564A;
+  --plate:#16181A; --plate-ink:#E4E7DE; --plate-line:#3A3F42;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --pad: clamp(16px, 4vw, 28px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:#14130E; --ink:#E8E3D6; --graphite:#918B7C; --hairline:#33322B;
+    --vermilion:#D9705A; --pine:#6FA893;
+    --plate:#0A0B0C; --plate-ink:#E4E7DE; --plate-line:#2A2E30;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg:#16151a; --fg:#ececec; --muted:#a0a0a0; --faint:#7d7d85; --line:#33313a;
-      --card:#1e1d23; --accent:#d6b77a; --accent-fg:#1a1a1a;
-      --warn-bg:#2a2415; --warn-line:#7a6428; --warn-fg:#e5cd91;
-      --bar:#5b5340; --chip:#26252c; --ok:#7fae90;
-    }
-  }
-  * { box-sizing:border-box }
-  html, body { height:100% }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
-         display:flex; flex-direction:column; align-items:center }
-  .wrap { width:100%; max-width:680px; padding:44px 20px 64px; flex:1 }
-  header { margin-bottom:22px }
-  h1 { font-size:1.4rem; margin:0 0 4px; letter-spacing:-.01em }
-  .sub { color:var(--muted); margin:0; font-size:.92rem }
+}
+* { box-sizing:border-box }
+body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--mono);
+       font-size:16px; line-height:1.5; -webkit-font-smoothing:antialiased }
+.wrap { max-width:880px; margin:0 auto; padding:clamp(28px,6vw,56px) var(--pad) 72px }
+p { margin:0 }
+a { color:inherit; text-underline-offset:3px }
+:focus-visible { outline:2px solid var(--vermilion); outline-offset:2px; border-radius:1px }
+.plate :focus-visible { outline-color:var(--plate-ink) }
 
-  .provenance { display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:14px;
-                padding-top:13px; border-top:1px solid var(--line);
-                color:var(--faint); font-size:.78rem; font-variant-numeric:tabular-nums }
-  .provenance b { color:var(--muted); font-weight:600 }
-  .provenance .src { color:var(--muted); font-weight:600 }
-  .provenance .src.probe { font-style:italic; font-weight:400 }
-  .dot { display:inline-block; width:6px; height:6px; border-radius:50%;
-         background:var(--ok); margin-right:5px; vertical-align:1px }
+h1 { font-size:clamp(1.6rem,4.4vw,2rem); font-weight:600; letter-spacing:-.02em; margin:0 0 4px }
+.tag { font-family:var(--serif); font-size:clamp(1rem,2.6vw,1.25rem); color:var(--graphite);
+       margin:0 0 20px; line-height:1.45 }
+.prov { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:4px 18px;
+        border-top:1px solid var(--hairline); border-bottom:1px solid var(--hairline);
+        padding:9px 0; font-size:11px; letter-spacing:.03em; color:var(--graphite) }
+.prov b { display:block; color:var(--ink); font-weight:500; font-size:12.5px;
+          font-variant-numeric:tabular-nums }
+.prov .src { grid-column:1/-1; font-style:italic; font-family:var(--serif);
+             letter-spacing:0; font-size:12px; color:var(--graphite); padding-top:2px }
 
-  .chips { display:flex; flex-wrap:wrap; gap:7px; margin:22px 0 9px }
-  .chip { background:var(--chip); border:1px solid var(--line); color:var(--fg);
-          border-radius:999px; padding:5px 13px; font-size:.82rem; cursor:pointer;
-          font-family:inherit; text-align:left }
-  .chip:hover { border-color:var(--accent) }
-  .chip span { color:var(--faint) }
+.inrow { display:flex; align-items:baseline; justify-content:space-between; gap:14px;
+         margin:26px 0 7px; flex-wrap:wrap }
+.inrow > span { font-size:13px; letter-spacing:.04em; color:var(--graphite) }
+.egs { display:flex; gap:16px; flex-wrap:wrap }
+.eg { font-family:var(--serif); font-style:italic; font-size:14px; background:none; border:0;
+      padding:0; color:var(--ink); cursor:pointer; text-decoration:underline;
+      text-decoration-thickness:1px; text-underline-offset:3px }
+.eg:hover { color:var(--vermilion) }
+textarea { width:100%; min-height:132px; padding:13px 14px; resize:vertical;
+           border:1px solid var(--hairline); border-radius:2px; background:transparent;
+           color:var(--ink); font-family:var(--mono); font-size:14px; line-height:1.55 }
+textarea::placeholder { color:var(--graphite); opacity:.75 }
+.actions { display:flex; gap:10px; align-items:center; margin-top:10px }
+button.go { background:var(--ink); color:var(--paper); border:0; border-radius:2px;
+            padding:10px 22px; font-family:var(--mono); font-size:13px; font-weight:500;
+            letter-spacing:.06em; text-transform:uppercase; cursor:pointer;
+            display:inline-flex; align-items:center; gap:9px }
+button.go:disabled { opacity:.4; cursor:default }
+button.quiet { background:none; border:0; color:var(--graphite); cursor:pointer;
+               font-family:var(--mono); font-size:13px; padding:10px 4px;
+               text-decoration:underline; text-underline-offset:3px }
+button.quiet:hover { color:var(--ink) }
+.count { margin-left:auto; font-size:12px; color:var(--graphite); font-variant-numeric:tabular-nums }
+.count.over { color:var(--vermilion) }
+.spin { width:12px; height:12px; border:2px solid currentColor; border-right-color:transparent;
+        border-radius:50%; animation:spin .7s linear infinite }
+@keyframes spin { to { transform:rotate(360deg) } }
 
-  textarea { width:100%; min-height:150px; padding:13px 14px; resize:vertical;
-             border:1px solid var(--line); border-radius:9px; background:var(--card);
-             color:var(--fg); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace }
-  textarea:focus { outline:2px solid var(--accent); outline-offset:-1px }
-  .row { display:flex; gap:12px; align-items:center; margin-top:11px }
-  button.go { background:var(--accent); color:var(--accent-fg); border:0; border-radius:8px;
-              padding:9px 20px; font-size:.92rem; font-weight:600; cursor:pointer;
-              font-family:inherit; display:inline-flex; align-items:center; gap:8px }
-  button.go:disabled { opacity:.55; cursor:default }
-  button.clear { background:transparent; color:var(--muted); border:1px solid var(--line);
-                 border-radius:8px; padding:9px 15px; font-size:.88rem; cursor:pointer;
-                 font-family:inherit }
-  button.clear:hover { border-color:var(--accent); color:var(--fg) }
-  .count { color:var(--faint); font-size:.82rem; margin-left:auto;
-           font-variant-numeric:tabular-nums }
-  .count.over { color:#b4402c; font-weight:600 }
+.plate { background:var(--plate); color:var(--plate-ink); border-radius:3px;
+         padding:clamp(18px,3.6vw,26px); margin-top:26px }
+.plate .verdict { display:flex; align-items:flex-start; justify-content:space-between;
+                  gap:16px; flex-wrap:wrap }
+.plate h2 { font-size:clamp(1.85rem,6vw,3.3rem); font-weight:500; letter-spacing:-.035em;
+            margin:0; line-height:1.03 }
+.state { font-size:12px; letter-spacing:.1em; text-transform:uppercase; white-space:nowrap;
+         padding-top:8px }
+.state.doubt { color:var(--vermilion) }
+.state.clear { color:var(--pine) }
+.plate svg { display:block; width:100%; height:auto; margin-top:14px; overflow:visible }
+.plate .read { font-family:var(--serif); font-size:14.5px; line-height:1.55; margin-top:12px;
+               opacity:.82 }
+.plate .meaning { border-left:2px solid var(--vermilion); padding-left:13px; opacity:1;
+                  margin-top:14px; font-size:13.5px }
+.pl-grid { stroke:var(--plate-line); stroke-width:1 }
+.pl-tick { fill:var(--plate-line); font-size:9px; font-family:var(--mono) }
+.pl-tick.lit { fill:var(--plate-ink); opacity:.5 }
+.pl-curve { fill:none; stroke:var(--plate-ink); stroke-width:1.7; stroke-linejoin:round }
+.pl-area { stroke:none; opacity:.2 }
+.pl-dot { fill:var(--plate-ink) }
+.pl-lab { fill:var(--plate-ink); font-size:10.5px; font-family:var(--mono); opacity:.85 }
 
-  .spinner { width:13px; height:13px; border:2px solid currentColor;
-             border-right-color:transparent; border-radius:50%;
-             animation:spin .7s linear infinite }
-  @keyframes spin { to { transform:rotate(360deg) } }
+.ranks { margin-top:22px }
+.rk { display:grid; grid-template-columns:28px 1fr auto; gap:12px; align-items:baseline;
+      padding:9px 0; border-bottom:1px solid var(--hairline); font-size:14px }
+.rk .n { color:var(--graphite); font-size:12px; font-variant-numeric:tabular-nums }
+.rk .p { font-variant-numeric:tabular-nums }
+.rk.dim .l, .rk.dim .p { color:var(--graphite) }
+.disclose { display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:11px 0 }
+button.tog { background:none; border:0; padding:0; color:var(--ink); cursor:pointer;
+             font-family:var(--mono); font-size:13px; letter-spacing:.03em;
+             display:inline-flex; align-items:center; gap:7px }
+button.tog .caret { display:inline-block; transition:transform .18s ease-out }
+button.tog[aria-expanded="true"] .caret { transform:rotate(90deg) }
+.filter { flex:1; min-width:140px; max-width:230px; padding:6px 9px; font-family:var(--mono);
+          font-size:12.5px; border:1px solid var(--hairline); border-radius:2px;
+          background:transparent; color:var(--ink) }
+.panel-body { display:grid; grid-template-rows:0fr; transition:grid-template-rows .18s ease-out }
+.panel-body.open { grid-template-rows:1fr }
+.panel-body > div { overflow:hidden; min-height:0 }
+.all { max-height:340px; overflow-y:auto; margin-bottom:6px }
 
-  .card { margin-top:24px; border:1px solid var(--line); border-radius:11px;
-          background:var(--card); padding:20px 22px }
-  .lbl { font-size:.72rem; letter-spacing:.09em; text-transform:uppercase;
-         color:var(--faint); margin-bottom:5px }
-  .answer { font-size:1.3rem; font-weight:650; letter-spacing:-.01em }
-  .meta-row { display:flex; gap:16px; margin-top:9px; color:var(--muted);
-              font-size:.8rem; font-variant-numeric:tabular-nums }
-  .flag { margin-top:16px; background:var(--warn-bg); border:1px solid var(--warn-line);
-          border-left-width:3px; color:var(--warn-fg); border-radius:7px;
-          padding:11px 14px; font-size:.9rem }
-  table { width:100%; border-collapse:collapse; margin-top:8px }
-  td { padding:7px 0; border-bottom:1px solid var(--line); vertical-align:middle }
-  tr:last-child td { border-bottom:0 }
-  td.n { width:58px; text-align:right; color:var(--muted);
-         font-variant-numeric:tabular-nums; font-size:.86rem }
-  td.b { width:130px }
-  .bar { height:7px; border-radius:4px; background:var(--bar); min-width:2px }
+.facts { margin:6px 0 0 }
+.fx { display:grid; grid-template-columns:minmax(92px,124px) minmax(88px,auto) 1fr; gap:14px;
+      padding:8px 0; border-bottom:1px solid var(--hairline); font-size:13.5px;
+      align-items:baseline }
+.fx dt { color:var(--graphite); font-size:12px; letter-spacing:.03em }
+.fx dd { margin:0; font-variant-numeric:tabular-nums }
+.fx .said { font-family:var(--serif); font-size:13.5px; color:var(--graphite); font-style:italic;
+            font-variant-numeric:normal }
 
-  .waking { margin-top:24px; border:1px solid var(--warn-line); background:var(--warn-bg);
-            color:var(--warn-fg); border-radius:11px; padding:18px 20px; font-size:.9rem }
-  .waking h3 { margin:0 0 6px; font-size:.95rem }
-  .waking .track { height:5px; border-radius:3px; background:rgba(0,0,0,.12);
-                   margin-top:12px; overflow:hidden }
-  .waking .fill { height:100%; background:var(--warn-fg); width:0; opacity:.55;
-                  transition:width .4s linear }
-  .err { margin-top:24px; border:1px solid #d99; background:#fdf0ee; color:#8c2f1c;
-         border-radius:9px; padding:13px 15px; font-size:.9rem }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .err { background:#2c1a17; border-color:#7a3a2c;
-                                           color:#f0b4a5 }
-  }
-  .cost { margin-top:18px; border-top:1px solid var(--line); padding-top:14px }
-  .cost table { margin-top:6px }
-  .cost td { border:0; padding:3px 0; font-size:.86rem }
-  .cost td.v { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
-  .cost .big { font-size:.92rem; font-weight:650 }
-  .cost .note { color:var(--faint); font-size:.75rem; margin-top:8px; line-height:1.55 }
-  .why { margin-top:14px; color:var(--muted); font-size:.87rem; line-height:1.6 }
+.sec { margin-top:40px; padding-top:22px; border-top:1px solid var(--hairline) }
+.sec h3 { font-size:1.05rem; font-weight:500; margin:0 0 3px; letter-spacing:-.01em }
+.sec h3 .num { color:var(--graphite); margin-right:10px; font-size:.82em }
+.sec .lede { font-family:var(--serif); font-size:14.5px; color:var(--graphite); line-height:1.6;
+             margin-bottom:14px }
+.note { font-family:var(--serif); font-size:13px; color:var(--graphite); line-height:1.6;
+        margin-top:10px }
+.note b { color:var(--ink); font-weight:400 }
+.slider { display:flex; align-items:center; gap:13px; margin:4px 0 14px; flex-wrap:wrap }
+.slider input[type=range] { flex:1; min-width:170px; accent-color:var(--ink) }
+.slider .vol { font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap;
+               min-width:158px }
+.cmp { display:grid; grid-template-columns:1fr 1fr; gap:12px; max-width:440px }
+.cmp .k { font-size:12px; color:var(--graphite); letter-spacing:.03em }
+.cmp .v { font-size:clamp(1.1rem,3.4vw,1.45rem); font-variant-numeric:tabular-nums;
+          letter-spacing:-.02em }
+.bars { margin-top:4px }
+.br { display:grid; grid-template-columns:46px 1fr 84px; gap:10px; align-items:center;
+      padding:4px 0; font-size:12.5px }
+.br .t { height:8px; background:var(--hairline); border-radius:1px; overflow:hidden }
+.br .f { height:100%; background:var(--ink); display:block }
+.br .f.bad { background:var(--vermilion) }
+.br .v { text-align:right; font-variant-numeric:tabular-nums; color:var(--graphite) }
+.br .v.bad { color:var(--vermilion) }
+.mx { width:100%; border-collapse:collapse; font-size:12.5px; margin-top:4px }
+.mx th { text-align:left; font-weight:500; color:var(--graphite); font-size:11px;
+         letter-spacing:.04em; padding:7px 10px 7px 0; border-bottom:1px solid var(--hairline) }
+.mx td { padding:9px 10px 9px 0; border-bottom:1px solid var(--hairline);
+         font-variant-numeric:tabular-nums; vertical-align:top }
+.mx td.bad { color:var(--vermilion) }
+.mx .m { font-size:11px; color:var(--graphite); font-variant-numeric:normal }
+.mx .hostnote { font-family:var(--serif); font-style:italic; font-size:12px;
+                color:var(--graphite); font-variant-numeric:normal; margin-top:3px }
+.stats { display:flex; gap:30px; flex-wrap:wrap; margin:6px 0 4px }
+.stats .v { font-size:1.2rem; font-variant-numeric:tabular-nums; letter-spacing:-.02em }
+.stats .k { font-size:11px; color:var(--graphite); letter-spacing:.04em }
 
-  .context { margin-top:52px; padding-top:8px }
-  .context h2 { font-size:.74rem; letter-spacing:.1em; text-transform:uppercase;
-                color:var(--faint); margin:0 0 18px; font-weight:600 }
-  .panel { border:1px solid var(--line); border-radius:11px; background:var(--card);
-           padding:18px 20px; margin-bottom:16px }
-  .panel h3 { margin:0 0 6px; font-size:.96rem; letter-spacing:-.005em }
-  .panel p { margin:0; color:var(--muted); font-size:.87rem; line-height:1.6 }
-  /* The figure is a light-background PNG from the report. Matted deliberately so it
-     reads as a printed plate rather than as a broken image in dark mode. */
-  .chart { border:1px solid var(--line); border-radius:11px; background:var(--card);
-           padding:16px 18px; margin-top:16px }
-  .chart h3 { margin:0 0 2px; font-size:.92rem; letter-spacing:-.005em }
-  .chart .cap { color:var(--muted); font-size:.82rem; line-height:1.55; margin:0 0 4px }
-  .chart svg { display:block; width:100%; height:auto; margin-top:6px; overflow:visible }
-  .ax { stroke:var(--line); stroke-width:1 }
-  .axt { fill:var(--faint); font-size:9px; font-family:inherit }
-  .ser { fill:none; stroke:var(--accent); stroke-width:1.6 }
-  .dot { fill:var(--accent) }
-  .dotl { fill:var(--fg); font-size:9.5px; font-family:inherit }
-  .hb { fill:var(--chip) }
-  .thr { stroke:#b4402c; stroke-width:1.4; stroke-dasharray:3 3 }
-  .thrt { fill:#b4402c; font-size:9px; font-family:inherit }
-  .me { stroke:var(--accent); stroke-width:2 }
-  .met { fill:var(--accent); font-size:10px; font-weight:600; font-family:inherit }
-  .cb { fill:var(--ok) }
-  .cb.api { fill:#b4642c }
-  .cbl { fill:var(--fg); font-size:10px; font-family:inherit }
-  .isa { margin:14px 0 4px; font-size:.84rem }
-  .isa .grp { margin-bottom:11px }
-  .isa .gl { color:var(--faint); font-size:.76rem; margin-bottom:5px }
-  .isa .r { display:flex; align-items:center; gap:9px; margin:3px 0 }
-  .isa .k { width:46px; color:var(--muted); font-size:.8rem }
-  .isa .t { flex:1; height:9px; background:var(--chip); border-radius:3px; overflow:hidden }
-  .isa .f { height:100%; border-radius:3px }
-  .isa .f.ok { background:var(--ok) }
-  .isa .f.bad { background:#b4402c }
-  .isa .n { width:78px; text-align:right; font-variant-numeric:tabular-nums;
-            font-size:.8rem; color:var(--muted) }
-  .isa .n.bad { color:#b4402c; font-weight:600 }
-  .stat { display:flex; gap:22px; flex-wrap:wrap; margin:12px 0 2px }
-  .stat div { font-variant-numeric:tabular-nums }
-  .stat .sv { font-size:1.05rem; font-weight:650 }
-  .stat .sk { color:var(--faint); font-size:.74rem; letter-spacing:.05em;
-              text-transform:uppercase }
+.waking, .err { margin-top:26px; border-left:3px solid var(--vermilion); padding:4px 0 4px 16px }
+.waking h3 { margin:0 0 5px; font-size:14px; font-weight:500 }
+.waking p, .err { font-family:var(--serif); font-size:14px; color:var(--graphite); line-height:1.6 }
+.err b { color:var(--ink) }
+.waking .track { height:2px; background:var(--hairline); margin-top:11px; overflow:hidden }
+.waking .fill { height:100%; background:var(--vermilion); width:0; transition:width .4s linear }
 
-  footer { color:var(--faint); font-size:.79rem; line-height:1.7; margin-top:26px;
-           padding-top:16px; border-top:1px solid var(--line) }
-  a { color:var(--accent) }
+footer { margin-top:46px; padding-top:18px; border-top:1px solid var(--hairline);
+         font-size:12px; color:var(--graphite); line-height:1.85 }
+footer .dis { font-family:var(--serif); font-style:italic; font-size:13.5px; color:var(--ink) }
+@media (max-width:560px) {
+  .fx { grid-template-columns:1fr auto }
+  .fx .said { grid-column:1/-1 }
+  .cmp { grid-template-columns:1fr }
+}
+@media (prefers-reduced-motion:reduce) {
+  *, *::before, *::after { animation-duration:.001ms !important; transition-duration:.001ms !important }
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Reasonable Doubt</h1>
-    <p class="sub">Contract clause classification into 100 LEDGAR provision types.</p>
-    <div class="provenance" id="prov"><span>checking…</span></div>
-  </header>
+  <h1>Reasonable Doubt</h1>
+  <p class="tag">A contract clause classifier that says when it does not know.</p>
+  <div class="prov" id="prov"><span>checking&hellip;</span></div>
 
-  <div class="chips">
-    <button class="chip" data-k="gov">Governing law</button>
-    <button class="chip" data-k="amb">Ambiguous <span>— two defensible labels</span></button>
-    <button class="chip" data-k="ood">A cake recipe <span>— not a contract at all</span></button>
+  <div class="inrow">
+    <span>Paste a clause</span>
+    <div class="egs">
+      <button class="eg" data-k="gov">governing law</button>
+      <button class="eg" data-k="amb">ambiguous</button>
+      <button class="eg" data-k="ood">a cake recipe</button>
+    </div>
   </div>
-
-  <textarea id="t" placeholder="Paste a contract clause, or pick an example above."></textarea>
-  <div class="row">
+  <textarea id="t" aria-label="Contract clause" placeholder="&hellip;or choose one of the three above."></textarea>
+  <div class="actions">
     <button class="go" id="go">Classify</button>
-    <button class="clear" id="clear" hidden>Try another</button>
+    <button class="quiet" id="clear" hidden>Try another</button>
     <span class="count" id="c">0 / 20,000</span>
   </div>
 
   <div id="out"></div>
 
-  <!-- PER-REQUEST CHARTS. Drawn client-side from the classify response, so they change
-       with every clause. Empty until there is an answer to draw. -->
-  <section id="charts"></section>
-
-  <!-- CONTEXT, BELOW THE RESULT. Someone who only wants to classify a clause never has to
-       read any of it: it starts below the fold and stays out of the way. -->
-  <section class="context" id="context" hidden>
-    <h2>What this project measured</h2>
-
-    <div class="panel">
-      <h3>INT8 collapses to chance on some CPUs, silently</h3>
-      <p id="isacap">&nbsp;</p>
-      <div class="isa" id="isa"></div>
-      <p>This is why the service runs FP32, and why it re-runs a 200-row check on
-         <b>every instance</b> instead of trusting one qualification: on a managed platform
-         the CPU is a variable, not a constant.</p>
+  <section class="sec">
+    <h3><span class="num">&sect;1</span>Cost at volume</h3>
+    <p class="lede" id="s1lede">&nbsp;</p>
+    <div class="slider">
+      <input type="range" id="vol" min="0" max="1000" value="667" step="1" aria-label="Clauses per month">
+      <span class="vol" id="volv">100,000 clauses / month</span>
     </div>
-
-    <div class="panel">
-      <h3>The expensive tier did not help</h3>
-      <div class="stat" id="esc"></div>
-      <p id="esccap">&nbsp;</p>
+    <div class="cmp">
+      <div><div class="k">served here</div><div class="v" id="c-here">&mdash;</div></div>
+      <div><div class="k" id="c-apik">API</div><div class="v" id="c-api">&mdash;</div></div>
     </div>
+    <p class="note" id="s1note">&nbsp;</p>
+  </section>
+
+  <section class="sec">
+    <h3><span class="num">&sect;2</span>Precision</h3>
+    <p class="lede" id="s2lede">&nbsp;</p>
+    <div class="bars" id="s2bars"></div>
+    <div class="disclose">
+      <button class="tog" id="mxtog" aria-expanded="false" aria-controls="mxbody">
+        <span class="caret">&rsaquo;</span><span>every host measured</span></button>
+    </div>
+    <div class="panel-body" id="mxbody"><div><div id="mx"></div></div></div>
+    <p class="note">FP32 is served because it is the only precision that has not collapsed on
+      some host. The 200-row check re-runs on <b>every instance</b>: the CPU varies between
+      instances of one revision, so it is a variable, not a constant.</p>
+  </section>
+
+  <section class="sec">
+    <h3><span class="num">&sect;3</span>Escalation</h3>
+    <div class="stats" id="s3stats"></div>
+    <p class="note" id="s3note">&nbsp;</p>
   </section>
 
   <footer>
-    DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32 — macro-F1 <b>0.8091</b> on a
-    3,000-row test sample, <b>single seed</b>. Scores are softmax outputs, not calibrated
-    probabilities; routing uses the top-two margin.
-    <b>Research artefact — not legal advice.</b><br>
-    <a href="https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar">Model card</a>
-    · <a href="https://github.com/sidharthjatt/reasonable-doubt">Source</a>
-    · <a href="/health">/health</a> · <a href="/docs">API</a>
+    <p class="dis">Research artefact &mdash; not legal advice.</p>
+    <p>DeBERTa-v3-base fine-tuned on LEDGAR (LexGLUE), ONNX FP32. macro-F1 <b id="f-mf">&mdash;</b>
+      on a 3,000-row test sample, single seed. Scores are softmax outputs, not calibrated
+      probabilities; routing uses the top-two margin.</p>
+    <p><a href="https://huggingface.co/sidharthjatt/reasonable-doubt-deberta-ledgar">Model card</a>
+      &nbsp;&nbsp;<a href="https://github.com/sidharthjatt/reasonable-doubt">Source</a>
+      &nbsp;&nbsp;<a href="/health">/health</a>
+      &nbsp;&nbsp;<a href="/facts">/facts</a>
+      &nbsp;&nbsp;<a href="/docs">API</a></p>
   </footer>
 </div>
 
@@ -223,122 +265,71 @@ const EXAMPLES = {
   ood: "Please preheat the oven to 180 degrees Celsius and bake the cake for 35 minutes until golden brown."
 };
 const $ = id => document.getElementById(id);
-const usd = (v, dp) => '$' + v.toFixed(dp === undefined ? 2 : dp);
-// Cents matter at these magnitudes: $43.61 rounded to $44 loses the comparison's point.
-const money = v => v >= 1000
-  ? '$' + v.toLocaleString('en-US', {maximumFractionDigits: 0})
-  : '$' + v.toFixed(2);
-const t = $('t'), go = $('go'), out = $('out'), c = $('c'), prov = $('prov');
-const clearBtn = $('clear');
-
-// Shown only once there is something to clear, so it is never a dead control.
-function showResult(html) {
-  out.innerHTML = html;
-  clearBtn.hidden = !html;
-  if (!html) renderCharts(null);      // charts belong to a result; no result, no charts
-}
-function clearAll() {
-  t.value = '';
-  showResult('');
-  count();
-  t.focus();
-  // The strip described the answer that is now gone, so it goes back to being a probe.
-  probeProvenance();
-}
+const t = $('t'), go = $('go'), out = $('out'), c = $('c'), prov = $('prov'), clearBtn = $('clear');
 const esc = s => String(s).replace(/[&<>"']/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-const fmt = n => n.toLocaleString('en-US');
+const nf = n => n.toLocaleString('en-US');
+const usd = (v, dp) => '$' + v.toFixed(dp === undefined ? 2 : dp);
+// Sub-cent figures are the whole point at low volume: $0.00 hides the comparison.
+const money = function (v) {
+  if (v >= 1000) return '$' + v.toLocaleString('en-US', {maximumFractionDigits:0});
+  if (v >= 0.01) return '$' + v.toFixed(2);
+  if (v > 0) return '$' + v.toFixed(5);
+  return '$0';
+};
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SERVED_FALLBACK = 8.788115222574201e-7;
+
+let FACTS = null, LAST = null, busy = false, wokeUp = false;
 
 function count() {
   const n = t.value.length;
-  c.textContent = fmt(n) + ' / ' + fmt(MAX);
+  c.textContent = nf(n) + ' / ' + nf(MAX);
   c.classList.toggle('over', n > MAX);
   go.disabled = n === 0 || n > MAX || busy;
 }
-let busy = false;
-// True when THIS request had to wait for a cold container, so the wall time can be
-// attributed to the wake-up rather than left looking like inference.
-let wokeUp = false;
 t.addEventListener('input', count);
-document.querySelectorAll('.chip').forEach(b =>
-  b.addEventListener('click', () => {
-    // REPLACES outright, never appends, and drops the previous result so the card on
-    // screen always belongs to the text in the box.
-    t.value = EXAMPLES[b.dataset.k];
-    showResult('');
-    count();
-    t.focus();
-  }));
+document.querySelectorAll('.eg').forEach(b => b.addEventListener('click', () => {
+  t.value = EXAMPLES[b.dataset.k];
+  showResult(''); count(); t.focus();
+}));
 
-// ---- provenance strip --------------------------------------------------------
-// The strip's whole claim is "this is the artefact that answered". The service runs
-// more than one instance, so a SEPARATE /health call can describe a different process
-// than the one that produced the prediction on screen — which is how it came to read
-// "canary pending" beside a served answer. It is therefore drawn from the classify
-// response once there is one, and labelled as a probe before that.
+function showResult(html) {
+  out.innerHTML = html;
+  clearBtn.hidden = !html;
+  if (!html) LAST = null;
+}
+clearBtn.addEventListener('click', () => {
+  t.value = ''; showResult(''); count(); volume(); t.focus(); probeProvenance();
+});
+
 function renderProvenance(p, mode) {
   if (!p) { prov.innerHTML = '<span>service unreachable</span>'; return; }
   const cy = p.canary || {};
   const on = Object.entries(p.cpu_isa_flags || {}).filter(([, v]) => v).map(([k]) => k);
+  const cell = (k, v) => '<span>' + esc(k) + '<b>' + esc(v) + '</b></span>';
   const bits = [];
-  bits.push(mode === 'answer'
-    ? '<span class="src" title="Provenance of the instance that produced the result below.">answered this request:</span>'
-    : '<span class="src probe" title="From a /health probe. The service runs up to two instances, so the one that answers your request may be a different process — this line is replaced by that instance once you classify something.">instance this page reached:</span>');
-  if (cy.n_correct !== undefined && cy.n_correct !== null) {
-    bits.push(`<span><span class="dot"></span><b>canary</b> ${cy.n_correct}/${cy.n}</span>`);
-  } else if (cy.status) {
-    bits.push(`<span><b>canary</b> ${esc(cy.status)}</span>`);
-  }
-  if (p.precision) bits.push(`<span><b>precision</b> ${esc(String(p.precision).toUpperCase())}</span>`);
-  bits.push(`<span><b>cpu</b> ${on.length ? esc(on.join(' ')) : esc(p.machine || '')}</span>`);
-  if (p.onnxruntime_version) bits.push(`<span><b>ort</b> ${esc(p.onnxruntime_version)}</span>`);
-  if (p.region) bits.push(`<span><b>region</b> ${esc(p.region)}</span>`);
-  if (p.process) bits.push(`<span><b>instance</b> ${esc(p.process.slice(0, 6))}</span>`);
+  bits.push(cell('canary', (cy.n_correct !== undefined && cy.n_correct !== null)
+    ? cy.n_correct + '/' + cy.n : (cy.status || '—')));
+  if (p.precision) bits.push(cell('precision', String(p.precision).toUpperCase()));
+  bits.push(cell('cpu', on.length ? on.join(' ') : (p.machine || '—')));
+  if (p.onnxruntime_version) bits.push(cell('onnxruntime', p.onnxruntime_version));
+  if (p.region) bits.push(cell('region', p.region));
+  if (p.process) bits.push(cell('instance', p.process.slice(0, 6)));
+  bits.push('<span class="src">' + (mode === 'answer'
+    ? 'Provenance of the instance that produced the result below.'
+    : 'From a health probe. Up to two instances run, and the one that answers your request may be a different process.') + '</span>');
   prov.innerHTML = bits.join('');
 }
-
-// ---- below-the-fold context, from /facts (generated from the committed results) ----
-let FACTS = null;
-async function loadFacts() {
-  try { FACTS = await (await fetch('/facts')).json(); } catch (e) { return; }
-  const f = FACTS;
-  $('isacap').textContent = f.int8_collapse.caption;
-  $('isa').innerHTML = f.int8_collapse.rows.map(r => {
-    const vn = r.vnni === null ? 'ARM, AVX-512 not applicable'
-             : r.vnni ? 'has AVX-512 VNNI' : 'NO AVX-512 VNNI';
-    const bar = (v, cls) =>
-      `<div class="r"><div class="k">${cls === 'bad' ? 'INT8' : 'FP32'}</div>`
-      + `<div class="t"><div class="f ${cls}" style="width:${Math.max(0.4, v * 100)}%"></div></div>`
-      + `<div class="n${cls === 'bad' && v < 0.01 ? ' bad' : ''}">`
-      + `${v < 0.01 ? v.toFixed(6) : v.toFixed(4)}</div></div>`;
-    return `<div class="grp"><div class="gl">${esc(r.isa)} · ${esc(vn)}</div>`
-      + bar(r.fp32, 'ok') + bar(r.int8, 'bad') + `</div>`;
-  }).join('');
-
-  const e = f.escalation;
-  $('esc').innerHTML = [
-    [`${e.delta >= 0 ? '+' : ''}${e.delta.toFixed(6)}`, 'macro-F1 change'],
-    [`[${e.ci_low.toFixed(4)}, ${e.ci_high.toFixed(4)}]`, '95% CI'],
-    ['off', 'escalation'],
-  ].map(([v, k]) =>
-    `<div><div class="sv">${esc(v)}</div><div class="sk">${esc(k)}</div></div>`).join('');
-  $('esccap').textContent =
-    `Routing ${e.n_escalated} of ${e.n_rows} low-confidence rows to Sonnet 5 moved accuracy `
-    + `by an amount whose interval covers zero. The tier everyone assumes you need did not `
-    + `help on this task, so it is off. The router still runs: on the rows it flags the `
-    + `encoder is right ${(e.tier0_accuracy_on_escalated * 100).toFixed(0)}% of the time and `
-    + `Sonnet 5 ${(e.api_accuracy_on_escalated * 100).toFixed(0)}%. n = 1 seed, in-sample `
-    + `for the escalation rate.`;
-  $('context').hidden = false;
+async function probeProvenance() {
+  try { const h = await (await fetch('/health')).json();
+        renderProvenance(h.served_by, 'probe'); return h; }
+  catch (e) { renderProvenance(null); }
 }
-loadFacts();
 
-// Start the canary as the page loads, so the container warms while the visitor reads and
-// types rather than only when they press Classify. Silent unless a classify hits it cold.
 let warmStarted = false;
 async function warmInBackground() {
-  if (warmStarted) return;
-  warmStarted = true;
+  if (warmStarted) return; warmStarted = true;
   for (let i = 0; i < 40; i++) {
     let h;
     try { h = await (await fetch('/health?wait_for_canary=20')).json(); }
@@ -349,96 +340,294 @@ async function warmInBackground() {
   }
 }
 
-async function probeProvenance() {
-  try {
-    const h = await (await fetch('/health')).json();
-    renderProvenance(h.served_by, 'probe');
-    return h;
-  } catch (e) { renderProvenance(null); }
-}
-probeProvenance();
-warmInBackground();
+async function loadFacts() {
+  try { FACTS = await (await fetch('/facts')).json(); } catch (e) { return; }
+  const f = FACTS;
+  $('f-mf').textContent = f.tier0.macro_f1.toFixed(4);
+  $('s1lede').textContent = 'What the served encoder costs against ' + f.api_comparator.model
+    + ', at any volume you pick.';
+  $('s1note').innerHTML = 'The served figure is per request, amortising the device and using an '
+    + '<b>assumed</b> electricity tariff. The ' + esc(f.api_comparator.model) + ' figure is the '
+    + '<b>measured mean</b> over the 3,000-clause batch this project actually ran, not an '
+    + 'estimate for any particular clause: a per-clause Claude cost needs that model&rsquo;s own '
+    + 'token count, which is an API call this service does not make.';
+  $('c-apik').textContent = f.api_comparator.model;
+  volume();
 
-// ---- waking-up state ------------------------------------------------------------
-function waking(seconds, progress) {
-  const p = progress && progress.rows_total
-    ? ` — canary ${progress.rows_done}/${progress.rows_total} rows`
+  const x = f.int8_collapse.rows.find(r => r.vnni === false) || f.int8_collapse.rows[0];
+  $('s2lede').textContent = f.int8_collapse.caption;
+  $('s2bars').innerHTML = [['fp32', x.fp32, ''], ['int8', x.int8, 'bad']].map(function (r) {
+    const k = r[0], v = r[1], cls = r[2];
+    return '<div class="br"><span>' + k + '</span><span class="t"><span class="f ' + cls
+      + '" style="width:' + Math.max(0.4, v * 100) + '%"></span></span><span class="v ' + cls
+      + '">' + (v < 0.01 ? v.toFixed(6) : v.toFixed(4)) + '</span></div>';
+  }).join('') + '<p class="note" style="margin-top:8px">' + esc(x.isa) + ', '
+    + (x.vnni === false ? 'no AVX-512 VNNI' : 'AVX-512 not applicable')
+    + '. Same weights, same 3,000 rows.</p>';
+
+  $('mx').innerHTML = '<table class="mx"><thead><tr><th>host</th><th>ISA</th><th>metric</th>'
+    + '<th>FP32</th><th>INT8</th></tr></thead><tbody>'
+    + f.platforms.rows.map(function (r) {
+        const isa = Object.entries(r.isa).filter(function (e) { return e[1]; })
+          .map(function (e) { return e[0]; }).join(' ') || 'n/a';
+        const fmt = function (v) {
+          return (v === null || v === undefined) ? '—' : (v < 0.01 ? v.toFixed(6) : v.toFixed(4));
+        };
+        const bad = r.int8 !== null && r.int8 !== undefined && r.int8 < 0.5;
+        return '<tr><td>' + esc(r.host)
+          + (r.note ? '<div class="hostnote">' + esc(r.note) + '</div>' : '')
+          + '</td><td class="m">' + esc(isa) + '</td><td class="m">' + esc(r.metric)
+          + '</td><td>' + fmt(r.fp32) + '</td><td class="' + (bad ? 'bad' : '') + '">'
+          + fmt(r.int8) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+
+  const e = f.escalation;
+  $('s3stats').innerHTML = [
+    [(e.delta >= 0 ? '+' : '') + e.delta.toFixed(6), 'macro-F1 change'],
+    ['[' + e.ci_low.toFixed(4) + ', ' + e.ci_high.toFixed(4) + ']', '95% CI'],
+    ['off', 'escalation']
+  ].map(function (r) {
+    return '<div><div class="v">' + esc(r[0]) + '</div><div class="k">' + esc(r[1]) + '</div></div>';
+  }).join('');
+  $('s3note').innerHTML = 'Routing ' + e.n_escalated + ' of ' + nf(e.n_rows)
+    + ' low-confidence rows to ' + esc(f.api_comparator.model) + ' moved accuracy by an amount '
+    + 'whose interval covers zero, so it is off. The router still runs: on the rows it flags '
+    + 'the encoder is right ' + (e.tier0_accuracy_on_escalated * 100).toFixed(0)
+    + '% of the time and ' + esc(f.api_comparator.model) + ' '
+    + (e.api_accuracy_on_escalated * 100).toFixed(0) + '%. n = 1 seed, in-sample for the '
+    + 'escalation rate.';
+}
+
+/* LOG scale: the range spans four orders of magnitude and a linear slider would spend
+   most of its travel above a million. */
+function sliderToVolume(pos) {
+  const lo = Math.log10(1000), hi = Math.log10(10000000);
+  return Math.round(Math.pow(10, lo + (pos / 1000) * (hi - lo)) / 100) * 100;
+}
+function volume() {
+  if (!FACTS) return;
+  const v = sliderToVolume(+$('vol').value);
+  const api = FACTS.api_comparator.usd_per_clause;
+  const here = (LAST && LAST.cost_comparison) ? LAST.cost_comparison.served_usd : SERVED_FALLBACK;
+  $('volv').textContent = nf(v) + ' clauses / month';
+  $('vol').setAttribute('aria-valuetext', nf(v) + ' clauses per month');
+  $('c-here').textContent = money(here * v);
+  $('c-api').textContent = money(api * v);
+}
+$('vol').addEventListener('input', volume);
+
+const PW = 660, PH = 232, PL = 40, PR = 12, PT = 16, PB = 26, FLOOR = 1e-6;
+const lg = v => Math.log10(Math.max(v, FLOOR));
+const ppx = i => PL + (i / 99) * (PW - PL - PR);
+const ppy = v => PT + ((lg(v) - lg(1)) / (lg(FLOOR) - lg(1))) * (PH - PT - PB);
+const curveOf = p => p.map((v, i) => ppx(i).toFixed(1) + ',' + ppy(v).toFixed(1)).join(' ');
+
+function plate(d) {
+  const p = (d.distribution || []).slice().sort((a, b) => b - a);
+  const doubt = !!d.needs_review;
+  const hue = doubt ? 'var(--vermilion)' : 'var(--pine)';
+  const grid = [1, 1e-2, 1e-4, 1e-6].map(function (v) {
+    return '<line class="pl-grid" x1="' + PL + '" y1="' + ppy(v).toFixed(1) + '" x2="'
+      + (PW - PR) + '" y2="' + ppy(v).toFixed(1) + '"/><text class="pl-tick" x="' + (PL - 6)
+      + '" y="' + (ppy(v) + 3).toFixed(1) + '" text-anchor="end">'
+      + (v === 1 ? '1' : '1e' + Math.round(Math.log10(v))) + '</text>';
+  }).join('');
+  const pts = curveOf(p);
+  const area = PL + ',' + (PH - PB) + ' ' + pts + ' ' + (PW - PR) + ',' + (PH - PB);
+  const dots = p.slice(0, 3).map(function (v, i) {
+    return '<circle class="pl-dot" cx="' + ppx(i).toFixed(1) + '" cy="' + ppy(v).toFixed(1) + '" r="2.8"/>';
+  }).join('');
+  const key = p.slice(0, 3).map(function (v, i) {
+    const l = (d.top_3 && d.top_3[i]) ? d.top_3[i].label : '';
+    return '<text class="pl-lab" x="' + (PW - PR) + '" y="' + (PT + 12 + i * 14)
+      + '" text-anchor="end">' + (i + 1) + '  ' + esc(l) + '  ' + (v * 100).toFixed(1) + '%</text>';
+  }).join('');
+  const reading = doubt
+    ? 'Probability is spread across the label space. That shape is what doubt looks like.'
+    : 'One class, orders of magnitude clear of the rest. That shape is what certainty looks like.';
+  // WHAT THE FLAG MEANS OPERATIONALLY. Server-supplied where available; the literal here is
+  // the fallback and ships with the page, so the meaning is never missing from the HTML.
+  const meaning = doubt
+    ? '<p class="read meaning">' + esc(d.needs_review_meaning
+        || 'low confidence — human review recommended')
+      + '. The answer above still stands and is still returned; a person should look at it '
+      + 'before anything acts on it. On rows like this the model is right about a third of '
+      + 'the time instead of the usual seven in eight.</p>'
     : '';
-  showResult(
-    `<div class="waking">
-       <h3>Waking up the container</h3>
-       This service scales to zero, so the first request after an idle period has to start
-       it, load a 715 MB model and re-run the 200-row startup check before it will answer.
-       <b>About ${seconds} seconds.</b> It will not return a prediction until that check
-       passes<span id="wprog">${p}</span>.
-       <div class="track"><div class="fill" id="wfill"></div></div>
-     </div>`);
+  const alt = doubt
+    ? 'The curve falls shallowly with a long tail, indicating probability spread across many classes.'
+    : 'The curve drops sharply after rank one, indicating a single dominant class.';
+  return '<div class="plate"><div class="verdict"><h2>' + esc(d.label) + '</h2>'
+    + '<div class="state ' + (doubt ? 'doubt' : 'clear') + '">'
+    + (doubt ? 'needs review' : 'cleared') + '</div></div>'
+    + '<svg viewBox="0 0 ' + PW + ' ' + PH + '" role="img" aria-label="All 100 class '
+    + 'probabilities, ranked highest to lowest on a logarithmic scale. ' + alt + '">'
+    + grid + '<polygon class="pl-area" id="pl-area" fill="' + hue + '" points="' + area + '"/>'
+    + '<polyline class="pl-curve" id="pl-curve" points="' + pts + '"/>' + dots + key
+    + '<text class="pl-tick lit" x="' + PL + '" y="' + (PH - 8) + '">rank 1</text>'
+    + '<text class="pl-tick lit" x="' + (PW - PR) + '" y="' + (PH - 8)
+    + '" text-anchor="end">100</text></svg>'
+    + '<p class="read">' + reading + '</p>' + meaning + '</div>';
 }
 
+/* The ONE piece of motion: the curve morphs to the new shape when you classify, because
+   that is what changed. Same 100 points, so it interpolates directly in log space. */
+function morphCurve(from, to) {
+  if (reduced || !from || from.length !== to.length) return;
+  const cu = $('pl-curve'), ar = $('pl-area');
+  if (!cu || !ar) return;
+  const T = 240, t0 = performance.now();
+  const step = function (now) {
+    const k = Math.min(1, (now - t0) / T), e = 1 - Math.pow(1 - k, 3);
+    const mid = to.map(function (v, i) {
+      return Math.pow(10, lg(from[i]) + (lg(v) - lg(from[i])) * e);
+    });
+    const pts = curveOf(mid);
+    cu.setAttribute('points', pts);
+    ar.setAttribute('points', PL + ',' + (PH - PB) + ' ' + pts + ' ' + (PW - PR) + ',' + (PH - PB));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function ranks(d) {
+  const top = d.top_3 || [];
+  return '<div class="ranks">' + top.map(function (x, i) {
+      return '<div class="rk"><span class="n">' + (i + 1) + '</span><span class="l">'
+        + esc(x.label) + '</span><span class="p">' + (x.score * 100).toFixed(1) + ' %</span></div>';
+    }).join('')
+    + '<div class="disclose"><button class="tog" id="alltog" aria-expanded="false" '
+    + 'aria-controls="allbody"><span class="caret">&rsaquo;</span><span>all 100 classes</span>'
+    + '</button><input class="filter" id="allf" type="search" placeholder="filter&hellip;" '
+    + 'aria-label="Filter classes by name"></div>'
+    + '<div class="panel-body" id="allbody"><div><div class="all" id="alllist"></div></div></div></div>';
+}
+function renderAll(filter) {
+  if (!LAST || !LAST.distribution || !FACTS || !FACTS.labels) return;
+  const labels = FACTS.labels;
+  const rows = LAST.distribution.map(function (p, i) { return {p: p, i: i}; })
+    .sort(function (a, b) { return b.p - a.p; })
+    .map(function (r, k) { return {p: r.p, rank: k + 1, label: labels[r.i] || ('class ' + r.i)}; });
+  const q = (filter || '').trim().toLowerCase();
+  const shown = q ? rows.filter(function (r) { return r.label.toLowerCase().indexOf(q) !== -1; }) : rows;
+  $('alllist').innerHTML = shown.length
+    ? shown.map(function (r) {
+        return '<div class="rk' + (r.rank > 3 ? ' dim' : '') + '"><span class="n">' + r.rank
+          + '</span><span class="l">' + esc(r.label) + '</span><span class="p">'
+          + (r.p < 0.0001 ? r.p.toExponential(1) : (r.p * 100).toFixed(2) + ' %') + '</span></div>';
+      }).join('')
+    : '<div class="rk"><span class="n"></span><span class="l">no class matches &ldquo;'
+      + esc(q) + '&rdquo;</span><span class="p"></span></div>';
+}
+function wireDisclosure(togId, bodyId, onOpen) {
+  const b = $(togId), body = $(bodyId);
+  if (!b || !body) return;
+  b.addEventListener('click', function () {
+    const open = b.getAttribute('aria-expanded') === 'true';
+    b.setAttribute('aria-expanded', String(!open));
+    body.classList.toggle('open', !open);
+    if (!open && onOpen) onOpen();
+  });
+}
+
+function facts(d, roundTripMs) {
+  const thr = (d.router || {}).threshold, m = Number(d.margin);
+  const inf = d.timing_ms && d.timing_ms.tier0_inference;
+  const cc = d.cost_comparison;
+  const md = FACTS && FACTS.margin_distribution;
+  let pct = null;
+  if (md) { pct = 0; while (pct < 100 && md.percentiles[pct] < m) pct++; }
+  const row = function (k, v, said) {
+    return '<div class="fx"><dt>' + esc(k) + '</dt><dd>' + v + '</dd><dd class="said">'
+      + (said || '') + '</dd></div>';
+  };
+  const extra = (inf !== undefined && inf !== null) ? roundTripMs - inf : 0;
+  const wall = roundTripMs >= 10000 ? (roundTripMs / 1000).toFixed(0) + ' s'
+                                    : Math.round(roundTripMs) + ' ms';
+  return '<dl class="facts">'
+    + row('margin', m.toFixed(4), thr === undefined ? '' :
+        (m < thr ? 'below the ' + thr.toFixed(4) + ' threshold, so it is flagged'
+                 : 'above the ' + thr.toFixed(4) + ' threshold, so it is not'))
+    + (pct !== null ? row('percentile', (100 - pct) + ' %',
+        'of test clauses are answered more confidently than this one') : '')
+    + ((inf !== undefined && inf !== null)
+        ? row('inference', (inf < 1 ? inf.toFixed(2) : Math.round(inf)) + ' ms',
+              extra > 250 ? wall + (wokeUp ? ' including container wake-up' : ' round trip') : '')
+        : '')
+    + (cc ? row('this request', usd(cc.served_usd, 8),
+        (cc.ratio ? nf(Math.round(cc.ratio)) : '—') + '&times; under '
+        + esc(cc.api_model || 'the API')) : '')
+    + '</dl>';
+}
+
+function render(d, ms) {
+  const prev = (LAST && LAST.distribution)
+    ? LAST.distribution.slice().sort(function (a, b) { return b - a; }) : null;
+  LAST = d;
+  showResult(plate(d) + ranks(d) + facts(d, ms));
+  wireDisclosure('alltog', 'allbody', function () { renderAll($('allf').value); });
+  $('allf').addEventListener('input', function (e) { renderAll(e.target.value); });
+  morphCurve(prev, d.distribution.slice().sort(function (a, b) { return b - a; }));
+  volume();
+}
+
+function waking(seconds) {
+  showResult('<div class="waking"><h3>Waking up the container</h3><p>This service scales to '
+    + 'zero, so the first request after an idle period has to start it, load a 715 MB model '
+    + 'and finish a 200-row startup check before it will answer. About ' + seconds
+    + ' seconds. No prediction is returned until that check passes<span id="wprog"></span>.'
+    + '</p><div class="track"><div class="fill" id="wfill"></div></div></div>');
+}
 async function waitForWarm(seconds) {
-  waking(seconds, null);
+  waking(seconds);
   const t0 = Date.now();
   for (let i = 0; i < 400; i++) {
-    // LONG POLL, not a sleep-and-poll. Cloud Run only allocates CPU while a request is
-    // in flight, so holding this request open is what lets the canary thread actually
-    // run. Polling with gaps starves it.
     let h;
     try { h = await (await fetch('/health?wait_for_canary=20')).json(); }
     catch (e) { await new Promise(r => setTimeout(r, 1000)); continue; }
-    const cy = h.canary || {};
-    const el = Math.round((Date.now() - t0) / 1000);
+    const cy = h.canary || {}, el = Math.round((Date.now() - t0) / 1000);
     const fill = $('wfill'), wp = $('wprog');
     if (fill) fill.style.width = Math.min(97, 100 * el / seconds) + '%';
-    if (wp && cy.progress) wp.textContent = ` — canary ${cy.progress.rows_done}/${cy.progress.rows_total} rows`;
-    if (cy.status === 'passed' || cy.status === 'skipped') {
-      renderProvenance(h.served_by, 'probe');
-      return true;
-    }
+    if (wp && cy.progress) wp.textContent = ' — ' + cy.progress.rows_done + '/' + cy.progress.rows_total + ' rows';
+    if (cy.status === 'passed' || cy.status === 'skipped') { renderProvenance(h.served_by, 'probe'); return true; }
     if (cy.status === 'failed') {
-      showResult(`<div class="err"><b>This host is not qualified.</b> The startup
-        canary failed, so the service refuses to return predictions. ${esc(cy.error || '')}</div>`);
+      showResult('<div class="err"><b>This host is not qualified.</b> The startup check failed, '
+        + 'so the service refuses to return predictions. ' + esc(cy.error || '') + '</div>');
       return false;
     }
   }
   return false;
 }
 
-// ---- classify -------------------------------------------------------------------
 async function classify() {
   const text = t.value;
   if (!text || text.length > MAX || busy) return;
-  busy = true;
-  wokeUp = false;
-  go.innerHTML = '<span class="spinner"></span>Classifying';
-  count();
-  showResult('');
+  busy = true; wokeUp = false;
+  go.innerHTML = '<span class="spin"></span>Classifying'; count();
   const t0 = performance.now();
   try {
-    // RETRY IN A LOOP, NOT ONCE. The service runs up to two instances and a request is
-    // routed to whichever is free, so the retry after a wake-up can land on a DIFFERENT
-    // instance that is itself still warming. Retrying once fell through to the error
-    // path and showed the visitor a raw 503 body.
-    const post = () => fetch('/classify', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text})
-    });
+    const post = function () {
+      return fetch('/classify', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: text})
+      });
+    };
     let r = await post();
-    for (let attempt = 0; attempt < 5 && r.status === 503; attempt++) {
+    for (let a = 0; a < 5 && r.status === 503; a++) {
       const d = (await r.json()).detail || {};
       if (d.retryable === false) {
-        showResult(`<div class="err"><b>This host is not qualified.</b>
-          ${esc(d.message || '')}</div>`);
+        showResult('<div class="err"><b>This host is not qualified.</b> ' + esc(d.message || '') + '</div>');
         return;
       }
-      go.innerHTML = '<span class="spinner"></span>Waking up';
-      wokeUp = true;          // attribute the wall time to the wake-up, not to the model
+      go.innerHTML = '<span class="spin"></span>Waking up';
+      wokeUp = true;
       if (!await waitForWarm(d.estimated_wait_seconds || 90)) return;
       r = await post();
     }
     if (r.status === 503) {
-      showResult(`<div class="err"><b>Still warming up.</b> Every instance this request
-        reached is still running its startup check, which has to pass before any
-        prediction is returned. Try again in a moment.</div>`);
+      showResult('<div class="err"><b>Still warming up.</b> Every instance this request reached '
+        + 'is still running its startup check, which has to pass before any prediction is '
+        + 'returned. Try again in a moment.</div>');
       return;
     }
     if (!r.ok) {
@@ -446,10 +635,8 @@ async function classify() {
       throw new Error('HTTP ' + r.status + (detail ? ' — ' + detail : ''));
     }
     const body = await r.json();
-    // Redraw the strip from THE ANSWER, so it describes the process that produced it.
     if (body.served_by) renderProvenance(body.served_by, 'answer');
     render(body, Math.round(performance.now() - t0));
-    renderCharts(body);
   } catch (e) {
     showResult('<div class="err">' + esc(e.message) + '</div>');
   } finally {
@@ -457,228 +644,15 @@ async function classify() {
   }
 }
 go.addEventListener('click', classify);
-clearBtn.addEventListener('click', clearAll);
-t.addEventListener('keydown', e => {
-  // Cmd+Enter on macOS, Ctrl+Enter elsewhere. Submits from inside the textarea, where
-  // plain Enter has to keep inserting newlines because clauses run to several lines.
+t.addEventListener('keydown', function (e) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); classify(); }
 });
 
-// ---------------------------------------------------------------- per-request charts
-// Drawn from THIS response. Inline SVG, no plotting library, no server-side rendering.
-const SVGNS = 640;                       // viewBox width; height per chart below
-
-function chartDistribution(d) {
-  const p = (d.distribution || []).slice().sort((a, b) => b - a);
-  if (!p.length) return '';
-  const W = SVGNS, H = 150, L = 42, R = 8, T = 10, B = 24;
-  const FLOOR = 1e-6;                    // log floor; anything under is drawn at the axis
-  const lg = v => Math.log10(Math.max(v, FLOOR));
-  const y0 = lg(1), y1 = lg(FLOOR);
-  const px = i => L + (i / (p.length - 1)) * (W - L - R);
-  const py = v => T + ((lg(v) - y0) / (y1 - y0)) * (H - T - B);
-  const pts = p.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
-  const ticks = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6].map(v =>
-    `<line class="ax" x1="${L}" y1="${py(v)}" x2="${W - R}" y2="${py(v)}" opacity=".45"/>`
-    + `<text class="axt" x="${L - 5}" y="${py(v) + 3}" text-anchor="end">`
-    + `${v === 1 ? '1' : '1e' + Math.round(Math.log10(v))}</text>`).join('');
-  // Ranks 1-3 sit within a few pixels of each other on x, so labels placed at the points
-  // overlap. Dots stay on the curve and the names go in a key at the top right.
-  const dots = p.slice(0, 3).map((v, i) =>
-    `<circle class="dot" cx="${px(i)}" cy="${py(v)}" r="3"/>`).join('');
-  const key = p.slice(0, 3).map((v, i) => {
-    const lbl = (d.top_3 && d.top_3[i]) ? d.top_3[i].label : '';
-    return `<text class="dotl" x="${W - R}" y="${T + 10 + i * 13}" text-anchor="end">`
-      + `${i + 1}. ${esc(lbl)} ${(v * 100).toFixed(1)}%</text>`;
-  }).join('');
-  const marks = dots + key;
-  const flat = p[0] < 0.8;
-  return `<div class="chart">
-    <h3>All 100 classes, ranked</h3>
-    <p class="cap">${flat
-      ? 'A shallow drop and a fat tail: probability is spread across many classes, which is '
-        + 'what being unsure looks like.'
-      : 'A spike at rank 1 and everything else orders of magnitude below it: that is what '
-        + 'a confident answer looks like.'}</p>
-    <svg viewBox="0 0 ${W} ${H}" role="img"
-         aria-label="Sorted class probabilities, log scale, rank 1 to 100.">
-      ${ticks}
-      <polyline class="ser" points="${pts}"/>
-      ${marks}
-      <text class="axt" x="${L}" y="${H - 8}">rank 1</text>
-      <text class="axt" x="${W - R}" y="${H - 8}" text-anchor="end">100</text>
-      <text class="axt" x="${L - 5}" y="${T - 2}" text-anchor="end">p</text>
-    </svg></div>`;
-}
-
-function chartMargin(d) {
-  const md = FACTS && FACTS.margin_distribution;
-  if (!md) return '';
-  const m = Number(d.margin), thr = md.threshold;
-  const W = SVGNS, H = 128, L = 10, R = 10, T = 30, B = 26;
-  const x = v => L + v * (W - L - R);
-  const maxc = Math.max(...md.counts);
-  const bw = (W - L - R) / md.counts.length;
-  // sqrt heights: 2406 of 3000 rows land in one bin and a linear axis erases the tail.
-  const bars = md.counts.map((c, i) => {
-    const h = (Math.sqrt(c) / Math.sqrt(maxc)) * (H - T - B);
-    return `<rect class="hb" x="${(L + i * bw).toFixed(1)}" y="${(H - B - h).toFixed(1)}" `
-      + `width="${(bw - 0.6).toFixed(1)}" height="${h.toFixed(1)}"/>`;
-  }).join('');
-  // percentile of this clause within test_3000
-  let pct = 0;
-  while (pct < 100 && md.percentiles[pct] < m) pct++;
-  return `<div class="chart">
-    <h3>Where this clause sits</h3>
-    <p class="cap">Top-two margin against the ${thr.toFixed(4)} threshold, over the
-      ${md.n.toLocaleString('en-US')} clauses of the test set. Bar heights are sqrt-scaled;
-      most clauses sit hard against 1.0.</p>
-    <svg viewBox="0 0 ${W} ${H}" role="img"
-         aria-label="This clause's margin marked on the test-set margin distribution.">
-      ${bars}
-      <line class="ax" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/>
-      <line class="thr" x1="${x(thr)}" y1="${T - 8}" x2="${x(thr)}" y2="${H - B}"/>
-      <text class="thrt" x="${x(thr)}" y="${T - 12}" text-anchor="middle">threshold
-        ${thr.toFixed(3)}</text>
-      <line class="me" x1="${x(m)}" y1="${T + 2}" x2="${x(m)}" y2="${H - B + 4}"/>
-      <text class="met" x="${x(m)}" y="${H - B + 17}"
-            text-anchor="${m > 0.86 ? 'end' : m < 0.14 ? 'start' : 'middle'}">this clause
-        ${m.toFixed(4)}</text>
-      <text class="axt" x="${L}" y="${H - B + 12}">0</text>
-      <text class="axt" x="${W - R}" y="${H - B + 12}" text-anchor="end">1</text>
-    </svg>
-    <p class="cap">About ${100 - pct}% of test clauses are answered more confidently than
-      this one${m >= thr ? ', and it still clears the threshold' : ''}. Below the line a
-      clause is flagged; above it, it is not.</p></div>`;
-}
-
-function chartCost(d) {
-  const cc = d.cost_comparison;
-  if (!cc || !cc.served_usd) return '';
-  const W = SVGNS, H = 92, L = 8, R = 8, T = 14;
-  const lo = 1e-7, hi = 1e-2;
-  const frac = v => (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo));
-  const bw = v => Math.max(3, frac(v) * (W - L - R));
-  const bar = (v, y, cls, name) =>
-    `<rect class="cb ${cls}" x="${L}" y="${y}" width="${bw(v).toFixed(1)}" height="17" rx="2"/>`
-    + `<text class="cbl" x="${L + bw(v) + 7}" y="${y + 13}">${esc(name)} ${usd(v, 8)}</text>`;
-  return `<div class="chart">
-    <h3>What this request cost</h3>
-    <p class="cap">Log scale. ${cc.ratio ? Math.round(cc.ratio).toLocaleString('en-US') : '—'}×
-      apart.</p>
-    <svg viewBox="0 0 ${W} ${H}" role="img"
-         aria-label="Cost of this request against Sonnet 5 per clause, log scale.">
-      ${bar(cc.served_usd, T, '', 'served here')}
-      ${bar(cc.api_usd, T + 30, 'api', esc(cc.api_model || 'Sonnet 5'))}
-      <text class="axt" x="${L}" y="${H - 6}">1e-7</text>
-      <text class="axt" x="${W - R}" y="${H - 6}" text-anchor="end">1e-2 USD / clause</text>
-    </svg>
-    <p class="cap">The served figure is this request's own. The
-      ${esc(cc.api_model || 'Sonnet 5')} figure is the <b>measured mean</b> over the
-      3,000-clause batch this project ran, not an estimate for this text: a per-clause
-      Claude cost needs that model's own token count, which is an API call this service
-      does not make.</p></div>`;
-}
-
-function renderCharts(d) {
-  $('charts').innerHTML = d
-    ? chartDistribution(d) + chartMargin(d) + chartCost(d)
-    : '';
-}
-
-// THE MODEL'S WORK, FROM THE SERVER, not the browser's round trip. A cold request waits
-// for the container to wake and then infers in milliseconds; showing only the round trip
-// reads as though the model took a minute. The wall figure is shown alongside ONLY when it
-// is meaningfully larger, and is attributed to the cause that actually explains it.
-function timing(d, roundTripMs) {
-  const inf = d.timing_ms && d.timing_ms.tier0_inference;
-  if (inf === undefined || inf === null) {
-    return `<span>${roundTripMs} ms round trip</span>`;   // older server, no timing block
-  }
-  const shown = inf < 1 ? inf.toFixed(2) : Math.round(inf);
-  let out = `<span><b>${shown} ms</b> inference</span>`;
-  const extra = roundTripMs - inf;
-  if (extra > 250) {
-    const wall = roundTripMs >= 10000
-      ? (roundTripMs / 1000).toFixed(0) + ' s'
-      : Math.round(roundTripMs) + ' ms';
-    out += `<span>${wall} ${wokeUp ? 'including container wake-up' : 'round trip'}</span>`;
-  }
-  return out;
-}
-
-function render(d, ms) {
-  const top = d.top_3 || [];
-  const max = top.length ? Math.max(...top.map(x => x.score)) : 1;
-  const rows = top.map(x => {
-    const w = Math.max(2, Math.round((x.score / max) * 100));
-    return `<tr><td>${esc(x.label)}</td>
-            <td class="b"><div class="bar" style="width:${w}%"></div></td>
-            <td class="n">${(x.score * 100).toFixed(1)}%</td></tr>`;
-  }).join('');
-  const flag = d.needs_review
-    ? `<div class="flag"><b>Needs review</b> —
-       ${esc(d.needs_review_meaning || 'low confidence — human review recommended')}</div>`
-    : '';
-
-  // WHAT HAPPENED, in words, against the number the router actually compared.
-  const thr = (d.router || {}).threshold;
-  const m = Number(d.margin);
-  let why = '';
-  if (thr !== undefined) {
-    why = d.needs_review
-      ? `The top two classes are ${m.toFixed(4)} apart, below the ${thr.toFixed(4)} `
-        + `threshold calibrated on a held-out split, so the router flagged it. `
-        + `Operationally that means the answer above still stands and is still returned, `
-        + `and a person should look at it before anything acts on it. On rows like this `
-        + `the model is right about a third of the time instead of the usual seven in eight.`
-      : `The top two classes are ${m.toFixed(4)} apart, above the ${thr.toFixed(4)} `
-        + `threshold calibrated on a held-out split, so the router let it through `
-        + `unflagged. No second opinion was asked for and none was needed.`;
-  }
-
-  // COST OF THIS REQUEST, against the measured API comparator.
-  const cc = d.cost_comparison;
-  let cost = '';
-  if (cc && cc.served_usd) {
-    const ratio = cc.ratio ? Math.round(cc.ratio).toLocaleString('en-US') : '—';
-    cost = `<div class="cost">
-      <div class="lbl">What this clause cost</div>
-      <table>
-        <tr><td>served here, this request</td>
-            <td class="v big">${usd(cc.served_usd, 8)}</td></tr>
-        <tr><td>${esc(cc.api_model || 'Sonnet 5')} zero-shot, per clause</td>
-            <td class="v">${usd(cc.api_usd, 8)}</td></tr>
-        <tr><td>at ${cc.monthly_volume.toLocaleString('en-US')} clauses a month</td>
-            <td class="v"><b>${money(cc.served_monthly_usd)}</b> vs
-                ${money(cc.api_monthly_usd)}</td></tr>
-      </table>
-      <div class="note"><b>${ratio}× cheaper per clause.</b>
-        The served figure is this request's own. The
-        ${esc(cc.api_model || 'Sonnet 5')} figure is the <b>measured mean</b> over the
-        3,000-clause batch this project actually ran, not an estimate for this text: a
-        per-clause Claude cost needs that model's own token count, which is an API call
-        this service does not make.${cc.tariff_is_assumed
-          ? ' The local figure amortises the device and uses an <b>assumed</b> electricity tariff.' : ''}</div>
-    </div>`;
-  }
-  showResult(
-    `<div class="card">
-       <div class="lbl">Predicted provision type</div>
-       <div class="answer">${esc(d.label)}</div>
-       <div class="meta-row">
-         <span><b>${esc(d.tier_used)}</b></span>
-         ${timing(d, ms)}
-         <span>margin ${Number(d.margin).toFixed(4)}</span>
-       </div>
-       ${flag}
-       ${why ? `<div class="why">${esc(why)}</div>` : ''}
-       ${rows ? `<div class="lbl" style="margin-top:20px">Top 3</div>
-                 <table>${rows}</table>` : ''}
-       ${cost}
-     </div>`);
-}
+wireDisclosure('mxtog', 'mxbody');
 count();
+probeProvenance();
+warmInBackground();
+loadFacts();
 </script>
 </body>
 </html>
