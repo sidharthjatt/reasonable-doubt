@@ -33,6 +33,8 @@
                 padding-top:13px; border-top:1px solid var(--line);
                 color:var(--faint); font-size:.78rem; font-variant-numeric:tabular-nums }
   .provenance b { color:var(--muted); font-weight:600 }
+  .provenance .src { color:var(--muted); font-weight:600 }
+  .provenance .src.probe { font-style:italic; font-weight:400 }
   .dot { display:inline-block; width:6px; height:6px; border-radius:50%;
          background:var(--ok); margin-right:5px; vertical-align:1px }
 
@@ -106,7 +108,7 @@
   <header>
     <h1>Reasonable Doubt</h1>
     <p class="sub">Contract clause classification into 100 LEDGAR provision types.</p>
-    <div class="provenance" id="prov"><span>checking service…</span></div>
+    <div class="provenance" id="prov"><span>checking…</span></div>
   </header>
 
   <div class="chips">
@@ -156,6 +158,8 @@ function clearAll() {
   showResult('');
   count();
   t.focus();
+  // The strip described the answer that is now gone, so it goes back to being a probe.
+  probeProvenance();
 }
 const esc = s => String(s).replace(/[&<>"']/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -179,28 +183,41 @@ document.querySelectorAll('.chip').forEach(b =>
     t.focus();
   }));
 
-// ---- provenance strip: real numbers off /health, not decoration -----------------
-async function provenance() {
+// ---- provenance strip --------------------------------------------------------
+// The strip's whole claim is "this is the artefact that answered". The service runs
+// more than one instance, so a SEPARATE /health call can describe a different process
+// than the one that produced the prediction on screen — which is how it came to read
+// "canary pending" beside a served answer. It is therefore drawn from the classify
+// response once there is one, and labelled as a probe before that.
+function renderProvenance(p, mode) {
+  if (!p) { prov.innerHTML = '<span>service unreachable</span>'; return; }
+  const cy = p.canary || {};
+  const on = Object.entries(p.cpu_isa_flags || {}).filter(([, v]) => v).map(([k]) => k);
+  const bits = [];
+  bits.push(mode === 'answer'
+    ? '<span class="src" title="Provenance of the instance that produced the result below.">answered this request:</span>'
+    : '<span class="src probe" title="From a /health probe. The service runs up to two instances, so the one that answers your request may be a different process — this line is replaced by that instance once you classify something.">instance this page reached:</span>');
+  if (cy.n_correct !== undefined && cy.n_correct !== null) {
+    bits.push(`<span><span class="dot"></span><b>canary</b> ${cy.n_correct}/${cy.n}</span>`);
+  } else if (cy.status) {
+    bits.push(`<span><b>canary</b> ${esc(cy.status)}</span>`);
+  }
+  if (p.precision) bits.push(`<span><b>precision</b> ${esc(String(p.precision).toUpperCase())}</span>`);
+  bits.push(`<span><b>cpu</b> ${on.length ? esc(on.join(' ')) : esc(p.machine || '')}</span>`);
+  if (p.onnxruntime_version) bits.push(`<span><b>ort</b> ${esc(p.onnxruntime_version)}</span>`);
+  if (p.region) bits.push(`<span><b>region</b> ${esc(p.region)}</span>`);
+  if (p.process) bits.push(`<span><b>instance</b> ${esc(p.process.slice(0, 6))}</span>`);
+  prov.innerHTML = bits.join('');
+}
+
+async function probeProvenance() {
   try {
     const h = await (await fetch('/health')).json();
-    const cy = h.canary || {}, rt = h.runtime || {};
-    const isa = rt.cpu_isa_flags || {};
-    const on = Object.entries(isa).filter(([, v]) => v).map(([k]) => k);
-    const bits = [];
-    if (cy.status === 'passed' || cy.n_correct !== undefined) {
-      bits.push(`<span><span class="dot"></span><b>canary</b> ${cy.n_correct}/${cy.n}</span>`);
-    } else if (cy.status) {
-      bits.push(`<span><b>canary</b> ${esc(cy.status)}</span>`);
-    }
-    if (h.tier0 && h.tier0.precision) bits.push(`<span><b>precision</b> ${esc(h.tier0.precision.toUpperCase())}</span>`);
-    bits.push(`<span><b>cpu</b> ${on.length ? esc(on.join(' ')) : esc(rt.machine || 'arm64')}</span>`);
-    if (rt.onnxruntime_version) bits.push(`<span><b>ort</b> ${esc(rt.onnxruntime_version)}</span>`);
-    if (rt.region) bits.push(`<span><b>region</b> ${esc(rt.region)}</span>`);
-    prov.innerHTML = bits.join('');
+    renderProvenance(h.served_by, 'probe');
     return h;
-  } catch (e) { prov.innerHTML = '<span>service unreachable</span>'; }
+  } catch (e) { renderProvenance(null); }
 }
-provenance();
+probeProvenance();
 
 // ---- waking-up state ------------------------------------------------------------
 function waking(seconds, progress) {
@@ -233,7 +250,10 @@ async function waitForWarm(seconds) {
     const fill = $('wfill'), wp = $('wprog');
     if (fill) fill.style.width = Math.min(97, 100 * el / seconds) + '%';
     if (wp && cy.progress) wp.textContent = ` — canary ${cy.progress.rows_done}/${cy.progress.rows_total} rows`;
-    if (cy.status === 'passed' || cy.status === 'skipped') { provenance(); return true; }
+    if (cy.status === 'passed' || cy.status === 'skipped') {
+      renderProvenance(h.served_by, 'probe');
+      return true;
+    }
     if (cy.status === 'failed') {
       showResult(`<div class="err"><b>This host is not qualified.</b> The startup
         canary failed, so the service refuses to return predictions. ${esc(cy.error || '')}</div>`);
@@ -275,7 +295,10 @@ async function classify() {
       let detail = ''; try { detail = JSON.stringify(await r.json()); } catch (e) {}
       throw new Error('HTTP ' + r.status + (detail ? ' — ' + detail : ''));
     }
-    render(await r.json(), Math.round(performance.now() - t0));
+    const body = await r.json();
+    // Redraw the strip from THE ANSWER, so it describes the process that produced it.
+    if (body.served_by) renderProvenance(body.served_by, 'answer');
+    render(body, Math.round(performance.now() - t0));
   } catch (e) {
     showResult('<div class="err">' + esc(e.message) + '</div>');
   } finally {

@@ -1477,3 +1477,65 @@ def test_health_accepts_wait_for_canary_without_changing_the_answer(config,
     plain = c.get("/health").json()["canary"]["status"]
     waited = c.get("/health?wait_for_canary=5").json()["canary"]["status"]
     assert plain == waited == "skipped"
+
+
+# ------------------------------- served_by: the answer describes its own instance
+
+
+def test_classify_reports_the_instance_that_answered(config, fastapi_client):
+    """The demo strip claims "this is the artefact that answered", so the answer has to
+    carry that itself.
+
+    Drawing it from a separate /health call describes whichever instance that call
+    reached, which is how the strip came to read "canary pending" next to a served
+    prediction. Same defect class as §3bg's /health reporting a precision the service
+    was not serving, on the demo surface instead of in the service.
+    """
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(), tier2=FakeTier2(available=False),
+                     run_canary_on_start=False)
+    body = fastapi_client(app).post("/classify", json={"text": "a clause"}).json()
+
+    p = body["served_by"]
+    assert p["precision"] == config.tier0_precision
+    assert p["artefact"] == config.tier0_model_dir.name
+    assert p["process"] and len(p["process"]) == 12
+    assert "cpu_isa_flags" in p and "onnxruntime_version" in p
+    # The canary block must describe a state that is ALLOWED to serve. Reaching this
+    # response at all means the gate let it through, so anything else is incoherent.
+    assert p["canary"]["serves_predictions"] is True
+    assert p["canary"]["status"] in ("passed", "skipped")
+
+
+def test_health_and_classify_agree_on_the_same_process(config, fastapi_client):
+    """Within one process the two surfaces must not describe different things."""
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(), tier2=FakeTier2(available=False),
+                     run_canary_on_start=False)
+    client = fastapi_client(app)
+    h = client.get("/health").json()["served_by"]
+    c = client.post("/classify", json={"text": "a clause"}).json()["served_by"]
+    assert h["process"] == c["process"]
+    assert h["canary"]["status"] == c["canary"]["status"]
+
+
+def test_a_refused_request_carries_no_served_by(config, fastapi_client, monkeypatch,
+                                                ledgar):
+    """A 503 produced no answer, so there is no answering instance to describe."""
+    from src.serve import app as app_mod
+
+    monkeypatch.setattr(app_mod, "build_cascade",
+                        lambda cfg, tier0=None, tier2=None:
+                        _cascade_that_fails_the_canary(config))
+    app = app_mod.create_app(config, run_canary_on_start=True, canary_background=True)
+    client = fastapi_client(app)
+    for _ in range(600):
+        if client.get("/health").json()["canary"]["status"] != "pending":
+            break
+        time.sleep(0.1)
+
+    r = client.post("/classify", json={"text": "a clause"})
+    assert r.status_code == 503
+    assert "served_by" not in r.json(), "a refusal is not an answer"

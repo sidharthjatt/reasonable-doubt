@@ -19,9 +19,12 @@ WHAT THIS SERVICE WILL NOT DO
 
 from __future__ import annotations
 
+import os
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -300,6 +303,43 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
 
     cascade = build_cascade(config, tier0=tier0, tier2=tier2)
     gate = cascade.gate
+
+    # PROVENANCE OF THE PROCESS THAT ANSWERS. Computed ONCE: cpu_isa_flags() reads
+    # /proc/cpuinfo on Linux and shells out to sysctl on macOS, which has no business
+    # running on the hot path. Only the canary status is read per request, and it is a
+    # lock-guarded enum read.
+    #
+    # WHY /classify CARRIES THIS AT ALL. The demo page used to draw its provenance strip
+    # from a SEPARATE /health call. With more than one instance those are different
+    # processes, so the strip could read "canary pending" beside a served prediction —
+    # a surface describing a different system than the one that answered, which is the
+    # §3bg defect on the demo surface rather than in the service.
+    from src.ort_runtime import telemetry_disabled as _telemetry_disabled
+    from src.serve.canary import cpu_isa_flags as _isa
+    from src.serve.canary import onnxruntime_version as _ort_version
+
+    _STATIC_PROVENANCE = {
+        # Distinguishes one container process from another. A Cloud Run instance id needs
+        # a metadata-server call per request; this is process-local and sufficient to see
+        # that two answers came from different instances.
+        "process": uuid4().hex[:12],
+        "revision": os.environ.get("K_REVISION") or None,
+        "region": os.environ.get("SERVICE_REGION") or None,
+        "precision": cascade.config.tier0_precision,
+        "artefact": cascade.config.tier0_model_dir.name,
+        "onnxruntime_version": _ort_version(),
+        "cpu_isa_flags": _isa(),
+        "machine": platform.machine(),
+        "ort_telemetry_disabled": _telemetry_disabled(),
+    }
+
+    def _served_by() -> dict:
+        """Who answered THIS request, canary state included."""
+        c = gate.as_dict()
+        return {**_STATIC_PROVENANCE,
+                "canary": {k: c.get(k) for k in
+                           ("status", "serves_predictions", "accuracy",
+                            "n_correct", "n", "floor")}}
     assert gate is not None, "build_cascade must supply a gate"
 
     def _run_canary_into_gate(*, reraise: bool) -> None:
@@ -389,13 +429,17 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
                 # ORT telemetry is off: it crashes at teardown on macOS and the service
                 # should not phone home regardless (src/ort_runtime.py).
                 "ort_telemetry_disabled": telemetry_disabled(),
-                "machine": __import__("platform").machine(),
+                "machine": platform.machine(),
                 # Where this process is running, when the platform tells us. Set at
                 # deploy time; ABSENT rather than guessed, because the page prints it as
                 # provenance and a hardcoded region would have claimed "asia-south1"
                 # while running on a laptop.
-                "region": __import__("os").environ.get("SERVICE_REGION") or None,
+                "region": os.environ.get("SERVICE_REGION") or None,
             },
+            # THE SAME BLOCK /classify RETURNS, for the instance that served THIS probe.
+            # A caller hitting /health and /classify can land on different instances, so
+            # comparing `served_by.process` is how they tell.
+            "served_by": _served_by(),
             # TWO DIFFERENT FACTS, kept apart. `configured` is the operator's
             # decision (§3bm turned it off); `tier2_available` is whether a key is
             # present at all. Reporting only the latter, as this did, said
@@ -417,7 +461,11 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
     @app.post("/classify")
     def classify(req: ClassifyRequest) -> dict:
         try:
-            return cascade.classify(req.text)
+            # `served_by` describes THE PROCESS THAT PRODUCED THIS ANSWER. Because the
+            # gate is checked inside classify(), reaching this line means the canary
+            # passed (or an operator disabled it) on THIS instance — so the block is a
+            # statement about the answer, not about the service in general.
+            return {**cascade.classify(req.text), "served_by": _served_by()}
         except Tier0NotQualified as exc:
             status = gate.status
             # 503 for both, and the distinction is in the body rather than the code:
