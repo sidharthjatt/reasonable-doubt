@@ -351,8 +351,21 @@ def create_app(config: ServiceConfig | None = None, *, tier0=None, tier2=None,
         title="Reasonable Doubt — Tier 0 -> Claude Sonnet 5",
         description="Deployed two-tier cascade (E4b-A). No Tier 1: see PREREGISTRATION.")
 
+    # Upper bound on a single long poll. Long enough to be a useful CPU window, short
+    # enough to stay well inside the request timeout and any proxy's idle limit.
+    MAX_WARM_WAIT_S = 25
+
     @app.get("/health")
-    def health() -> dict:
+    def health(wait_for_canary: float = 0.0) -> dict:
+        # `wait_for_canary` holds the request open until the canary settles. On Cloud Run
+        # CPU is only allocated while a request is in flight, so without this a
+        # background canary is starved: it measured 129.55s for a dataset load that takes
+        # 6.87s with CPU allocated. Waiting here is what gives the canary thread CPU.
+        if wait_for_canary > 0:
+            gate.wait_until_settled(min(float(wait_for_canary), MAX_WARM_WAIT_S))
+        return _health_body()
+
+    def _health_body() -> dict:
         from src.ort_runtime import telemetry_disabled
         from src.serve.canary import cpu_isa_flags, onnxruntime_version
         return {

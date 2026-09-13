@@ -1442,3 +1442,38 @@ def test_health_separates_escalation_CONFIGURED_from_key_availability():
     assert set(e) == {"configured", "tier2_available", "effective", "note"}
     assert e["effective"] is False
     assert "did not improve accuracy" in e["note"]
+
+
+def test_health_long_poll_waits_for_the_gate_and_times_out_cleanly(config):
+    """The long poll is a CPU window, not a state change.
+
+    On Cloud Run CPU is only allocated while a request is in flight, so a background
+    canary is starved between requests (measured: 129.55s for a dataset load that takes
+    6.87s with CPU allocated). Holding the request open is what lets it run. It must
+    never alter the outcome, and must return PENDING rather than hang when it times out.
+    """
+    import threading
+
+    from src.serve.canary_gate import CanaryGate, CanaryStatus
+
+    g = CanaryGate()
+    t0 = time.monotonic()
+    assert g.wait_until_settled(0.2) is CanaryStatus.PENDING, "times out as PENDING"
+    assert 0.15 < time.monotonic() - t0 < 2.0, "waited, but did not hang"
+
+    threading.Timer(0.1, lambda: g.mark_passed({"ran": True})).start()
+    t1 = time.monotonic()
+    assert g.wait_until_settled(10) is CanaryStatus.PASSED
+    assert time.monotonic() - t1 < 5, "returned as soon as it settled, not at the timeout"
+
+
+def test_health_accepts_wait_for_canary_without_changing_the_answer(config,
+                                                                    fastapi_client):
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(), tier2=FakeTier2(available=False),
+                     run_canary_on_start=False)
+    c = fastapi_client(app)
+    plain = c.get("/health").json()["canary"]["status"]
+    waited = c.get("/health?wait_for_canary=5").json()["canary"]["status"]
+    assert plain == waited == "skipped"

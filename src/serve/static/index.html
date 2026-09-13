@@ -197,8 +197,12 @@ async function waitForWarm(seconds) {
   waking(seconds, null);
   const t0 = Date.now();
   for (let i = 0; i < 400; i++) {
-    await new Promise(r => setTimeout(r, 1500));
-    let h; try { h = await (await fetch('/health')).json(); } catch (e) { continue; }
+    // LONG POLL, not a sleep-and-poll. Cloud Run only allocates CPU while a request is
+    // in flight, so holding this request open is what lets the canary thread actually
+    // run. Polling with gaps starves it.
+    let h;
+    try { h = await (await fetch('/health?wait_for_canary=20')).json(); }
+    catch (e) { await new Promise(r => setTimeout(r, 1000)); continue; }
     const cy = h.canary || {};
     const el = Math.round((Date.now() - t0) / 1000);
     const fill = $('wfill'), wp = $('wprog');

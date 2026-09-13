@@ -53,6 +53,13 @@ class CanaryGate:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        # Set exactly once, when the gate settles. `wait_until_settled` exists because of
+        # how Cloud Run allocates CPU: outside request processing it is throttled to
+        # near zero, so a background canary makes almost no progress between requests
+        # (measured: dataset load 129.55s throttled against 6.87s with CPU allocated).
+        # A client that waits inside a request keeps CPU allocated for the canary thread,
+        # which turns polling from a workaround into the mechanism.
+        self._settled = threading.Event()
         self._status = CanaryStatus.PENDING
         self._result: dict[str, Any] | None = None
         self._error: str | None = None
@@ -74,6 +81,7 @@ class CanaryGate:
             self._finished_after = time.monotonic() - self._started
             for k, v in kw.items():
                 setattr(self, f"_{k}", v)
+        self._settled.set()
 
     def mark_passed(self, result: dict[str, Any]) -> None:
         self._settle(CanaryStatus.PASSED, result=result)
@@ -89,6 +97,15 @@ class CanaryGate:
             self._rows_done, self._rows_total = done, total
 
     # ---------------------------------------------------------------- reads
+    def wait_until_settled(self, timeout: float) -> CanaryStatus:
+        """Block up to `timeout` seconds for the canary to finish, then report status.
+
+        Returns PENDING on timeout. Never raises and never changes the outcome: this only
+        holds a request open so the canary thread has CPU to run on.
+        """
+        self._settled.wait(timeout=max(0.0, timeout))
+        return self.status
+
     @property
     def status(self) -> CanaryStatus:
         with self._lock:
