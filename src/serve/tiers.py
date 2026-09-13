@@ -39,6 +39,9 @@ class TierResult:
     # None means THIS TIER DOES NOT PRODUCE ONE, not "empty": the API tier returns a
     # label with no distribution behind it, and a `[]` would read as "no candidates".
     top_k: tuple[tuple[str, float], ...] | None = None
+    # Full per-class softmax in label order, for the demo's distribution chart. None means
+    # this tier does not produce one (the API tier returns a label, not a distribution).
+    distribution: tuple[float, ...] | None = None
 
 
 @runtime_checkable

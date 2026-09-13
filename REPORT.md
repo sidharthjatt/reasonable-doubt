@@ -227,6 +227,26 @@ bar of 50%, so the compression is a property of the model and not of my prompt.
 I did not run a head-to-head AUROC of verbalized confidence against margin. The case rests
 on the compression statistics, which is weaker than a direct comparison would have been.
 
+### What the confidence threshold is actually selecting
+
+Margins on `test_3000` are massed at the top. The median is **0.9981**, and **50.6%** of
+clauses sit above 0.998. A clause with a margin of 0.9867, which sounds confident and is
+nowhere near the 0.5289 threshold, is answered **less confidently than about 74% of the test
+set**.
+
+That reframes the threshold. It is not separating confident answers from unconfident ones in
+any even-handed way. It sits far out in a thin lower tail and selects the bottom **4.30%**,
+which is what a percentile threshold calibrated to a 4.056% escalation rate is supposed to
+do. The flag means "in the least confident few percent of this distribution", not "the model
+is unsure in any absolute sense".
+
+Two things this does not mean. It does not mean the margin is useless as a signal: it
+separates correctness well (AUROC 0.8622 ± 0.0035 over 3 seeds on dev), and on the rows it
+flags the encoder is right about 35% of the time against 87% overall. And it does not say
+anything about a particular clause. One clause at 0.9867 being below three-quarters of the
+test set is a fact about how compressed this distribution is, not evidence that that clause
+was hard.
+
 ### E1b missed its bar by 0.0013, and the bar did not move
 
 E1b retrained Tier 0 at 10 epochs to test whether E1's shortfall was undertraining. The

@@ -115,8 +115,24 @@
   .panel p { margin:0; color:var(--muted); font-size:.87rem; line-height:1.6 }
   /* The figure is a light-background PNG from the report. Matted deliberately so it
      reads as a printed plate rather than as a broken image in dark mode. */
-  .panel img { display:block; width:100%; height:auto; margin:12px 0 8px;
-               border-radius:6px; background:#fff; padding:8px }
+  .chart { border:1px solid var(--line); border-radius:11px; background:var(--card);
+           padding:16px 18px; margin-top:16px }
+  .chart h3 { margin:0 0 2px; font-size:.92rem; letter-spacing:-.005em }
+  .chart .cap { color:var(--muted); font-size:.82rem; line-height:1.55; margin:0 0 4px }
+  .chart svg { display:block; width:100%; height:auto; margin-top:6px; overflow:visible }
+  .ax { stroke:var(--line); stroke-width:1 }
+  .axt { fill:var(--faint); font-size:9px; font-family:inherit }
+  .ser { fill:none; stroke:var(--accent); stroke-width:1.6 }
+  .dot { fill:var(--accent) }
+  .dotl { fill:var(--fg); font-size:9.5px; font-family:inherit }
+  .hb { fill:var(--chip) }
+  .thr { stroke:#b4402c; stroke-width:1.4; stroke-dasharray:3 3 }
+  .thrt { fill:#b4402c; font-size:9px; font-family:inherit }
+  .me { stroke:var(--accent); stroke-width:2 }
+  .met { fill:var(--accent); font-size:10px; font-weight:600; font-family:inherit }
+  .cb { fill:var(--ok) }
+  .cb.api { fill:#b4642c }
+  .cbl { fill:var(--fg); font-size:10px; font-family:inherit }
   .isa { margin:14px 0 4px; font-size:.84rem }
   .isa .grp { margin-bottom:11px }
   .isa .gl { color:var(--faint); font-size:.76rem; margin-bottom:5px }
@@ -163,17 +179,14 @@
 
   <div id="out"></div>
 
+  <!-- PER-REQUEST CHARTS. Drawn client-side from the classify response, so they change
+       with every clause. Empty until there is an answer to draw. -->
+  <section id="charts"></section>
+
   <!-- CONTEXT, BELOW THE RESULT. Someone who only wants to classify a clause never has to
        read any of it: it starts below the fold and stays out of the way. -->
   <section class="context" id="context" hidden>
     <h2>What this project measured</h2>
-
-    <div class="panel">
-      <h3>The encoder is cheaper and more accurate than a frontier model here</h3>
-      <p id="acccap">&nbsp;</p>
-      <img src="/figures/accuracy_vs_cost.png" loading="lazy"
-           alt="macro-F1 against USD per 1,000 clauses on a log axis: the fine-tuned encoder sits above and to the left of both Sonnet 5 and Haiku 4.5.">
-    </div>
 
     <div class="panel">
       <h3>INT8 collapses to chance on some CPUs, silently</h3>
@@ -222,6 +235,7 @@ const clearBtn = $('clear');
 function showResult(html) {
   out.innerHTML = html;
   clearBtn.hidden = !html;
+  if (!html) renderCharts(null);      // charts belong to a result; no result, no charts
 }
 function clearAll() {
   t.value = '';
@@ -285,11 +299,6 @@ let FACTS = null;
 async function loadFacts() {
   try { FACTS = await (await fetch('/facts')).json(); } catch (e) { return; }
   const f = FACTS;
-  $('acccap').textContent =
-    `macro-F1 ${f.tier0.macro_f1.toFixed(4)} on ${f.tier0.split}, against `
-    + `${usd(f.api_comparator.usd_per_1k, 4)} per 1,000 clauses for Sonnet 5 zero-shot. `
-    + `Both measured. Log cost axis.`;
-
   $('isacap').textContent = f.int8_collapse.caption;
   $('isa').innerHTML = f.int8_collapse.rows.map(r => {
     const vn = r.vnni === null ? 'ARM, AVX-512 not applicable'
@@ -427,6 +436,7 @@ async function classify() {
     // Redraw the strip from THE ANSWER, so it describes the process that produced it.
     if (body.served_by) renderProvenance(body.served_by, 'answer');
     render(body, Math.round(performance.now() - t0));
+    renderCharts(body);
   } catch (e) {
     showResult('<div class="err">' + esc(e.message) + '</div>');
   } finally {
@@ -440,6 +450,128 @@ t.addEventListener('keydown', e => {
   // plain Enter has to keep inserting newlines because clauses run to several lines.
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); classify(); }
 });
+
+// ---------------------------------------------------------------- per-request charts
+// Drawn from THIS response. Inline SVG, no plotting library, no server-side rendering.
+const SVGNS = 640;                       // viewBox width; height per chart below
+
+function chartDistribution(d) {
+  const p = (d.distribution || []).slice().sort((a, b) => b - a);
+  if (!p.length) return '';
+  const W = SVGNS, H = 150, L = 42, R = 8, T = 10, B = 24;
+  const FLOOR = 1e-6;                    // log floor; anything under is drawn at the axis
+  const lg = v => Math.log10(Math.max(v, FLOOR));
+  const y0 = lg(1), y1 = lg(FLOOR);
+  const px = i => L + (i / (p.length - 1)) * (W - L - R);
+  const py = v => T + ((lg(v) - y0) / (y1 - y0)) * (H - T - B);
+  const pts = p.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
+  const ticks = [1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6].map(v =>
+    `<line class="ax" x1="${L}" y1="${py(v)}" x2="${W - R}" y2="${py(v)}" opacity=".45"/>`
+    + `<text class="axt" x="${L - 5}" y="${py(v) + 3}" text-anchor="end">`
+    + `${v === 1 ? '1' : '1e' + Math.round(Math.log10(v))}</text>`).join('');
+  // Ranks 1-3 sit within a few pixels of each other on x, so labels placed at the points
+  // overlap. Dots stay on the curve and the names go in a key at the top right.
+  const dots = p.slice(0, 3).map((v, i) =>
+    `<circle class="dot" cx="${px(i)}" cy="${py(v)}" r="3"/>`).join('');
+  const key = p.slice(0, 3).map((v, i) => {
+    const lbl = (d.top_3 && d.top_3[i]) ? d.top_3[i].label : '';
+    return `<text class="dotl" x="${W - R}" y="${T + 10 + i * 13}" text-anchor="end">`
+      + `${i + 1}. ${esc(lbl)} ${(v * 100).toFixed(1)}%</text>`;
+  }).join('');
+  const marks = dots + key;
+  const flat = p[0] < 0.8;
+  return `<div class="chart">
+    <h3>All 100 classes, ranked</h3>
+    <p class="cap">${flat
+      ? 'A shallow drop and a fat tail: probability is spread across many classes, which is '
+        + 'what being unsure looks like.'
+      : 'A spike at rank 1 and everything else orders of magnitude below it: that is what '
+        + 'a confident answer looks like.'}</p>
+    <svg viewBox="0 0 ${W} ${H}" role="img"
+         aria-label="Sorted class probabilities, log scale, rank 1 to 100.">
+      ${ticks}
+      <polyline class="ser" points="${pts}"/>
+      ${marks}
+      <text class="axt" x="${L}" y="${H - 8}">rank 1</text>
+      <text class="axt" x="${W - R}" y="${H - 8}" text-anchor="end">100</text>
+      <text class="axt" x="${L - 5}" y="${T - 2}" text-anchor="end">p</text>
+    </svg></div>`;
+}
+
+function chartMargin(d) {
+  const md = FACTS && FACTS.margin_distribution;
+  if (!md) return '';
+  const m = Number(d.margin), thr = md.threshold;
+  const W = SVGNS, H = 128, L = 10, R = 10, T = 30, B = 26;
+  const x = v => L + v * (W - L - R);
+  const maxc = Math.max(...md.counts);
+  const bw = (W - L - R) / md.counts.length;
+  // sqrt heights: 2406 of 3000 rows land in one bin and a linear axis erases the tail.
+  const bars = md.counts.map((c, i) => {
+    const h = (Math.sqrt(c) / Math.sqrt(maxc)) * (H - T - B);
+    return `<rect class="hb" x="${(L + i * bw).toFixed(1)}" y="${(H - B - h).toFixed(1)}" `
+      + `width="${(bw - 0.6).toFixed(1)}" height="${h.toFixed(1)}"/>`;
+  }).join('');
+  // percentile of this clause within test_3000
+  let pct = 0;
+  while (pct < 100 && md.percentiles[pct] < m) pct++;
+  return `<div class="chart">
+    <h3>Where this clause sits</h3>
+    <p class="cap">Top-two margin against the ${thr.toFixed(4)} threshold, over the
+      ${md.n.toLocaleString('en-US')} clauses of the test set. Bar heights are sqrt-scaled;
+      most clauses sit hard against 1.0.</p>
+    <svg viewBox="0 0 ${W} ${H}" role="img"
+         aria-label="This clause's margin marked on the test-set margin distribution.">
+      ${bars}
+      <line class="ax" x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}"/>
+      <line class="thr" x1="${x(thr)}" y1="${T - 8}" x2="${x(thr)}" y2="${H - B}"/>
+      <text class="thrt" x="${x(thr)}" y="${T - 12}" text-anchor="middle">threshold
+        ${thr.toFixed(3)}</text>
+      <line class="me" x1="${x(m)}" y1="${T + 2}" x2="${x(m)}" y2="${H - B + 4}"/>
+      <text class="met" x="${x(m)}" y="${H - B + 17}"
+            text-anchor="${m > 0.86 ? 'end' : m < 0.14 ? 'start' : 'middle'}">this clause
+        ${m.toFixed(4)}</text>
+      <text class="axt" x="${L}" y="${H - B + 12}">0</text>
+      <text class="axt" x="${W - R}" y="${H - B + 12}" text-anchor="end">1</text>
+    </svg>
+    <p class="cap">About ${100 - pct}% of test clauses are answered more confidently than
+      this one${m >= thr ? ', and it still clears the threshold' : ''}. Below the line a
+      clause is flagged; above it, it is not.</p></div>`;
+}
+
+function chartCost(d) {
+  const cc = d.cost_comparison;
+  if (!cc || !cc.served_usd) return '';
+  const W = SVGNS, H = 92, L = 8, R = 8, T = 14;
+  const lo = 1e-7, hi = 1e-2;
+  const frac = v => (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo));
+  const bw = v => Math.max(3, frac(v) * (W - L - R));
+  const bar = (v, y, cls, name) =>
+    `<rect class="cb ${cls}" x="${L}" y="${y}" width="${bw(v).toFixed(1)}" height="17" rx="2"/>`
+    + `<text class="cbl" x="${L + bw(v) + 7}" y="${y + 13}">${esc(name)} ${usd(v, 8)}</text>`;
+  return `<div class="chart">
+    <h3>What this request cost</h3>
+    <p class="cap">Log scale. ${cc.ratio ? Math.round(cc.ratio).toLocaleString('en-US') : '—'}×
+      apart.</p>
+    <svg viewBox="0 0 ${W} ${H}" role="img"
+         aria-label="Cost of this request against Sonnet 5 per clause, log scale.">
+      ${bar(cc.served_usd, T, '', 'served here')}
+      ${bar(cc.api_usd, T + 30, 'api', esc(cc.api_model || 'Sonnet 5'))}
+      <text class="axt" x="${L}" y="${H - 6}">1e-7</text>
+      <text class="axt" x="${W - R}" y="${H - 6}" text-anchor="end">1e-2 USD / clause</text>
+    </svg>
+    <p class="cap">The served figure is this request's own. The
+      ${esc(cc.api_model || 'Sonnet 5')} figure is the <b>measured mean</b> over the
+      3,000-clause batch this project ran, not an estimate for this text: a per-clause
+      Claude cost needs that model's own token count, which is an API call this service
+      does not make.</p></div>`;
+}
+
+function renderCharts(d) {
+  $('charts').innerHTML = d
+    ? chartDistribution(d) + chartMargin(d) + chartCost(d)
+    : '';
+}
 
 function render(d, ms) {
   const top = d.top_3 || [];

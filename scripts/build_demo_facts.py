@@ -17,10 +17,40 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 R = Path("results")
 OUT = Path("configs/demo_facts.json")
+
+
+def _margin_distribution() -> dict:
+    """Margins of the served artefact over test_3000, as a shape the page can draw."""
+    from src.router.signals import CLOSED_FORM
+
+    npz = np.load(R / "test_logits_fp32_local_ce10ep_seed1.npz", allow_pickle=True)
+    m = CLOSED_FORM["margin"](npz["test_3000_logits"])
+    thr = json.loads(Path("configs/router_threshold_fp32.json").read_text())
+    bins = 50
+    counts, _ = np.histogram(m, bins=bins, range=(0.0, 1.0))
+    return {
+        "n": int(m.size),
+        "bins": bins,
+        "range": [0.0, 1.0],
+        "counts": [int(c) for c in counts],
+        # 101 values, p0..p100. Enough for the page to say which percentile a clause is in
+        # without shipping 3,000 numbers.
+        "percentiles": [round(float(np.percentile(m, p)), 6) for p in range(101)],
+        "threshold": float(thr["threshold"]),
+        "escalation_rate_on_test": float((m < thr["threshold"]).mean()),
+        "note": ("Margins are heavily massed near 1.0: the median is "
+                 f"{float(np.median(m)):.4f} and {100 * float((m < thr['threshold']).mean()):.2f}% "
+                 "fall below the threshold. Bar heights use a sqrt scale or the tail is "
+                 "invisible."),
+        "source": ("results/test_logits_fp32_local_ce10ep_seed1.npz (served artefact) "
+                   "+ configs/router_threshold_fp32.json"),
+    }
 
 
 def main() -> int:
@@ -69,6 +99,11 @@ def main() -> int:
             ],
             "source": "results/isa_matrix.json",
         },
+
+        # The population the visitor's own clause is placed against on the margin chart.
+        # A histogram plus a percentile ladder, not 3,000 raw values: the page only needs
+        # to draw a shape and answer "where does mine fall".
+        "margin_distribution": _margin_distribution(),
 
         "escalation": {
             "delta": esc["delta"],

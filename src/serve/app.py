@@ -178,6 +178,10 @@ class Cascade:
             # candidates" rather than "this tier does not produce one".
             "top_3": ([{"label": lbl, "score": sc} for lbl, sc in t0.top_k]
                       if t0.top_k is not None else None),
+            # The whole 100-class curve, so the page can SHOW why a clause is uncertain
+            # rather than assert it. Scores only; labels live in `labels` alongside.
+            "distribution": (list(t0.distribution)
+                             if t0.distribution is not None else None),
             "escalation_enabled": escalation_enabled,
             "escalation_selected": wants_escalation,
             "escalation_skipped": escalation_skipped,

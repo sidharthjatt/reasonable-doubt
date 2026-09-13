@@ -84,7 +84,24 @@ class Tier0Encoder:
             tier=self.name,
             is_stub=False,
             top_k=self.top_k(lg),
+            distribution=self.distribution(lg),
         )
+
+    def distribution(self, logits: np.ndarray) -> tuple[float, ...]:
+        """The full softmax over all classes, in LABEL ORDER, for display.
+
+        Same caveat as `top_k`: a display quantity, not a calibrated probability, and
+        nothing routes on it. Sent so the page can draw the whole 100-class curve, which
+        is what makes "why is this one uncertain" visible rather than asserted — a
+        confident clause is a spike, an out-of-domain one is a flat tail.
+        """
+        row = np.asarray(logits)[0].astype(np.float64)
+        e = np.exp(row - row.max())
+        p = e / e.sum()
+        # Rounded for the wire. This is a plotting input; six decimals is far finer than
+        # a chart can resolve and keeps the payload small. The ROUTED quantity is the
+        # margin, which is unrounded and computed from the logits, not from this.
+        return tuple(round(float(x), 6) for x in p)
 
     def top_k(self, logits: np.ndarray, k: int = 3) -> tuple[tuple[str, float], ...]:
         """Top-k (label, softmax score) for display.

@@ -1404,6 +1404,62 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3br. NEGATIVE RESULT — batching the canary does not help (2026-09-13)
+
+**Question asked, measured, and answered no.** The startup canary classifies its 200 rows
+one at a time. If batching cut it meaningfully under 90s that would be a real win with no
+weakening of the check, so it was measured rather than argued.
+
+**IT IS SLOWER.** Same 200 rows, same artefact (`onnx_ce10ep_1_fp32`), same floor, arm64,
+ORT 1.29.0:
+
+| batch | wall | per row | accuracy |
+|---|---|---|---|
+| **1 (current)** | **7.95s** | **39.7 ms** | 0.9550 |
+| 4 | 16.05s | 80.2 ms | 0.9550 |
+| 8 | 20.89s | 104.5 ms | 0.9550 |
+| 16 | 27.52s | 137.6 ms | 0.9550 |
+| 32 | 30.99s | 155.0 ms | 0.9550 |
+
+Batch 8 is **2.6× slower** than one at a time.
+
+**THE OBVIOUS CAUSE WAS TESTED AND IS NOT THE ANSWER.** Canary token lengths run 15 to 512
+(median 106, mean 148), so batching pads heavily: at batch 8 the computed tokens inflate
+**2.36×**. Length-sorting the rows cuts that to **1.06×**, near-zero waste. It still does
+not help:
+
+| length-sorted | speed-up vs one at a time |
+|---|---|
+| batch 4 | **0.98×** |
+| batch 8 | **0.92×** |
+| batch 16 | **0.85×** |
+
+> **CONCLUSION: the canary is not padding-bound, and it is not batch-bound.** With padding
+> waste removed the batched path is still no faster, which means **onnxruntime already
+> saturates the available cores on a single 512-token sequence**. There is no idle width for
+> a batch to fill, and batching only adds padding and scheduling on top.
+
+**CORROBORATION, FOUND AFTERWARDS AND WEAKER THAN IT LOOKS.** `configs/costs.yaml` already
+carries a batch-size sweep pointing the same way — `bs1 30.16 | bs8 10.96 | bs16 9.38 |
+bs32 8.13` req/s. It agrees, and it should have been read first. **But that sweep is from
+the UNTRAINED PROBE**, and the file says so: only the bs1 row was ever re-measured on the
+trained artefacts. So it corroborates the direction and is not independent confirmation at
+full strength.
+
+#### This was a performance question and never a correctness one
+
+| batch | predictions vs batch 1 | max \|Δ logit\| |
+|---|---|---|
+| 4, 8, 16, 32 | **200/200 IDENTICAL** | **1.6e-05** |
+
+Every batch size, sorted or not, produced **exactly the same 200 predictions** as the
+current canary, at 0.9550. **Batching would not have weakened the check.** It was rejected
+for being slower, which is the only reason on the table — worth recording, because the
+instinct when refusing an optimisation on a safety-critical path is to reach for the safety
+argument, and here that argument does not apply.
+
+**NOT APPLIED. The canary keeps classifying one row at a time.**
+
 ### 3bq. FP32 PASSES ON NON-VNNI x86 — the class §3bn left untested (2026-09-13)
 
 **Not an experiment.** A deployment observation that closes a gap §3bn named explicitly, and
