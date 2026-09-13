@@ -1472,11 +1472,51 @@ made memory the only constraint.
 **`--cpu-boost` is close to useless in this design.** Boost applies during the *startup
 phase*, which now ends when the port binds at ~20s, before the canary does its work.
 
-> **RECOMMENDATION, NOT APPLIED: go back to 1 vCPU.** The premise for 2 vCPU was
-> cost-neutrality and the measurement falsifies it. The wall-clock gain is real but is
-> bought with 60% more CPU-seconds. Both configurations cost about 0.1% of the monthly free
-> tier per cold start, so this is a small number either way, and the decision is the
-> operator's.
+> ~~**RECOMMENDATION, NOT APPLIED: go back to 1 vCPU.**~~ **⚠ WITHDRAWN — THE
+> RECOMMENDATION WAS WRONG, AND WRONG IN AN INSTRUCTIVE WAY. See the correction below.**
+
+#### Result 3, CORRECTED — the premise was falsified in the OPPOSITE direction
+
+**Cloud Run bills CPU-seconds and GiB-seconds SEPARATELY, so finishing sooner cuts the
+memory bill too.** The quantity that matters is not CPU-seconds in isolation; it is **how
+many cold starts the free tier buys**, which is the *minimum* over both resources:
+
+    free cold starts = min(180,000 vCPU-s / cpu_cost, 360,000 GiB-s / mem_cost)
+
+| config | wall | vCPU-s | GiB-s | CPU-limited | MEM-limited | **FREE COLD STARTS** |
+|---|---|---|---|---|---|---|
+| 1 vCPU | 150s | 150 | 600 | 1,200 | **600** | **600** (memory binds) |
+| **2 vCPU** | **120s** | 240 | 480 | 750 | 750 | **750** (both bind) |
+
+> **2 vCPU IS FASTER *AND* BUYS 25% MORE FREE COLD STARTS.** It is not a trade at all.
+
+**The error, stated plainly because it is the interesting part:** §3bp had *already
+established* that memory was the binding resource at 4 GiB, and then reached its conclusion
+by comparing CPU-seconds alone (150 → 240, "+60% worse"). Establishing which constraint
+binds and then optimising a different one is the mistake. Recorded rather than quietly
+fixed — this is §3e's class applied to my own analysis, not to the code.
+
+**2 vCPU STAYS.**
+
+#### Result 5 — `--cpu-boost` DOES cost, and it is REMOVED
+
+§3bp called boost "near useless"; it is worse than that. Google's documentation:
+*"You are charged for the allocated boosted CPU for the duration of the container startup
+time."* At a 2 vCPU limit, **boost allocates 4 vCPU**, billed for the startup window **plus
+10 seconds after it completes**.
+
+| config | vCPU-s per cold start | free cold starts |
+|---|---|---|
+| 2 vCPU **+ boost** | 301.4 | **597** |
+| 2 vCPU, no boost | 240.0 | **750** |
+
+Boost costs **~61 extra vCPU-s** per cold start and buys speed only on the **~21s before
+the canary starts**, because the startup phase now ends when the port binds. It cut free
+cold starts **below the 1 vCPU figure it was meant to improve on**. Removed.
+
+**Measured after removal** (revision `-00007-rk6`): port bound in **16.8s**, canary passed
+in **55.3s** at **191/200 = 0.9550**, warm `/classify` 0.20s. Neither number got worse; the
+canary time is dominated by how continuously the long polls arrive, not by boost.
 
 #### Result 4 — long polls occupy concurrency slots and can trigger a second instance
 
