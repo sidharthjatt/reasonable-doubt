@@ -1404,6 +1404,90 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bq. FP32 PASSES ON NON-VNNI x86 — the class §3bn left untested (2026-09-13)
+
+**Not an experiment.** A deployment observation that closes a gap §3bn named explicitly, and
+a correction to §3bn's implicit hardware assumption.
+
+#### 1. The measurement
+
+A Cloud Run instance answering live traffic reported, in the `served_by` block of its own
+`/classify` responses:
+
+| | |
+|---|---|
+| instance (process) | **`65b67a604cb6`** |
+| revision | **`reasonable-doubt-00009-99j`** |
+| machine | `x86_64`, Linux |
+| **`avx512_vnni`** | **`false`** |
+| **`avx512f`** | **`false`** |
+| `avx2` | `true` |
+| onnxruntime | 1.29.0 |
+| artefact / precision | `onnx_ce10ep_1_fp32` / fp32 |
+| **startup canary** | **191/200 = 0.9550**, floor 0.80, `passed` |
+
+Stable across **8 consecutive requests** to that instance: same process id, same flags, same
+canary figures every time.
+
+#### 2. THIS CLOSES §3bn's OPEN GAP — and it is canary-level evidence, not a test_3000 result
+
+§3bn recorded: *"the non-VNNI x86 case remains untested outside that one Kaggle run"*, the
+run where INT8 scored **0.000166** against FP32's 0.8115 in the same process. **FP32 has now
+passed on a non-VNNI x86 host.**
+
+> **WHAT THIS IS: 191/200 on the 200 frozen TRAIN rows of the startup canary, matching the
+> reference exactly, on a CPU with no AVX-512 at all.**
+>
+> **WHAT THIS IS NOT: a `test_3000` macro-F1 qualification on that hardware.** No
+> `test_3000` score has been taken on a non-VNNI host. The canary is 200 contaminated rows
+> the model was fitted on, it exists to catch catastrophic degradation, and §3bc already
+> records that its number **is not comparable to any test figure**. Reading 0.9550 here as
+> evidence about accuracy on that hardware would be the §3bc error.
+>
+> The claim this supports is exactly the one the canary is built for: **FP32 does not
+> collapse on non-VNNI x86 the way INT8 did.** That is worth having, because it is the
+> hardware class the whole FP32 deployment decision was hedging against.
+
+#### 3. CORRECTION TO §3bn — Cloud Run does not reliably give a VNNI host
+
+§3bn reads as though *"real x86 on Cloud Run"* denotes one machine type. It does not. Across
+every canary that has run on this service:
+
+| revision | instances observed | `avx512_vnni` |
+|---|---|---|
+| `-00003-mt2`, `-00004-vqt`, `-00006-l69`, `-00007-rk6`, `-00008-b7g` | **12** | `true` |
+| **`-00009-99j`** | **1** | **`false`** |
+
+**12 of 13 observed instances had VNNI; one did not.** Same image, same revision family, same
+region. So the qualification §3bn recorded is not a property of "Cloud Run" but of whichever
+CPU an instance happened to land on, and **the same revision can qualify on different
+hardware from one cold start to the next**.
+
+> **THE DEPLOYMENT LESSON, which is more general than this service: on a managed platform the
+> CPU IS A VARIABLE, NOT A CONSTANT.** Nothing in the deploy pins it, nothing surfaces it
+> unless asked, and it changes between instances of an identical revision. For a workload
+> whose INT8 path degrades to chance on the wrong ISA and raises nothing, that is the
+> difference between a per-host check and a hope. **It is the argument for the startup canary
+> being per-instance rather than a one-off qualification**, which is how it was already
+> built, for a reason that turns out to be sharper than the one recorded.
+
+#### 4. HOW IT WAS FOUND, because the method is the point
+
+It was found by fixing a **user-interface bug**, not by looking for it.
+
+The demo page drew its provenance strip from a **separate `/health` call**. With more than
+one instance that describes a different process than the one that answered, which is how the
+strip came to read `canary pending` beside a served prediction. Fixing it meant making
+`/classify` return `served_by` for the instance that produced the answer — and the first
+thing that honestly-sourced strip reported was an ISA nobody had seen on this service.
+
+> **The flags were being read all along and shown for the wrong process.** While the strip
+> described some other instance, a non-VNNI host could answer every request on the page and
+> nothing would say so. A provenance display that is not tied to the thing it describes is
+> not weak evidence; it is evidence about something else, and this is the second time that
+> exact shape has appeared (§3bg: `/health` reporting a precision the service was not
+> serving). Recorded as a recurrence, not a coincidence.
+
 ### 3bp. CANARY MOVED OFF THE STARTUP PATH; 2 vCPU DID NOT PAY FOR ITSELF (2026-09-13)
 
 **Not an experiment.** A serving change plus its measurements. The qualification property
@@ -1557,6 +1641,13 @@ returned and not merely the same accuracy.
 | Linux aarch64, container | 191/200 | n/a (ARM) |
 | Linux x86, **emulated** on Apple Silicon | 191/200 | **false** |
 | **Linux x86, Cloud Run, real** | **191/200** | **TRUE** |
+
+> **⚠ AMENDED — see §3bq (2026-09-13).** This table reads as though Cloud Run denotes one
+> machine type. It does not: **12 of 13 observed instances reported `avx512_vnni: true` and
+> one reported `false`**, same image, same region. The same revision can qualify on different
+> hardware from one cold start to the next. **FP32 has since passed the canary at 191/200 on
+> a non-VNNI instance**, which closes the gap this section leaves open below — at
+> canary level, not as a `test_3000` result.
 
 #### THE CAVEAT IS THE POINT, and it limits the claim more than the pass extends it
 

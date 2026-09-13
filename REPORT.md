@@ -145,13 +145,33 @@ hardware on Cloud Run**, against a floor of 0.80. On Cloud Run the margins match
 arm64 values to four decimals (0.9867 and 0.1399 on two fixed clauses), so it is returning
 the same answers and not merely the same accuracy.
 
-> **THE CLOUD RUN MACHINE HAS `avx512_vnni: true`, AND THAT MATTERS MORE THAN THE PASS.**
-> It is the first host in this project that has it. Kaggle's Xeon, where INT8 scored
-> 0.000166, had `avx512f` and `avx2` but **no VNNI**, and the emulated x86 build had only
-> `avx2`. So this deploy qualifies FP32 on x86-with-VNNI and says **nothing** about the
-> hardware class that broke INT8. **The non-VNNI x86 case remains untested outside that
-> one Kaggle run.** Reading "it passed on x86" as covering that class is exactly the
-> generalisation this report is trying not to make.
+Most Cloud Run instances this service has run on report `avx512_vnni: true`, which Kaggle's
+Xeon did not. That mattered, because it meant the first deploy qualified FP32 on
+x86-with-VNNI and said nothing about the hardware class that broke INT8.
+
+**Then one instance came up without it**, and that turned out to be the more interesting
+result.
+
+> **THE CPU IS NOT FIXED. It varies between instances of the same revision.** Across every
+> canary this service has run: **12 of 13 instances reported `avx512_vnni: true`, and one
+> reported `false`**, on the same image, same region and same revision family. On a managed
+> platform the CPU is a variable, not a constant, and nothing in the deploy pins it.
+>
+> **FP32 passed the canary at 191/200 on that non-VNNI instance** (process `65b67a604cb6`,
+> revision `-00009-99j`, `avx512_vnni: false`, `avx512f: false`, `avx2: true`), stable over
+> 8 consecutive requests. That is the hardware class where INT8 scored 0.000166. **FP32 does
+> not collapse there.**
+>
+> **This is canary-level evidence, not a `test_3000` result.** It is 200 frozen TRAIN rows
+> matching the reference exactly. No `test_3000` macro-F1 has been measured on a non-VNNI
+> host, and the canary number is not comparable to a test figure (§3bc). What it supports is
+> the thing the canary exists to answer: FP32 does not degrade catastrophically there.
+>
+> It surfaced by accident, which is worth saying. The demo page drew its provenance strip
+> from a separate `/health` call, so it described a different instance than the one
+> answering. Fixing that meant making `/classify` report the instance that produced the
+> answer, and the first thing an honestly-sourced strip reported was an ISA nobody had seen
+> on this service (§3bq).
 
 **It is not bit-identical across those platforms either.** E1's artefact showed 0/200
 prediction disagreements between host and container. The served E1b artefact shows
@@ -302,11 +322,14 @@ On the mean it passes at 0.0077. E1 passes both ways, so the readings never dive
 Choosing now means choosing after seeing which one fails, so both are recorded and neither
 is adopted (§3bj).
 
-**x86 is now qualified for FP32, on one CPU type only.** The canary passes at 191/200 on
-Cloud Run, on real x86. That machine reports `avx512_vnni: true`. The CPU where INT8
-collapsed to 0.000166 reported `avx512_vnni: false`, and **no FP32 measurement has ever
-been taken on a non-VNNI x86 host outside that single Kaggle run**. Treat the x86
-qualification as covering VNNI-capable x86 and nothing wider.
+**x86 is qualified for FP32 at canary level, on two CPU types, and the CPU is not under my
+control.** The canary passes at 191/200 on Cloud Run on both a VNNI host (12 instances
+observed) and a non-VNNI one (1 instance, `avx512_vnni: false`), which is the class where
+INT8 scored 0.000166. **That is canary evidence only**: 200 contaminated TRAIN rows, not a
+`test_3000` macro-F1, and no test_3000 score has been taken on any non-VNNI host. The
+deeper limitation is that **the CPU varies per instance** (§3bq), so "qualified on x86" is
+a statement about the instances observed, not about the next cold start. The per-instance
+startup canary is what makes that survivable rather than a hope.
 
 **Flagged rows have no review path.** `needs_review` is honest about uncertainty and does
 nothing about it. The clause still gets an encoder answer. The human review the flag
