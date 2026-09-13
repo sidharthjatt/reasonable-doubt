@@ -53,7 +53,14 @@ def _margin_distribution() -> dict:
     }
 
 
-def main() -> int:
+def build(margin_distribution: dict) -> dict:
+    """Assemble the facts from the COMMITTED result summaries.
+
+    `margin_distribution` is passed in rather than computed here, because it is the one
+    block that needs a gitignored raw-logits npz. Everything else derives from files that
+    are tracked, so this function runs from a clean checkout and the staleness test can
+    verify all of it in CI instead of skipping the lot.
+    """
     cost = json.loads((R / "cost_per_1k.json").read_text())
     isa = json.loads((R / "isa_matrix.json").read_text())
     esc = json.loads((R / "served_config_escalation.json").read_text())
@@ -115,7 +122,7 @@ def main() -> int:
         # The population the visitor's own clause is placed against on the margin chart.
         # A histogram plus a percentile ladder, not 3,000 raw values: the page only needs
         # to draw a shape and answer "where does mine fall".
-        "margin_distribution": _margin_distribution(),
+        "margin_distribution": margin_distribution,
 
         "escalation": {
             "delta": esc["delta"],
@@ -130,13 +137,21 @@ def main() -> int:
             "source": "results/served_config_escalation.json",
         },
     }
+    return facts
+
+
+def main() -> int:
+    facts = build(_margin_distribution())
+    api = facts["api_comparator"]
+    esc = facts["escalation"]
+    x86 = next(r for r in facts["int8_collapse"]["rows"] if r["vnni"] is False)
     OUT.write_text(json.dumps(facts, indent=2) + "\n")
     print(f"wrote {OUT}")
-    print(f"  api ${facts['api_comparator']['usd_per_clause']:.8f}/clause "
+    print(f"  api ${api['usd_per_clause']:.8f}/clause "
           f"(measured over {api['n_requests']:,} clauses)")
     print(f"  int8 on non-VNNI x86: {x86['int8']}")
     print(f"  escalation delta {esc['delta']:+.6f} "
-          f"CI [{esc['bootstrap']['lo']:+.4f}, {esc['bootstrap']['hi']:+.4f}]")
+          f"CI [{esc['ci_low']:+.4f}, {esc['ci_high']:+.4f}]")
     return 0
 
 

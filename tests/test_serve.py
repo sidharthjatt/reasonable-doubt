@@ -1570,20 +1570,68 @@ def test_facts_endpoint_serves_derived_numbers_with_their_sources():
         "the escalation interval covers zero; that is what the panel claims"
 
 
-def test_demo_facts_file_matches_the_committed_results():
-    """Regenerating must be a no-op. A stale facts file shows numbers the results deny."""
-    import subprocess
-    import sys
+def _load_facts_builder():
+    """Load scripts/build_demo_facts.py by path. scripts/ is deliberately not a package."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_bdf", ROOT / "scripts" / "build_demo_facts.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_demo_facts_match_the_committed_results():
+    """Regenerating must be a no-op. A stale facts file shows numbers the results deny.
+
+    EVERY BLOCK EXCEPT `margin_distribution` derives from COMMITTED result summaries, so
+    it is checked here and in CI alike. `margin_distribution` needs a gitignored raw-logits
+    npz, which is why it is passed into `build()` rather than computed inside it: without
+    that split this whole check could only skip from a clean checkout.
+    """
+    import json
+    import os
 
     from src.serve.app import DEMO_FACTS_PATH
 
-    before = DEMO_FACTS_PATH.read_text()
-    r = subprocess.run([sys.executable, "scripts/build_demo_facts.py"],
-                       cwd=ROOT, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert DEMO_FACTS_PATH.read_text() == before, (
-        "configs/demo_facts.json is stale. Regenerate with "
+    committed = json.loads(DEMO_FACTS_PATH.read_text())
+    cwd = os.getcwd()
+    os.chdir(ROOT)          # the builder reads results/ and configs/ relative to the root
+    try:
+        rebuilt = _load_facts_builder().build(committed["margin_distribution"])
+    finally:
+        os.chdir(cwd)
+
+    assert rebuilt == committed, (
+        "configs/demo_facts.json disagrees with the committed results. Regenerate with "
         "`python scripts/build_demo_facts.py` and commit it.")
+
+
+def test_demo_facts_margin_distribution_matches_the_served_logits(request):
+    """The one block the above cannot check from a clean checkout.
+
+    Skipped in CI because it needs the raw test_3000 logits, which are gitignored.
+    """
+    import json
+
+    from src.serve.app import DEMO_FACTS_PATH
+    from tests.conftest import require_artifact
+
+    require_artifact(
+        ROOT / "results" / "test_logits_fp32_local_ce10ep_seed1.npz",
+        "the served artefact's test_3000 logits; the demo's margin distribution is "
+        "computed from them and results/*.npz is gitignored")
+
+    import os
+    cwd = os.getcwd()
+    os.chdir(ROOT)
+    try:
+        fresh = _load_facts_builder()._margin_distribution()
+    finally:
+        os.chdir(cwd)
+    assert fresh == json.loads(DEMO_FACTS_PATH.read_text())["margin_distribution"], (
+        "the committed margin distribution does not match the served logits. Regenerate "
+        "with `python scripts/build_demo_facts.py` and commit it.")
 
 
 def test_classify_reports_what_this_request_cost_against_the_api(config, fastapi_client):
