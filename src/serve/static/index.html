@@ -52,6 +52,10 @@
               padding:9px 20px; font-size:.92rem; font-weight:600; cursor:pointer;
               font-family:inherit; display:inline-flex; align-items:center; gap:8px }
   button.go:disabled { opacity:.55; cursor:default }
+  button.clear { background:transparent; color:var(--muted); border:1px solid var(--line);
+                 border-radius:8px; padding:9px 15px; font-size:.88rem; cursor:pointer;
+                 font-family:inherit }
+  button.clear:hover { border-color:var(--accent); color:var(--fg) }
   .count { color:var(--faint); font-size:.82rem; margin-left:auto;
            font-variant-numeric:tabular-nums }
   .count.over { color:#b4402c; font-weight:600 }
@@ -114,6 +118,7 @@
   <textarea id="t" placeholder="Paste a contract clause, or pick an example above."></textarea>
   <div class="row">
     <button class="go" id="go">Classify</button>
+    <button class="clear" id="clear" hidden>Try another</button>
     <span class="count" id="c">0 / 20,000</span>
   </div>
 
@@ -139,6 +144,19 @@ const EXAMPLES = {
 };
 const $ = id => document.getElementById(id);
 const t = $('t'), go = $('go'), out = $('out'), c = $('c'), prov = $('prov');
+const clearBtn = $('clear');
+
+// Shown only once there is something to clear, so it is never a dead control.
+function showResult(html) {
+  out.innerHTML = html;
+  clearBtn.hidden = !html;
+}
+function clearAll() {
+  t.value = '';
+  showResult('');
+  count();
+  t.focus();
+}
 const esc = s => String(s).replace(/[&<>"']/g,
   m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const fmt = n => n.toLocaleString('en-US');
@@ -152,7 +170,14 @@ function count() {
 let busy = false;
 t.addEventListener('input', count);
 document.querySelectorAll('.chip').forEach(b =>
-  b.addEventListener('click', () => { t.value = EXAMPLES[b.dataset.k]; count(); t.focus(); }));
+  b.addEventListener('click', () => {
+    // REPLACES outright, never appends, and drops the previous result so the card on
+    // screen always belongs to the text in the box.
+    t.value = EXAMPLES[b.dataset.k];
+    showResult('');
+    count();
+    t.focus();
+  }));
 
 // ---- provenance strip: real numbers off /health, not decoration -----------------
 async function provenance() {
@@ -182,7 +207,7 @@ function waking(seconds, progress) {
   const p = progress && progress.rows_total
     ? ` — canary ${progress.rows_done}/${progress.rows_total} rows`
     : '';
-  out.innerHTML =
+  showResult(
     `<div class="waking">
        <h3>Waking up the container</h3>
        This service scales to zero, so the first request after an idle period has to start
@@ -190,7 +215,7 @@ function waking(seconds, progress) {
        <b>About ${seconds} seconds.</b> It will not return a prediction until that check
        passes<span id="wprog">${p}</span>.
        <div class="track"><div class="fill" id="wfill"></div></div>
-     </div>`;
+     </div>`);
 }
 
 async function waitForWarm(seconds) {
@@ -210,8 +235,8 @@ async function waitForWarm(seconds) {
     if (wp && cy.progress) wp.textContent = ` — canary ${cy.progress.rows_done}/${cy.progress.rows_total} rows`;
     if (cy.status === 'passed' || cy.status === 'skipped') { provenance(); return true; }
     if (cy.status === 'failed') {
-      out.innerHTML = `<div class="err"><b>This host is not qualified.</b> The startup
-        canary failed, so the service refuses to return predictions. ${esc(cy.error || '')}</div>`;
+      showResult(`<div class="err"><b>This host is not qualified.</b> The startup
+        canary failed, so the service refuses to return predictions. ${esc(cy.error || '')}</div>`);
       return false;
     }
   }
@@ -225,7 +250,7 @@ async function classify() {
   busy = true;
   go.innerHTML = '<span class="spinner"></span>Classifying';
   count();
-  out.innerHTML = '';
+  showResult('');
   const t0 = performance.now();
   try {
     let r = await fetch('/classify', {
@@ -235,8 +260,8 @@ async function classify() {
     if (r.status === 503) {
       const d = (await r.json()).detail || {};
       if (d.retryable === false) {
-        out.innerHTML = `<div class="err"><b>This host is not qualified.</b>
-          ${esc(d.message || '')}</div>`;
+        showResult(`<div class="err"><b>This host is not qualified.</b>
+          ${esc(d.message || '')}</div>`);
         return;
       }
       go.innerHTML = '<span class="spinner"></span>Waking up';
@@ -252,14 +277,17 @@ async function classify() {
     }
     render(await r.json(), Math.round(performance.now() - t0));
   } catch (e) {
-    out.innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+    showResult('<div class="err">' + esc(e.message) + '</div>');
   } finally {
     busy = false; go.textContent = 'Classify'; count();
   }
 }
 go.addEventListener('click', classify);
+clearBtn.addEventListener('click', clearAll);
 t.addEventListener('keydown', e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') classify();
+  // Cmd+Enter on macOS, Ctrl+Enter elsewhere. Submits from inside the textarea, where
+  // plain Enter has to keep inserting newlines because clauses run to several lines.
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); classify(); }
 });
 
 function render(d, ms) {
@@ -275,7 +303,7 @@ function render(d, ms) {
     ? `<div class="flag"><b>Needs review</b> —
        ${esc(d.needs_review_meaning || 'low confidence — human review recommended')}</div>`
     : '';
-  out.innerHTML =
+  showResult(
     `<div class="card">
        <div class="lbl">Predicted provision type</div>
        <div class="answer">${esc(d.label)}</div>
@@ -287,7 +315,7 @@ function render(d, ms) {
        ${flag}
        ${rows ? `<div class="lbl" style="margin-top:20px">Top 3</div>
                  <table>${rows}</table>` : ''}
-     </div>`;
+     </div>`);
 }
 count();
 </script>
