@@ -1614,3 +1614,24 @@ def test_figures_are_served_and_traversal_is_refused():
     assert c.get("/figures/../../configs/costs.yaml").status_code in (404, 400)
     assert c.get("/figures/nope.png").status_code == 404
     assert c.get("/figures/costs.yaml").status_code == 404
+
+
+def test_classify_reports_server_side_inference_time(config, fastapi_client):
+    """The browser's round trip is not the model's work.
+
+    A cold request waits ~74s for the container to wake and then infers in milliseconds.
+    Reporting only the round trip made the page read as though the model took 74 seconds,
+    so the server reports what it actually spent and the page attributes the rest.
+    """
+    from src.serve.app import create_app
+
+    app = create_app(config, tier0=FakeTier0(), tier2=FakeTier2(available=False),
+                     run_canary_on_start=False)
+    t = fastapi_client(app).post("/classify",
+                                 json={"text": "a clause"}).json()["timing_ms"]
+    assert set(t) == {"tier0_inference", "server_total"}
+    assert t["tier0_inference"] >= 0
+    # server_total covers the same work plus routing and costing, so it cannot be less.
+    assert t["server_total"] >= t["tier0_inference"]
+    # A fake encoder is fast; the point is that this is measured, not a wall-clock guess.
+    assert t["tier0_inference"] < 5000

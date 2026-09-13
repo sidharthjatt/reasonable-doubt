@@ -256,6 +256,9 @@ function count() {
   go.disabled = n === 0 || n > MAX || busy;
 }
 let busy = false;
+// True when THIS request had to wait for a cold container, so the wall time can be
+// attributed to the wake-up rather than left looking like inference.
+let wokeUp = false;
 t.addEventListener('input', count);
 document.querySelectorAll('.chip').forEach(b =>
   b.addEventListener('click', () => {
@@ -405,6 +408,7 @@ async function classify() {
   const text = t.value;
   if (!text || text.length > MAX || busy) return;
   busy = true;
+  wokeUp = false;
   go.innerHTML = '<span class="spinner"></span>Classifying';
   count();
   showResult('');
@@ -422,6 +426,7 @@ async function classify() {
         return;
       }
       go.innerHTML = '<span class="spinner"></span>Waking up';
+      wokeUp = true;          // attribute the wall time to the wake-up, not to the model
       if (!await waitForWarm(d.estimated_wait_seconds || 90)) return;
       r = await fetch('/classify', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -573,6 +578,27 @@ function renderCharts(d) {
     : '';
 }
 
+// THE MODEL'S WORK, FROM THE SERVER, not the browser's round trip. A cold request waits
+// for the container to wake and then infers in milliseconds; showing only the round trip
+// reads as though the model took a minute. The wall figure is shown alongside ONLY when it
+// is meaningfully larger, and is attributed to the cause that actually explains it.
+function timing(d, roundTripMs) {
+  const inf = d.timing_ms && d.timing_ms.tier0_inference;
+  if (inf === undefined || inf === null) {
+    return `<span>${roundTripMs} ms round trip</span>`;   // older server, no timing block
+  }
+  const shown = inf < 1 ? inf.toFixed(2) : Math.round(inf);
+  let out = `<span><b>${shown} ms</b> inference</span>`;
+  const extra = roundTripMs - inf;
+  if (extra > 250) {
+    const wall = roundTripMs >= 10000
+      ? (roundTripMs / 1000).toFixed(0) + ' s'
+      : Math.round(roundTripMs) + ' ms';
+    out += `<span>${wall} ${wokeUp ? 'including container wake-up' : 'round trip'}</span>`;
+  }
+  return out;
+}
+
 function render(d, ms) {
   const top = d.top_3 || [];
   const max = top.length ? Math.max(...top.map(x => x.score)) : 1;
@@ -634,7 +660,7 @@ function render(d, ms) {
        <div class="answer">${esc(d.label)}</div>
        <div class="meta-row">
          <span><b>${esc(d.tier_used)}</b></span>
-         <span>${ms} ms round trip</span>
+         ${timing(d, ms)}
          <span>margin ${Number(d.margin).toFixed(4)}</span>
        </div>
        ${flag}

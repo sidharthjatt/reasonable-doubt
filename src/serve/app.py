@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import platform
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -113,7 +114,12 @@ class Cascade:
         # endpoint forgot" is the failure being guarded against (§3bp).
         if self.gate is not None:
             self.gate.check_may_serve()
+        # TIMED SERVER-SIDE, because the browser's round trip is not the model's work.
+        # A cold request waits ~74s for the container to wake and then infers in ~18ms;
+        # reporting the round trip alone reads as though the model took 74 seconds.
+        _t_started = time.perf_counter()
         t0 = self.tier0.classify(text)
+        _tier0_ms = (time.perf_counter() - _t_started) * 1000.0
         margin = t0.confidence
         # PRECISION-KEYED (§3bl). Passing the served precision is what stops this
         # response quoting the INT8 row's cost while the service runs FP32 (§3bh).
@@ -160,6 +166,13 @@ class Cascade:
         total = sum(c.usd for _, c in costs)
         return {
             "label": result.label,
+            # What the model actually spent, tokenizer through softmax. The caller can
+            # compare its own round trip against this and attribute the difference to
+            # network and container wake-up rather than to inference.
+            "timing_ms": {
+                "tier0_inference": round(_tier0_ms, 2),
+                "server_total": round((time.perf_counter() - _t_started) * 1000.0, 2),
+            },
             "margin": margin,
             "tier_used": result.tier,
             "tiers_invoked": tiers,
@@ -249,7 +262,6 @@ def run_startup_canary(cascade: Cascade) -> dict[str, Any]:
     from src.data.loading import load_ledgar
     from src.serve.canary import CanarySet, hardware_report, run_canary
     import json
-    import time
 
     cfg = cascade.config
     if not cfg.canary_enabled:
