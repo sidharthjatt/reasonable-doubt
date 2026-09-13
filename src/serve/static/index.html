@@ -23,11 +23,17 @@
   --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
   --pad: clamp(16px, 4vw, 28px);
 }
+/* DARK MODE DESTROYED THE CENTRAL IDEA and had to be re-thought. The page was #14130E and
+   the plate #0A0B0C: a 4% lightness difference, so "one dark region on a light page"
+   collapsed into one flat dark rectangle and the plate stopped reading as an object at all.
+   The plate is an INSTRUMENT SCREEN, so on a dark page it is LIT rather than darker: the
+   page drops further back and the plate lifts in front of it. What matters is that the
+   plate is the one surface that differs from the page, not that it is the darkest thing. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper:#14130E; --ink:#E8E3D6; --graphite:#918B7C; --hairline:#33322B;
-    --vermilion:#D9705A; --pine:#6FA893;
-    --plate:#0A0B0C; --plate-ink:#E4E7DE; --plate-line:#2A2E30;
+    --paper:#0C0B07; --ink:#E8E3D6; --graphite:#918B7C; --hairline:#2B2A23;
+    --vermilion:#E4735A; --pine:#69B79C;
+    --plate:#1C2024; --plate-ink:#EEF1E8; --plate-line:#3D4348;
   }
 }
 * { box-sizing:border-box }
@@ -79,13 +85,18 @@ button.quiet:hover { color:var(--ink) }
 @keyframes spin { to { transform:rotate(360deg) } }
 
 .plate { background:var(--plate); color:var(--plate-ink); border-radius:3px;
+         border:1px solid var(--plate-line);
          padding:clamp(18px,3.6vw,26px); margin-top:26px }
 .plate .verdict { display:flex; align-items:flex-start; justify-content:space-between;
                   gap:16px; flex-wrap:wrap }
-.plate h2 { font-size:clamp(1.85rem,6vw,3.3rem); font-weight:500; letter-spacing:-.035em;
-            margin:0; line-height:1.03 }
-.state { font-size:12px; letter-spacing:.1em; text-transform:uppercase; white-space:nowrap;
-         padding-top:8px }
+/* WAS clamp(1.85rem, 6vw, 3.3rem), which ties the hero to the VIEWPORT rather than to the
+   880px container: below an 880px viewport it shrank, and in a narrow pane it sat on its
+   1.85rem floor — a small word in a corner, the opposite of the intent. The floor is now
+   large enough to dominate on a phone and the slope is steeper. */
+.plate h2 { font-size:clamp(2.4rem,8.5vw,4rem); font-weight:500; letter-spacing:-.04em;
+            margin:0; line-height:1 }
+.state { font-size:13px; font-weight:500; letter-spacing:.12em; text-transform:uppercase;
+         white-space:nowrap; padding-top:10px }
 .state.doubt { color:var(--vermilion) }
 .state.clear { color:var(--pine) }
 .plate svg { display:block; width:100%; height:auto; margin-top:14px; overflow:visible }
@@ -96,8 +107,12 @@ button.quiet:hover { color:var(--ink) }
 .pl-grid { stroke:var(--plate-line); stroke-width:1 }
 .pl-tick { fill:var(--plate-line); font-size:9px; font-family:var(--mono) }
 .pl-tick.lit { fill:var(--plate-ink); opacity:.5 }
-.pl-curve { fill:none; stroke:var(--plate-ink); stroke-width:1.7; stroke-linejoin:round }
-.pl-area { stroke:none; opacity:.2 }
+/* The curve and its fill ARE the verdict, so they carry weight. The fill was rendering at
+   0.2 opacity, which on a near-black plate was indistinguishable from the plate itself —
+   the pine/vermilion signal that the whole design rests on was invisible. */
+.pl-curve { fill:none; stroke:var(--plate-ink); stroke-width:2.6; stroke-linejoin:round;
+            stroke-linecap:round }
+.pl-area { stroke:none; opacity:.5 }
 .pl-dot { fill:var(--plate-ink) }
 .pl-lab { fill:var(--plate-ink); font-size:10.5px; font-family:var(--mono); opacity:.85 }
 

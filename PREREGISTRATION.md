@@ -1404,6 +1404,75 @@ reproduced **within 4 ULP** (`test_3000_fp32` 3 ULP, `test_3000_int8` 0 ULP,
 Kaggle's own values are **untouched**; `classes_averaged: 100` and a
 `registered_scorer_backfill` block were added beside them. **The list did not grow.**
 
+### 3bs. THE MARGIN DOES NOT DETECT OUT-OF-DISTRIBUTION INPUT (2026-09-14)
+
+**Found by a user pasting a paragraph into the demo**, not by any experiment here: a
+technical passage about credit-risk modelling came back **`General`, 93.8%, CLEARED, no
+flag**, while a cake recipe is flagged. Investigated with `scripts/ood_probe.py`.
+
+#### What was measured
+
+Twenty hand-written non-contract paragraphs against the served artefact and the registered
+0.5289 threshold. **These are PROBES, not a sample from any distribution**: the rate below
+characterises these twenty inputs and nothing wider.
+
+> ### 10 of 20 clearly non-contract inputs were answered CONFIDENTLY, with no flag.
+
+| input | label | top-1 | margin | flagged |
+|---|---|---|---|---|
+| data-access policy prose | `Records` | **99.9%** | **0.9984** | **no** |
+| job advertisement | `Duties` | 96.9% | 0.9519 | no |
+| credit-risk model card | **`General`** | **94.4%** | **0.9324** | **no** |
+| ML paper abstract | `General` | 92.7% | 0.9113 | no |
+| physics paragraph | `Construction` | 85.2% | 0.8136 | no |
+| medical note | `Erisa` | 79.0% | 0.7285 | no |
+| credit-risk governance | `Construction` | 74.9% | 0.6466 | no |
+| weather report | `Financial Statements` | 68.3% | 0.6248 | no |
+| credit-risk methodology | `Interests` | 68.5% | 0.5862 | no |
+| history paragraph | `Agreements` | 61.9% | 0.5357 | no |
+| *(flagged: software architecture, cake recipe, cooking method, travel blurb, news lede, product copy, restaurant review, poem, docstring, football report)* | | | | yes |
+
+**The user's case reproduces** (`General`, 94.4%, margin 0.9324 on a similar paragraph).
+
+> **THE WORST CASE IS NOT `General`.** A paragraph about data-access policy is labelled
+> **`Records` at 99.9%, margin 0.9984 — MORE CONFIDENT THAN THE GENUINE GOVERNING-LAW
+> CLAUSE** used as the demo's in-domain example (0.9370). The model is most certain about
+> a text that is not a contract clause at all.
+
+#### The mechanism, and it is broader than the catch-all hypothesis
+
+The hypothesis on the way in was that `General` is a LEDGAR catch-all absorbing anything
+unmatched. **That is not what the data shows.** Only 2 of the 10 unflagged answers were
+`General`; the rest spread across `Records`, `Duties`, `Construction` ×2, `Erisa`,
+`Financial Statements`, `Interests` and `Agreements`. There is no single attractor.
+
+The split is by **register, not by subject**. Everything confidently mislabelled reads like
+contract prose: policies, governance, obligations, job duties. Everything flagged is
+stylistically far from contracts: recipes, sport, poetry, product copy.
+
+> **The margin measures how cleanly a text maps onto ONE of the 100 classes. It does not
+> measure whether the text belongs to the label space at all.** It is a lexical and
+> stylistic proximity signal to the training distribution, not an in-domain detector, and
+> it was never calibrated to be one: the threshold comes from `dev_2000`, which contains
+> only contract clauses, so nothing in its calibration has ever seen an out-of-domain input.
+
+#### What this does and does not overturn
+
+- **It does NOT contradict the flag's measured value on contract text.** On `test_3000`
+  rows the encoder is right ~35% on flagged rows against ~87% overall (§3bm). That is an
+  in-distribution property and it stands.
+- **It does NOT make the model worse than reported.** A 100-class softmax has no "none of
+  these" option; every input must receive a label. The finding is about what the MARGIN may
+  be used for, not about the classifier's accuracy on its own task.
+- **It DOES mean the demo's framing was too generous.** The cake recipe was presented as
+  showing the model "says when it does not know". It shows that for text far from the
+  training register. For out-of-domain text that reads like a contract, the model does not
+  say so, and the flag gives no warning at all.
+
+**NOT FIXED, and deliberately so.** Making this work is out-of-distribution detection — an
+energy score, a Mahalanobis distance on the encoder features, or a null class — each a new
+experiment with its own accept rule and its own registration. Recorded as a limitation.
+
 ### 3br. NEGATIVE RESULT — batching the canary does not help (2026-09-13)
 
 **Question asked, measured, and answered no.** The startup canary classifies its 200 rows

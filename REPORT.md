@@ -351,6 +351,22 @@ deeper limitation is that **the CPU varies per instance** (§3bq), so "qualified
 a statement about the instances observed, not about the next cold start. The per-instance
 startup canary is what makes that survivable rather than a hope.
 
+**The flag does not detect out-of-domain input, and this is the sharpest limitation here.**
+Twenty hand-written non-contract paragraphs were sent through the served model: **10 of the
+20 were answered confidently with no flag.** A paragraph about data-access policy is labelled
+`Records` at **99.9%**, margin **0.9984**, which is *more confident than the genuine
+governing-law clause* used as the demo's in-domain example. A credit-risk model card comes
+back `General` at 94.4%. The split is by register, not subject: text that reads like contract
+prose (policies, governance, job duties) is confidently assigned, while recipes, sport and
+poetry are flagged. The margin measures how cleanly a text maps onto one of the 100 classes,
+not whether it belongs to the label space at all, and it was never calibrated to do the
+latter: the threshold comes from a dev split containing only contract clauses. This does not
+contradict the flag's value on contract text, where it still separates a ~35% accuracy
+subset from an ~87% overall one, but the demo's cake-recipe example makes the flag look more
+general than it is. Twenty probes are not a sample from any distribution, so the 50% figure
+describes those twenty inputs and nothing wider (§3bs, reproducible with
+`scripts/ood_probe.py`).
+
 **Flagged rows have no review path.** `needs_review` is honest about uncertainty and does
 nothing about it. The clause still gets an encoder answer. The human review the flag
 implies does not exist.
